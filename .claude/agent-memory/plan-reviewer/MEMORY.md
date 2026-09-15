@@ -1,1 +1,2 @@
 - [First spec review](review-spec-v1.md) -- design doc review before any code, key data model and job runner gaps found
+- [Second spec review](review-spec-v2.md) -- verified v1 fixes, found applied_by_rule cleanup gap and job-cache sync issues

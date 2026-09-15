@@ -102,6 +102,9 @@ document_tags (
 document_categories (same shape, with category_id)
 -- One row per pair. A rule and a manual action can both apply the same tag; each
 -- source is tracked and removed independently. The row goes away when both are 0.
+-- On re-evaluation or rule deletion, applied_by_rule is set to 0 for a pair only when
+-- no remaining active rule with a passing evaluation targets that tag for that
+-- document. rule_evaluations is the record used to decide that.
 
 -- Rules Engine
 rules (
@@ -142,8 +145,11 @@ jobs (
   finished_at TEXT
 )
 -- The status columns on documents are a cache of the latest job of each type for
--- that document, updated by the job transitions, so the library can filter cheaply.
--- The jobs table is the source of truth and what the jobs view lists.
+-- that document, so the library can filter cheaply. Creating a job sets the matching
+-- document status to pending in the same transaction; every later transition updates
+-- it the same way. The jobs table is the source of truth and what the jobs view lists.
+-- Re-evaluating a rule creates one rules job per affected document, so progress is
+-- visible and a crash loses at most one document's work.
 
 -- Vector Search
 document_chunks (id, document_id, chunk_index, chunk_text, token_count)
@@ -159,7 +165,8 @@ chat_messages (id, session_id, role, content, sources, created_at)
 Timestamps are ISO 8601 strings in UTC. Every status has a `failed` state and an error
 column. On startup the runner resets every job still in `processing` to `pending` and
 retries it, so a crash mid-job never leaves a row stuck. A job that fails more than
-three times stays `failed` until retried by hand from the jobs view.
+three times stays `failed` until retried by hand from the jobs view. Manual retry
+resets the attempt count to zero.
 
 ## Settings Module
 
@@ -193,8 +200,9 @@ Scoping by user costs one column now and makes multi-user later trivial.
 `SETTINGS_ENCRYPTION_KEY`, generated with `openssl rand -hex 32`. The server refuses to
 start without it and prints that command. Server code reads plaintext only through the
 settings service. The API never returns a secret, only whether one is set and its last
-four characters. Sending an empty string clears it. Sending `null` for any key deletes the database row, so the value falls
-back to the env var or default. Key rotation is out of scope.
+four characters. Sending `null` for any key deletes the database row, so the value
+falls back to the env var or default. For secret keys an empty string does the same;
+empty ciphertext is never stored. Key rotation is out of scope.
 
 Every provider definition is built in Phase 1 because they share one adapter, but only
 the OpenRouter path is exercised end to end in Phase 1. Other providers are verified
