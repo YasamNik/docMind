@@ -25,3 +25,6 @@ ref_code/
 .claude/settings.local.json
 .DS_Store
 *.log
+
+# subagent-driven-development scratch
+.superpowers/
