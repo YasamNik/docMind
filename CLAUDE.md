@@ -1,0 +1,97 @@
+# DocMind: working notes for Claude
+
+Intelligent document manager: upload any document, extract its text, tag and categorize
+it with plain English rules, search it (keyword plus vector), and chat with it over RAG.
+Solo developer project (Yasam, GitHub YasamNik). License: AGPL-3.0.
+
+**New here?** Read `DOCMIND-DESIGN.md` first. It is the spec: vision, stack, data model,
+module layout, build phases. Then read the top entry of `WORKLOG.md` for where things
+stand right now. This file is the quick reference for how we work.
+
+## Session workflow
+
+1. **Start.** Read the top `WORKLOG.md` entry. Run `git status` and `git log --oneline -10`.
+   Give a two or three line recap and confirm what to work on.
+2. **Work.** On a feature branch: `feat/<short-name>` or `fix/<short-name>`. Never commit
+   directly to `main`. Small commits that each leave the tree working.
+3. **End.** Run the `end-session` skill (`/end-session`) when the user says they are done,
+   asks to wrap up, or the conversation is clearly closing. It appends the WORKLOG entry,
+   saves session memory, proposes bug records, and commits the log. It never pushes.
+
+## Stack
+
+Details and rationale live in `DOCMIND-DESIGN.md`. Short version:
+
+- Server: Hono on Node, TypeScript, Drizzle ORM with libsql (SQLite), sqlite-vec,
+  better-auth, valibot.
+- Client: React, Vite, Tailwind CSS.
+- Workspace: pnpm, `apps/server` and `apps/client`.
+- Tests: vitest. Unit tests for `*.models.ts`. Integration tests with in-memory SQLite
+  for `*.usecases.ts`. Storage drivers share one contract test suite.
+
+## Running locally
+
+Not scaffolded yet. When Phase 1 lands, record the exact commands here: install, migrate,
+start server, start client, run tests, typecheck.
+
+## Conventions
+
+- Modules are self-contained under `apps/server/src/modules/<name>/`. Files are named by
+  role: `*.routes.ts`, `*.usecases.ts`, `*.models.ts`, `*.repository.ts`, `*.config.ts`,
+  `*.schemas.ts`, `*.types.ts`. Pure logic in models, orchestration in usecases, database
+  access in repositories.
+- Valibot for every boundary: HTTP input, env and settings, LLM output.
+- Drizzle for every database access. No raw SQL outside migrations and the vector table.
+- Settings, API keys, and OAuth tokens go through the settings module only. Secrets are
+  encrypted at rest and never logged or returned by the API.
+- `ref_code/` is read-only papra source kept for patterns. Read it, adapt the idea, write
+  fresh code. Never import from it, never paste large blocks.
+- No em dashes anywhere: code, comments, docs, commit messages, UI copy, replies to the
+  user. Use a comma, a colon, a hyphen, or a new sentence.
+- Conventional commits: `feat(server): ...`, `fix(client): ...`, `docs: ...`,
+  `chore: ...`, `test: ...`.
+
+## Bug fix workflow (mandatory)
+
+1. **Check history first.** Read `docs/bugs_fix_tracking.md` before investigating. If the
+   bug is already there, tell the user when and how it was fixed and what the root cause
+   was, then discuss how to stop it recurring.
+2. **Find the root cause** with the `superpowers:systematic-debugging` skill. No fixes
+   based on guesses.
+3. **Write a regression test** that fails without the fix and passes with it. Run it
+   against the unfixed code and watch it fail. No test, no fix.
+4. **Fix**, then run the full relevant test suite.
+5. **Propose recording** the fix with the `bug-fix-record` agent. Wait for explicit
+   approval. Never record without it.
+
+## Agents and skills
+
+- `superpowers:brainstorming` before any new feature, subsystem, or design change.
+- `plan-reviewer` agent on every spec or plan before implementation starts.
+- `coder` agent for well-specified implementation tasks taken from a plan.
+- `code-reviewer` agent before every commit. It must do regression impact analysis on
+  every changed export, route, table, and setting. Do not commit until it reports no
+  regression risk or the risks are addressed.
+- `debug-agent` for investigating errors and unexpected behavior.
+- `bug-fix-record` agent to log a fix, only after approval.
+- `end-session` skill to close a session.
+- Run independent agents in parallel, and in the background when the result is not
+  needed for the next step.
+
+## Git
+
+- Feature branches, pull requests into `main`.
+- Typecheck and the relevant tests pass before every commit.
+- Do not push unless asked.
+- Commit messages end with the attribution trailer the harness provides.
+
+## Docs map
+
+| File | Purpose |
+|------|---------|
+| `DOCMIND-DESIGN.md` | The spec. Update it when a design decision changes. |
+| `WORKLOG.md` | Session log, newest first. Written by `end-session`. |
+| `docs/bugs_fix_tracking.md` | Append-only bug and fix log. Written by `bug-fix-record`. |
+| `docs/superpowers/specs/` | Design specs from brainstorming sessions. |
+| `docs/superpowers/plans/` | Implementation plans. |
+| `ref_code/REF_CODE_GUIDE.md` | What each reference directory demonstrates. |

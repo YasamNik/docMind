@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm install:*)",
+      "Bash(pnpm add:*)",
+      "Bash(pnpm run:*)",
+      "Bash(pnpm test:*)",
+      "Bash(pnpm exec:*)",
+      "Bash(pnpm --filter:*)",
+      "Bash(pnpm -r:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vitest:*)",
+      "Bash(npx drizzle-kit:*)",
+      "Bash(npx tsx:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git fetch:*)",
+      "Bash(git stash list:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(wc:*)",
+      "Bash(date:*)"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./apps/server/.env)",
+      "Read(./apps/server/.env.*)"
+    ]
+  }
+}
