@@ -228,7 +228,7 @@ git commit -m "feat(server): scaffold pnpm workspace and Hono server with health
 - Test: `apps/server/src/modules/config/config.test.ts`
 
 **Interfaces:**
-- Produces: `parseConfig(env: Record<string, string | undefined>): Config` and the `Config` type with `port`, `serverBaseUrl`, `clientBaseUrl`, `authSecret`, `databaseUrl`, `settingsEncryptionKey`, `documentStorageRoot`.
+- Produces: `parseConfig(env: Record<string, string | undefined>): Config` and the `Config` type with `port`, `serverBaseUrl`, `clientBaseUrl`, `authSecret`, `databaseUrl`, `settingsEncryptionKey`, and `env` (the raw env, which the settings module uses for seeds such as `DOCUMENT_STORAGE_ROOT`).
 - Produces: `class AppError extends Error { code: string; status: number }` and `createError({ code, message, status })`.
 - Produces: `createLogger(namespace: string)` returning a pino child logger.
 
@@ -249,7 +249,6 @@ describe("parseConfig", () => {
     const config = parseConfig(valid);
     expect(config.port).toBe(4000);
     expect(config.databaseUrl).toBe("file:./docmind.sqlite");
-    expect(config.documentStorageRoot).toBe("./documents");
     expect(config.serverBaseUrl).toBe("http://localhost:4000");
   });
 
@@ -323,7 +322,7 @@ import * as v from "valibot";
 
 export const hexKeySchema = (bytes: number, name: string) =>
   v.pipe(
-    v.string(),
+    v.string(`${name} is required. Generate one with: openssl rand -hex ${bytes}`),
     v.regex(
       new RegExp(`^[0-9a-fA-F]{${bytes * 2}}$`),
       `${name} must be ${bytes} bytes of hex. Generate one with: openssl rand -hex ${bytes}`,
@@ -352,11 +351,7 @@ const envSchema = v.object({
   CLIENT_BASE_URL: v.optional(urlSchema, "http://localhost:5173"),
   AUTH_SECRET: v.pipe(v.string("AUTH_SECRET is required. Generate one with: openssl rand -hex 48"), v.minLength(32)),
   DATABASE_URL: v.optional(v.string(), "file:./docmind.sqlite"),
-  SETTINGS_ENCRYPTION_KEY: v.pipe(
-    v.string("SETTINGS_ENCRYPTION_KEY is required. Generate one with: openssl rand -hex 32"),
-    hexKeySchema(32, "SETTINGS_ENCRYPTION_KEY"),
-  ),
-  DOCUMENT_STORAGE_ROOT: v.optional(v.string(), "./documents"),
+  SETTINGS_ENCRYPTION_KEY: hexKeySchema(32, "SETTINGS_ENCRYPTION_KEY"),
 });
 
 export type Config = {
@@ -366,7 +361,6 @@ export type Config = {
   authSecret: string;
   databaseUrl: string;
   settingsEncryptionKey: string;
-  documentStorageRoot: string;
   env: Record<string, string | undefined>;
 };
 
@@ -387,7 +381,6 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     authSecret: e.AUTH_SECRET,
     databaseUrl: e.DATABASE_URL,
     settingsEncryptionKey: e.SETTINGS_ENCRYPTION_KEY,
-    documentStorageRoot: e.DOCUMENT_STORAGE_ROOT,
     env,
   };
 }
@@ -1556,12 +1549,14 @@ export const storageSettingDefinitions = [
 
 `apps/server/src/modules/storage/storage.usecases.ts`:
 ```ts
+import { basename } from "node:path";
 import { createError } from "../../shared/errors/errors.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
 import { storageDriverRegistry, type StorageDriverId } from "./storage.registry.js";
 
 export function buildStorageKey({ userId, documentId, filename }: { userId: string; documentId: string; filename: string }) {
-  const safe = filename.replace(/[^\w.\-]+/g, "_").replace(/^\.+/, "").slice(0, 200) || "file";
+  const base = basename(filename.replace(/\\/g, "/"));
+  const safe = base.replace(/[^\w.\-]+/g, "_").replace(/^\.+/, "").slice(0, 200) || "file";
   return `${userId}/${documentId}/${safe}`;
 }
 
@@ -1772,7 +1767,7 @@ rm auth.generate.config.ts
 cd ../..
 ```
 
-Open the generated `auth.tables.ts` and confirm it exports `user`, `session`, `account`, and `verification` tables created with `sqliteTable`. Then add to `schema.ts`:
+Open the generated `auth.tables.ts` and confirm it exports `user`, `session`, `account`, and `verification` tables created with `sqliteTable`. If the CLI flags differ in the installed version, run `npx @better-auth/cli@latest generate --help` and adapt; if generation fails outright, write the four tables by hand from better-auth's documented core schema (user: id, name, email, emailVerified, image, createdAt, updatedAt; session: id, userId, token, expiresAt, ipAddress, userAgent, createdAt, updatedAt; account: id, userId, accountId, providerId, accessToken, refreshToken, idToken, accessTokenExpiresAt, refreshTokenExpiresAt, scope, password, createdAt, updatedAt; verification: id, identifier, value, expiresAt, createdAt, updatedAt) using snake_case column names. Then add to `schema.ts`:
 ```ts
 export * from "../auth/auth.tables.js";
 ```
@@ -1930,7 +1925,7 @@ export function createServer({ config, db }: { config: Config; db: Database }) {
 export type Server = ReturnType<typeof createServer>;
 ```
 
-Order matters: health and auth routes are registered before the session `use`, so they run without it. Hono applies `use` only to routes registered after it.
+Order matters: the health and auth handlers sit before the session middleware in the dispatch chain and return a response without calling `next()`, so the middleware never runs for them.
 
 Replace `apps/server/src/index.ts`:
 ```ts
