@@ -6,7 +6,7 @@ const PREFIX = "enc:v1";
 function badCiphertext() {
   return createError({
     code: "settings.bad_ciphertext",
-    message: "settings.bad_ciphertext: Stored secret could not be decrypted. Was SETTINGS_ENCRYPTION_KEY changed?",
+    message: "Stored secret could not be decrypted. Was SETTINGS_ENCRYPTION_KEY changed?",
     status: 500,
   });
 }

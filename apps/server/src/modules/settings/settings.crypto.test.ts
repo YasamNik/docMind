@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { expectAppError } from "../../shared/test/errors.test-utils.js";
 import { decryptSecret, encryptSecret } from "./settings.crypto.js";
 
 const keyHex = "0f".repeat(32);
@@ -17,14 +18,14 @@ describe("settings crypto", () => {
     expect(a).not.toBe(b);
   });
 
-  it("rejects tampered ciphertext", () => {
+  it("rejects tampered ciphertext", async () => {
     const ciphertext = encryptSecret({ plaintext: "secret", keyHex });
     const parts = ciphertext.split(":");
     parts[4] = Buffer.from("xxxx").toString("base64");
-    expect(() => decryptSecret({ ciphertext: parts.join(":"), keyHex })).toThrow(/bad_ciphertext/);
+    await expectAppError(() => decryptSecret({ ciphertext: parts.join(":"), keyHex }), "settings.bad_ciphertext");
   });
 
-  it("rejects a value that is not in the enc:v1 format", () => {
-    expect(() => decryptSecret({ ciphertext: "plain", keyHex })).toThrow(/bad_ciphertext/);
+  it("rejects a value that is not in the enc:v1 format", async () => {
+    await expectAppError(() => decryptSecret({ ciphertext: "plain", keyHex }), "settings.bad_ciphertext");
   });
 });
