@@ -1,0 +1,2 @@
+# docMind
+Smart Documents organizer
