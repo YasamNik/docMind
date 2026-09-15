@@ -8,6 +8,25 @@ Solo developer project (Yasam, GitHub YasamNik). License: AGPL-3.0.
 module layout, build phases. Then read the top entry of `WORKLOG.md` for where things
 stand right now. This file is the quick reference for how we work.
 
+## Reference code is reference only (mandatory)
+
+`ref_code/` holds selected source from papra (papra-hq/papra, AGPL-3.0). It is there to
+learn patterns from, nothing else.
+
+- Read it to understand an approach, then close it and write DocMind's version from
+  the requirements in `DOCMIND-DESIGN.md`.
+- Never copy and paste from it. Never translate a file line by line into a new file.
+  Never lift prompt text, error strings, schemas, or test fixtures verbatim.
+- Never import from it or add it to any build, test, or tooling path.
+- It stays untracked (see `.gitignore`). It is never committed to this repository.
+- When a DocMind module is clearly informed by a papra pattern, say so in a one-line
+  comment at the top of the file naming the pattern, not the code.
+- If a piece of papra code seems impossible to do differently, stop and raise it with
+  the user instead of copying it.
+
+The point is that DocMind's code is DocMind's own and carries no licensing question,
+whatever license DocMind ends up under.
+
 ## Session workflow
 
 1. **Start.** Read the top `WORKLOG.md` entry. Run `git status` and `git log --oneline -10`.
@@ -44,8 +63,6 @@ start server, start client, run tests, typecheck.
 - Drizzle for every database access. No raw SQL outside migrations and the vector table.
 - Settings, API keys, and OAuth tokens go through the settings module only. Secrets are
   encrypted at rest and never logged or returned by the API.
-- `ref_code/` is read-only papra source kept for patterns. Read it, adapt the idea, write
-  fresh code. Never import from it, never paste large blocks.
 - No em dashes anywhere: code, comments, docs, commit messages, UI copy, replies to the
   user. Use a comma, a colon, a hyphen, or a new sentence.
 - Conventional commits: `feat(server): ...`, `fix(client): ...`, `docs: ...`,

@@ -41,7 +41,15 @@ Only after this phase do you move on.
 - Concurrency: flag two pieces of code that touch shared state without knowing about
   each other, such as module-level caches and settings caches after a write.
 
-## Phase 3: Tests and conventions
+## Phase 3: Reference code check
+
+`ref_code/` is papra source (AGPL-3.0) kept for reference only. For every new or
+substantially rewritten file, Grep `ref_code/` for distinctive identifiers, string
+literals, prompt text, and comment phrases from the diff. A verbatim or near-verbatim
+match is a Blocker. Structural similarity with fresh code is fine and expected.
+Any import from `ref_code/` or any path under it in tooling config is a Blocker.
+
+## Phase 4: Tests and conventions
 
 - A bug fix without a regression test that fails before the fix is a blocking finding.
 - New pure logic in `*.models.ts` without unit tests is a finding.

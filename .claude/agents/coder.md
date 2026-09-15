@@ -30,7 +30,10 @@ Explore the actual code before writing; do not assume structure from memory.
   the vector table.
 - Secrets only through the settings module. Never log them, never return them.
 - Streams for file bodies. Never buffer a whole document in memory.
-- `ref_code/` is reference only. Read it for patterns, write fresh code, never import.
+- `ref_code/` is papra source under AGPL, reference only. Read it for the pattern, close
+  it, write DocMind's version fresh. No pasting, no line-by-line translation, no verbatim
+  prompts or strings, no imports. If something seems impossible to do differently, stop
+  and report instead of copying.
 - No em dashes in code, comments, copy, or commit messages.
 - Do not commit. Report what changed and what was verified; the main session commits
   after review.

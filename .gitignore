@@ -18,6 +18,9 @@ coverage/
 *.sqlite-shm
 documents/
 
+# third-party reference source, never committed (see CLAUDE.md)
+ref_code/
+
 # local tooling
 .claude/settings.local.json
 .DS_Store
