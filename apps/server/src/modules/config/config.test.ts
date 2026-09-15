@@ -29,4 +29,10 @@ describe("parseConfig", () => {
   it("parses PORT as a number", () => {
     expect(parseConfig({ ...valid, PORT: "5050" }).port).toBe(5050);
   });
+
+  it("refuses to start without the auth secret and names the command", () => {
+    expect(() => parseConfig({ SETTINGS_ENCRYPTION_KEY: valid.SETTINGS_ENCRYPTION_KEY })).toThrow(
+      /AUTH_SECRET.*openssl rand -hex 48/s,
+    );
+  });
 });

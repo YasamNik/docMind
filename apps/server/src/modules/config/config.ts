@@ -1,14 +1,24 @@
 import * as v from "valibot";
-import { hexKeySchema, portSchema, urlSchema } from "./config.schemas.js";
+import { hexKeySchema, portSchema, requiredMessage, urlSchema } from "./config.schemas.js";
 
-const envSchema = v.object({
-  PORT: portSchema,
-  SERVER_BASE_URL: v.optional(urlSchema, "http://localhost:4000"),
-  CLIENT_BASE_URL: v.optional(urlSchema, "http://localhost:5173"),
-  AUTH_SECRET: v.pipe(v.string("AUTH_SECRET is required. Generate one with: openssl rand -hex 48"), v.minLength(32)),
-  DATABASE_URL: v.optional(v.string(), "file:./docmind.sqlite"),
-  SETTINGS_ENCRYPTION_KEY: v.optional(hexKeySchema(32, "SETTINGS_ENCRYPTION_KEY")),
-});
+const envSchema = v.pipe(
+  v.object({
+    PORT: portSchema,
+    SERVER_BASE_URL: v.optional(urlSchema, "http://localhost:4000"),
+    CLIENT_BASE_URL: v.optional(urlSchema, "http://localhost:5173"),
+    AUTH_SECRET: v.optional(v.pipe(v.string(), v.minLength(32))),
+    DATABASE_URL: v.optional(v.string(), "file:./docmind.sqlite"),
+    SETTINGS_ENCRYPTION_KEY: v.optional(hexKeySchema(32, "SETTINGS_ENCRYPTION_KEY")),
+  }),
+  v.check(
+    (o) => o.AUTH_SECRET !== undefined,
+    requiredMessage("AUTH_SECRET", 48),
+  ),
+  v.check(
+    (o) => o.SETTINGS_ENCRYPTION_KEY !== undefined,
+    requiredMessage("SETTINGS_ENCRYPTION_KEY", 32),
+  ),
+);
 
 export type Config = {
   port: number;
@@ -31,17 +41,13 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
   }
   const e = result.output;
 
-  if (!e.SETTINGS_ENCRYPTION_KEY) {
-    throw new Error(`Invalid configuration:\nSETTINGS_ENCRYPTION_KEY: SETTINGS_ENCRYPTION_KEY is required. Generate one with: openssl rand -hex 32`);
-  }
-
   return {
     port: e.PORT,
     serverBaseUrl: e.SERVER_BASE_URL,
     clientBaseUrl: e.CLIENT_BASE_URL,
-    authSecret: e.AUTH_SECRET,
+    authSecret: e.AUTH_SECRET as string,
     databaseUrl: e.DATABASE_URL,
-    settingsEncryptionKey: e.SETTINGS_ENCRYPTION_KEY,
+    settingsEncryptionKey: e.SETTINGS_ENCRYPTION_KEY as string,
     env,
   };
 }
