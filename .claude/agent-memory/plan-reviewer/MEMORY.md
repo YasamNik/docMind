@@ -1,0 +1,1 @@
+- [First spec review](review-spec-v1.md) -- design doc review before any code, key data model and job runner gaps found
