@@ -29,6 +29,9 @@ Active branch: `chore/dev-environment`
   crypto migration in late 2026 will break clients built on it.
 - Every provider and driver ships a structured setup guide rendered next to its form.
 - License is already AGPL-3.0 (LICENSE file), which closes the open question in the spec.
+- `ref_code/` is reference only and never committed. Rule promoted to its own mandatory
+  section in CLAUDE.md, enforced by the code-reviewer agent, and the directory is ignored.
+- Feature list started in `docs/FEATURES.md`: tiers first, effort next.
 
 ### Comments
 - "make sure that UI will instruct user exactly what to do and where to get secret or
@@ -39,5 +42,4 @@ Active branch: `chore/dev-environment`
 
 ### Open / Next
 - Fold the four approved design sections into `DOCMIND-DESIGN.md` and commit.
-- Decide whether `ref_code/` (third-party AGPL source) is committed to the repo.
 - Then plan Phase 1 with the `superpowers:writing-plans` skill.
