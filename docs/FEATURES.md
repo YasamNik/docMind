@@ -87,8 +87,8 @@ XL (more than a week).
 ## Delivery phases
 
 Every phase ends with something the user runs daily. Later phases are sketches and get
-their own brainstorm, spec, and plan when reached. This supersedes the four-phase build
-order in DOCMIND-DESIGN.md.
+their own brainstorm, spec, and plan when reached. DOCMIND-DESIGN.md carries the same
+map in prose.
 
 | Phase | Name | Outcome | Items |
 |-------|------|---------|-------|

@@ -82,7 +82,9 @@ documents (
   extraction_status TEXT DEFAULT 'pending',  -- pending | processing | done | failed
   extraction_error TEXT,
   rule_status TEXT DEFAULT 'pending',        -- pending | processing | done | failed
+  rule_error TEXT,
   embedding_status TEXT DEFAULT 'pending',   -- pending | processing | done | failed
+  embedding_error TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 )
@@ -90,8 +92,16 @@ documents (
 -- Categorization
 categories (id, user_id, name, parent_id, color)
 tags (id, user_id, name, color)
-document_tags (document_id, tag_id, applied_by)           -- 'rule' | 'manual'
-document_categories (document_id, category_id, applied_by)
+document_tags (
+  document_id TEXT NOT NULL,
+  tag_id TEXT NOT NULL,
+  applied_by_rule INTEGER NOT NULL DEFAULT 0,
+  applied_by_manual INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (document_id, tag_id)
+)
+document_categories (same shape, with category_id)
+-- One row per pair. A rule and a manual action can both apply the same tag; each
+-- source is tracked and removed independently. The row goes away when both are 0.
 
 -- Rules Engine
 rules (
@@ -100,10 +110,9 @@ rules (
   name TEXT NOT NULL,
   description TEXT NOT NULL,       -- the plain English rule
   type TEXT NOT NULL,              -- 'tag' | 'category'
-  target_value TEXT NOT NULL,      -- tag or category name to apply
-  confidence_threshold REAL DEFAULT 0.7,
+  target_id TEXT NOT NULL,         -- references tags(id) or categories(id) by type
+  confidence_threshold REAL DEFAULT 0.7,  -- 0.0 to 1.0, enforced by schema
   is_active INTEGER DEFAULT 1,
-  priority INTEGER DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 )
@@ -119,6 +128,23 @@ rule_evaluations (
   evaluated_at TEXT NOT NULL
 )
 
+-- Jobs (every background operation, in every phase)
+jobs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  type TEXT NOT NULL,              -- extraction | rules | embedding | later: move_storage, reembed_all, wiki_ingest, email_poll ...
+  status TEXT NOT NULL,            -- pending | processing | done | failed
+  payload TEXT NOT NULL,           -- JSON, e.g. {documentId}
+  error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT
+)
+-- The status columns on documents are a cache of the latest job of each type for
+-- that document, updated by the job transitions, so the library can filter cheaply.
+-- The jobs table is the source of truth and what the jobs view lists.
+
 -- Vector Search
 document_chunks (id, document_id, chunk_index, chunk_text, token_count)
 -- sqlite-vec virtual table for embeddings, linked by chunk id. Its dimension is
@@ -130,8 +156,10 @@ chat_messages (id, session_id, role, content, sources, created_at)
 -- sources: JSON array of {chunk_id, document_id, relevance}
 ```
 
-Timestamps are ISO 8601 strings in UTC. All statuses have a `failed` state and an
-error column or field, so a job never leaves a row stuck in `processing`.
+Timestamps are ISO 8601 strings in UTC. Every status has a `failed` state and an error
+column. On startup the runner resets every job still in `processing` to `pending` and
+retries it, so a crash mid-job never leaves a row stuck. A job that fails more than
+three times stays `failed` until retried by hand from the jobs view.
 
 ## Settings Module
 
@@ -165,7 +193,12 @@ Scoping by user costs one column now and makes multi-user later trivial.
 `SETTINGS_ENCRYPTION_KEY`, generated with `openssl rand -hex 32`. The server refuses to
 start without it and prints that command. Server code reads plaintext only through the
 settings service. The API never returns a secret, only whether one is set and its last
-four characters. Sending an empty string clears it. Key rotation is out of scope.
+four characters. Sending an empty string clears it. Sending `null` for any key deletes the database row, so the value falls
+back to the env var or default. Key rotation is out of scope.
+
+Every provider definition is built in Phase 1 because they share one adapter, but only
+the OpenRouter path is exercised end to end in Phase 1. Other providers are verified
+when first used.
 
 **API.** Read all settings with values, sources, and masked secrets. Batch update
 validated per key. Test a provider or driver connection. List models for a provider.
@@ -257,7 +290,9 @@ settings definitions, an optional OAuth hook, a setup guide, and a factory.
   and a crypto migration in late 2026 will break clients built on it.
 
 **OAuth flow.** Two routes in the storage module, start and callback, parameterized by
-driver. Start redirects with a signed, expiring state value. Callback exchanges the
+driver. Start redirects with a state value signed by a key derived from
+`SETTINGS_ENCRYPTION_KEY` with HKDF and the label `oauth-state`, expiring after ten
+minutes. Callback exchanges the
 code, stores the refresh token as a secret, records the connected account's email, and
 redirects to settings. Drivers refresh access tokens themselves. A disconnect action
 clears tokens. The form shows the exact redirect URI derived from the server base URL,
@@ -282,8 +317,10 @@ The Phase 1 differentiator. Users write rules in plain English:
 **Evaluation flow.**
 1. Text is extracted.
 2. All active rules for the user are loaded.
-3. One prompt is assembled with the document text (truncated to 8000 characters) and
-   every rule, each with its id, description, and target.
+3. One prompt is assembled with the document text and every rule, each with its id,
+   description, and target name resolved from its target id. Text is truncated to
+   8000 characters in Phase 1. Known limitation: a rule that matches only on content
+   past that point will miss. Later phases can evaluate per chunk.
 4. The rules model returns structured JSON validated by valibot: per rule, matched,
    confidence, reasoning.
 5. Rules with matched true and confidence at or above their threshold are applied.
@@ -292,7 +329,10 @@ The Phase 1 differentiator. Users write rules in plain English:
 **Design decisions.** One LLM call per document for all rules. Reasoning is stored so
 users can tune rules. Re-evaluation on demand: after editing a rule, or for one
 document. A dry run tests a rule against a chosen document before saving. The
-confidence threshold is per rule. Later phases add inbox triage and rules that learn
+confidence threshold is per rule, on a 0.0 to 1.0 scale. Rules point at a tag or
+category by id, so renaming a tag never breaks a rule, and nested categories are
+unambiguous. There is no rule priority: every rule is evaluated in one call and every
+match above its threshold is applied. Later phases add inbox triage and rules that learn
 from corrections; see `docs/FEATURES.md`.
 
 ## Search and Chat
