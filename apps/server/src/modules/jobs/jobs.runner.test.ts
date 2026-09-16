@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import pino from "pino";
 import { describe, expect, it } from "vitest";
 import { createTestDatabase } from "../../shared/test/database.test-utils.js";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
@@ -7,6 +8,7 @@ import { createJobRunner } from "./jobs.runner.js";
 import { createJobsService } from "./jobs.usecases.js";
 
 const userId = "user-1";
+const silentLogger = pino({ level: "silent" });
 
 function sqlAvailableNow(id: string) {
   return sql`update jobs set available_at = '2000-01-01T00:00:00.000Z' where id = ${id}`;
@@ -33,7 +35,7 @@ describe("job runner", () => {
   it("retries a failing handler with backoff and fails after three attempts", async () => {
     const { db, jobs, repo } = await setup();
     let calls = 0;
-    const runner = createJobRunner({ db, handlers: { boom: async () => { calls += 1; throw new Error(`fail ${calls}`); } } });
+    const runner = createJobRunner({ db, handlers: { boom: async () => { calls += 1; throw new Error(`fail ${calls}`); } }, logger: silentLogger });
     const job = await jobs.enqueue({ userId, type: "boom", payload: {} });
 
     expect(await runner.runOnce()).toBe(1);
@@ -74,9 +76,23 @@ describe("job runner", () => {
     expect(await repo.findById({ userId, id: job.id })).toMatchObject({ status: "done" });
   });
 
+  it("processes a claimed batch of mixed outcomes sequentially on the single connection", async () => {
+    const { db, jobs, repo } = await setup();
+    const ok = await jobs.enqueue({ userId, type: "echo", payload: { n: 1 } });
+    const bad = await jobs.enqueue({ userId, type: "boom", payload: { n: 2 } });
+    const runner = createJobRunner({
+      db,
+      handlers: { echo: async () => {}, boom: async () => { throw new Error("nope"); } },
+      logger: silentLogger,
+    });
+    expect(await runner.runOnce()).toBe(2);
+    expect(await repo.findById({ userId, id: ok.id })).toMatchObject({ status: "done" });
+    expect(await repo.findById({ userId, id: bad.id })).toMatchObject({ status: "pending", attempts: 1 });
+  });
+
   it("service retry only applies to failed jobs", async () => {
     const { db, jobs } = await setup();
-    const runner = createJobRunner({ db, handlers: { boom: async () => { throw new Error("no"); } } });
+    const runner = createJobRunner({ db, handlers: { boom: async () => { throw new Error("no"); } }, logger: silentLogger });
     const job = await jobs.enqueue({ userId, type: "boom", payload: {} });
     await expectAppError(() => jobs.retry({ userId, id: job.id }), "jobs.not_retryable");
     for (let i = 0; i < 3; i += 1) {

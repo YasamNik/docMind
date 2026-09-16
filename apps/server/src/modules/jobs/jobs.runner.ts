@@ -6,6 +6,12 @@ import type { Job } from "./jobs.types.js";
 
 export type JobHandler = (job: Job, ctx: { db: Database }) => Promise<void>;
 
+/**
+ * `concurrency` is the claim batch size per `runOnce()` call, not parallelism: the
+ * libsql client is a single connection (true for both `:memory:` and file URLs), so
+ * interleaving a transaction with any other statement on it is never safe. Claimed
+ * jobs run one at a time on that single connection.
+ */
 export function createJobRunner({
   db,
   handlers,
@@ -46,7 +52,7 @@ export function createJobRunner({
       if (!job) break;
       claimed.push(job);
     }
-    await Promise.all(claimed.map(process));
+    for (const job of claimed) await process(job);
     return claimed.length;
   }
 
@@ -57,7 +63,12 @@ export function createJobRunner({
     if (recovered > 0) logger.info({ recovered }, "Reset stuck jobs to pending");
     loop = (async () => {
       while (running) {
-        const ran = await runOnce();
+        let ran = 0;
+        try {
+          ran = await runOnce();
+        } catch (error) {
+          logger.error({ err: error }, "Job runner iteration failed");
+        }
         if (!running) break;
         if (ran === 0) await new Promise((r) => setTimeout(r, pollIntervalMs));
       }
