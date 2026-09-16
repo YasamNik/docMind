@@ -2,7 +2,10 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createAnthropicAdapter } from "./anthropic.adapter.js";
 import modelsFixture from "../__fixtures__/anthropic-models.json" with { type: "json" };
 import structuredFixture from "../__fixtures__/anthropic-structured.json" with { type: "json" };
+import errorFixture from "../__fixtures__/anthropic-error-401.json" with { type: "json" };
 import * as v from "valibot";
+import { toJsonSchema } from "@valibot/to-json-schema";
+import { jsonSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/json-schema";
 import type { AdapterConfig } from "./adapter.types.js";
 
 const config: AdapterConfig = {
@@ -63,6 +66,23 @@ describe("anthropic adapter", () => {
       });
       expect(result.usage.promptTokens).toBe(380);
       expect(result.usage.completionTokens).toBe(65);
+
+      const [callUrl, callInit] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(callUrl).toBe("https://api.anthropic.com/v1/messages");
+      const callHeaders = new Headers(callInit.headers);
+      expect(callHeaders.get("x-api-key")).toBe("sk-ant-test-key-1234567890");
+      expect(callHeaders.get("anthropic-version")).toBe("2023-06-01");
+
+      const callBody = JSON.parse(callInit.body as string) as {
+        output_config: { format: { schema: unknown } };
+      };
+      const expectedJsonSchema = toJsonSchema(schema);
+      const { $schema: _expectedSchemaKey, ...expectedClean } = expectedJsonSchema as Record<string, unknown>;
+      const expectedFormat = jsonSchemaOutputFormat({
+        ...expectedClean,
+        type: "object" as const,
+      } as Parameters<typeof jsonSchemaOutputFormat>[0]);
+      expect(callBody.output_config.format.schema).toEqual(expectedFormat.schema);
     });
   });
 
@@ -83,6 +103,18 @@ describe("anthropic adapter", () => {
       expect(result.ok).toBe(true);
       expect(result.latencyMs).toBeGreaterThanOrEqual(0);
       expect(result.message).toContain("2 models");
+    });
+
+    it("returns not ok with a sanitized message on 401", async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify(errorFixture), { status: 401, headers: { "content-type": "application/json" } }),
+      );
+      const adapter = createAnthropicAdapter(config);
+      const result = await adapter.testConnection();
+      expect(result.ok).toBe(false);
+      expect(result.message).not.toContain("sk-ant-test-key-1234567890");
+      expect(result.message).toContain("[redacted]");
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 });

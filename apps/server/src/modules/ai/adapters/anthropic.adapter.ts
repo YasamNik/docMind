@@ -7,11 +7,19 @@ import { sanitizeProviderError } from "../ai.models.js";
 import type { AiAdapter, ModelInfo, StructuredResult, EmbedResult, TestResult } from "../ai.types.js";
 import type { AdapterConfig } from "./adapter.types.js";
 
-function wrapError(err: unknown): never {
-  const message = err instanceof Error ? err.message : String(err);
+// The regex-based sanitizeProviderError only recognizes sk-, sk-or-, and sk-ant-
+// prefixed keys. Redact the exact configured key first as a format-independent
+// pass, then run the prefix-based sanitizer.
+function sanitizeMessage(err: unknown, apiKey: string): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const withoutConfiguredKey = apiKey ? raw.split(apiKey).join("[redacted]") : raw;
+  return sanitizeProviderError(withoutConfiguredKey);
+}
+
+function wrapError(err: unknown, apiKey: string): never {
   throw createError({
     code: "ai.provider_error",
-    message: sanitizeProviderError(message),
+    message: sanitizeMessage(err, apiKey),
     status: 502,
   });
 }
@@ -70,7 +78,7 @@ export function createAnthropicAdapter(config: AdapterConfig): AiAdapter {
         };
       } catch (err) {
         if (err instanceof Error && "code" in err && typeof (err as { code: unknown }).code === "string" && (err as { code: string }).code.startsWith("ai.")) throw err;
-        wrapError(err);
+        wrapError(err, config.apiKey);
       }
     },
 
@@ -93,7 +101,7 @@ export function createAnthropicAdapter(config: AdapterConfig): AiAdapter {
           },
         };
       } catch (err) {
-        wrapError(err);
+        wrapError(err, config.apiKey);
       }
     },
 
@@ -117,7 +125,7 @@ export function createAnthropicAdapter(config: AdapterConfig): AiAdapter {
         }
         return models;
       } catch (err) {
-        wrapError(err);
+        wrapError(err, config.apiKey);
       }
     },
 
@@ -134,7 +142,7 @@ export function createAnthropicAdapter(config: AdapterConfig): AiAdapter {
         return {
           ok: false,
           latencyMs: Date.now() - start,
-          message: sanitizeProviderError(err instanceof Error ? err.message : String(err)),
+          message: sanitizeMessage(err, config.apiKey),
         };
       }
     },

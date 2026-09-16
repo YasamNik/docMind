@@ -5,7 +5,7 @@
       "name": "Google: Gemini 2.0 Flash",
       "context_length": 1048576,
       "pricing": { "prompt": "0.0000001", "completion": "0.0000004" },
-      "supported_parameters": ["temperature", "top_p", "max_tokens", "structured_output", "tools"]
+      "supported_parameters": ["temperature", "top_p", "max_tokens", "structured_outputs", "tools"]
     },
     {
       "id": "anthropic/claude-sonnet-4",

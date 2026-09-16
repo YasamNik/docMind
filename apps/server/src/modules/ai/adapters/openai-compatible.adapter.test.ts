@@ -118,5 +118,41 @@ describe("openai-compatible adapter", () => {
       expect(result.message).not.toContain("sk-or-v1-");
       expect(result.message).toContain("[redacted]");
     });
+
+    it("redacts a configured key that does not match the sk- prefix pattern", async () => {
+      const mistralApiKey = "mistral-key-1234567890abcdef";
+      const mistralConfig: AdapterConfig = {
+        apiKey: mistralApiKey,
+        baseUrl: "https://api.mistral.ai/v1",
+        providerId: "mistral",
+      };
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: { message: `Invalid API key provided: ${mistralApiKey}`, type: "invalid_request_error" },
+          }),
+          { status: 401, headers: { "content-type": "application/json" } },
+        ),
+      );
+      const adapter = createOpenAiCompatibleAdapter(mistralConfig);
+      const result = await adapter.testConnection();
+      expect(result.ok).toBe(false);
+      expect(result.message).not.toContain(mistralApiKey);
+      expect(result.message).toContain("[redacted]");
+    });
+
+    it("sends a one-token chat completion instead of listing models when listModels is false", async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify(completionFixture), { status: 200, headers: { "content-type": "application/json" } }),
+      );
+      const noListModelsConfig: AdapterConfig = { ...config, listModels: false };
+      const adapter = createOpenAiCompatibleAdapter(noListModelsConfig);
+      const result = await adapter.testConnection();
+      expect(result.ok).toBe(true);
+      expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [callUrl] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(callUrl).toBe("https://openrouter.ai/api/v1/chat/completions");
+    });
   });
 });

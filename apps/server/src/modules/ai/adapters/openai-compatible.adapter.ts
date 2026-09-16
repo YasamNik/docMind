@@ -7,11 +7,20 @@ import type { AiAdapter, ModelInfo, StructuredResult, EmbedResult, TestResult } 
 import type { AdapterConfig } from "./adapter.types.js";
 import type { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions.js";
 
-function wrapError(err: unknown): never {
-  const message = err instanceof Error ? err.message : String(err);
+// The regex-based sanitizeProviderError only recognizes sk-, sk-or-, and sk-ant-
+// prefixed keys. This adapter also backs Mistral, DeepSeek, LM Studio, and Custom,
+// whose key formats may not match those prefixes, so redact the exact configured
+// key first as a format-independent pass, then run the prefix-based sanitizer.
+function sanitizeMessage(err: unknown, apiKey: string): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const withoutConfiguredKey = apiKey ? raw.split(apiKey).join("[redacted]") : raw;
+  return sanitizeProviderError(withoutConfiguredKey);
+}
+
+function wrapError(err: unknown, apiKey: string): never {
   throw createError({
     code: "ai.provider_error",
-    message: sanitizeProviderError(message),
+    message: sanitizeMessage(err, apiKey),
     status: 502,
   });
 }
@@ -88,7 +97,7 @@ export function createOpenAiCompatibleAdapter(config: AdapterConfig): AiAdapter 
         };
       } catch (err) {
         if (err instanceof Error && "code" in err && typeof (err as { code: unknown }).code === "string" && (err as { code: string }).code.startsWith("ai.")) throw err;
-        wrapError(err);
+        wrapError(err, config.apiKey);
       }
     },
 
@@ -112,7 +121,7 @@ export function createOpenAiCompatibleAdapter(config: AdapterConfig): AiAdapter 
           },
         };
       } catch (err) {
-        wrapError(err);
+        wrapError(err, config.apiKey);
       }
     },
 
@@ -128,7 +137,7 @@ export function createOpenAiCompatibleAdapter(config: AdapterConfig): AiAdapter 
 
         return { vectors, dimension };
       } catch (err) {
-        wrapError(err);
+        wrapError(err, config.apiKey);
       }
     },
 
@@ -150,30 +159,46 @@ export function createOpenAiCompatibleAdapter(config: AdapterConfig): AiAdapter 
                   }
                 : undefined,
             supportsStructured: config.isOpenRouter
-              ? supportedParams.includes("structured_output")
+              ? supportedParams.includes("structured_outputs")
               : undefined,
           });
         }
         return models;
       } catch (err) {
-        wrapError(err);
+        wrapError(err, config.apiKey);
       }
     },
 
     async testConnection(): Promise<TestResult> {
       const start = Date.now();
+      const useListModels = config.listModels ?? true;
       try {
-        const models = await this.listModels();
+        if (useListModels) {
+          const models = await this.listModels();
+          return {
+            ok: true,
+            latencyMs: Date.now() - start,
+            message: `Connected. ${models.length} models available.`,
+          };
+        }
+
+        // The provider does not expose a models list endpoint: verify the
+        // connection and the API key with a minimal one-token completion instead.
+        await client.chat.completions.create({
+          model: "gpt-3.5-turbo",
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 1,
+        });
         return {
           ok: true,
           latencyMs: Date.now() - start,
-          message: `Connected. ${models.length} models available.`,
+          message: "Connected.",
         };
       } catch (err) {
         return {
           ok: false,
           latencyMs: Date.now() - start,
-          message: sanitizeProviderError(err instanceof Error ? err.message : String(err)),
+          message: sanitizeMessage(err, config.apiKey),
         };
       }
     },

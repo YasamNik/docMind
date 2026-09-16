@@ -71,6 +71,7 @@ export function createAiService({
       baseUrl,
       providerId: provider.id,
       isOpenRouter: provider.id === "openrouter",
+      listModels: provider.capabilities.listModels,
     };
     return adapterFactories[provider.adapter](config);
   }
