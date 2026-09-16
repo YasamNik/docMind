@@ -10,7 +10,7 @@ let cookie: string;
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "docmind-routes-"));
-  const t = await createTestApp({ DOCUMENT_STORAGE_ROOT: root });
+  const t = await createTestApp({ env: { DOCUMENT_STORAGE_ROOT: root } });
   app = t.app;
   cookie = (await t.signIn()).cookie;
 });

@@ -13,7 +13,15 @@ function notFound(documentId: string) {
 
 const DEFAULT_MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
-export function createDocumentsService({ db, storageService }: { db: Database; storageService: StorageService }) {
+export function createDocumentsService({
+  db,
+  storageService,
+  onUploaded,
+}: {
+  db: Database;
+  storageService: StorageService;
+  onUploaded?: (args: { userId: string; document: Document; tx: Database }) => Promise<void>;
+}) {
   const repository = createDocumentsRepository({ db });
 
   async function getOrThrow(userId: string, documentId: string): Promise<Document> {
@@ -81,7 +89,10 @@ export function createDocumentsService({ db, storageService }: { db: Database; s
         createdAt: timestamp,
         updatedAt: timestamp,
       };
-      await repository.insert(document);
+      await db.transaction(async (tx) => {
+        await repository.insert(document, tx as unknown as Database);
+        if (onUploaded) await onUploaded({ userId, document, tx: tx as unknown as Database });
+      });
       return { document };
     },
 

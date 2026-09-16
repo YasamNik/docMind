@@ -5,8 +5,8 @@ import type { NewDocument } from "./documents.types.js";
 
 export function createDocumentsRepository({ db }: { db: Database }) {
   return {
-    async insert(document: NewDocument) {
-      await db.insert(documentsTable).values(document);
+    async insert(document: NewDocument, tx: Database = db) {
+      await tx.insert(documentsTable).values(document);
     },
     async listByUser(userId: string) {
       return db
@@ -29,8 +29,18 @@ export function createDocumentsRepository({ db }: { db: Database }) {
         .where(and(eq(documentsTable.userId, userId), eq(documentsTable.contentHash, contentHash)));
       return row ?? null;
     },
-    async update({ userId, documentId, patch }: { userId: string; documentId: string; patch: Partial<NewDocument> }) {
-      await db
+    async update({
+      userId,
+      documentId,
+      patch,
+      tx = db,
+    }: {
+      userId: string;
+      documentId: string;
+      patch: Partial<NewDocument>;
+      tx?: Database;
+    }) {
+      await tx
         .update(documentsTable)
         .set(patch)
         .where(and(eq(documentsTable.userId, userId), eq(documentsTable.id, documentId)));
