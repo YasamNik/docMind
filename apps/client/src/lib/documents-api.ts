@@ -33,6 +33,7 @@ export const documentsApi = {
     return new Promise<UploadResult>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `/api/documents?name=${encodeURIComponent(file.name)}`);
+      xhr.withCredentials = true;
       xhr.setRequestHeader("content-type", file.type || "application/octet-stream");
       xhr.upload.addEventListener("progress", (e) => {
         if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
