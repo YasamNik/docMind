@@ -2,3 +2,5 @@
 - [Second spec review](review-spec-v2.md) -- verified v1 fixes, found applied_by_rule cleanup gap and job-cache sync issues
 - [Milestone A plan review](review-plan-1a.md) -- valibot pipe nesting compile error and wrong buildStorageKey test assertion
 - [Milestone B plan review](review-plan-1b.md) -- doc status cache invariant broken on retriable failure, missing design doc updates
+- [Milestone C spec review](review-milestone-c-spec.md) -- cascade gaps, Inbox orphans, setting-key departures, prompt size, 12 rulings
+- [Milestone C1 plan review](review-plan-c1.md) -- module eval order bug, SDK extra_body error, provider settings lookup crash, 9 rulings

@@ -37,7 +37,7 @@ Claude-Session: <session url from the harness>
 3. **Adapter factory shape.** Each adapter factory is a function `createXxxAdapter(config) -> AiAdapter` where config carries `apiKey`, `baseUrl`, and provider-specific flags (like `isOpenRouter`). The adapter is stateless; the OpenAI/Anthropic SDK client is created inside it.
 4. **OpenRouter attribution headers.** Set via the OpenAI SDK's `defaultHeaders` constructor option: `HTTP-Referer: https://github.com/YasamNik/docMind` and `X-Title: DocMind`.
 5. **OpenRouter structured output.** On structured calls, the adapter adds `require_parameters: true` to the request body via `extra_body`. In `listModels`, the adapter checks each model's `supported_parameters` array (from the OpenRouter `/models` endpoint at `https://openrouter.ai/api/v1/models`) for `"structured_output"` to set `supportsStructured`.
-6. **Anthropic structured output path.** Uses `client.messages.parse()` with `jsonSchemaOutputFormat()` from `@anthropic-ai/sdk/helpers/json-schema`. The valibot schema is converted to JSON schema via `toJsonSchema()` from `@valibot/to-json-schema`, then passed to `jsonSchemaOutputFormat()`.
+6. **Anthropic structured output path.** Uses `client.messages.create()` with `output_config: { format: jsonSchemaOutputFormat(...) }` from `@anthropic-ai/sdk/helpers/json-schema`. The valibot schema is converted to JSON schema via `toJsonSchema()` from `@valibot/to-json-schema`, then passed to `jsonSchemaOutputFormat()`. The response text block is JSON-parsed and validated with valibot. (`.parse()` would also work but `.create()` is simpler since we validate with valibot anyway.)
 7. **Slot validation on PUT /api/settings.** When a slot key (`ai.model.rules`, `ai.model.chat`, `ai.model.embedding`) is written, the settings PUT route calls a hook registered by the AI module. The hook parses the `provider://model` value, checks that the provider's key is set (or not required), and checks the provider's capability for the slot's task. It throws `ai.slot_not_configured` or `ai.capability_missing` on failure. The hook is a `beforeSet` callback passed to `createSettingsService`.
 8. **Select component.** Added via `pnpm dlx shadcn@latest add select` in `apps/client`. This installs a `select.tsx` in `components/ui/`.
 9. **Tabs component.** Built as a minimal wrapper around `@base-ui/react` Tabs (already a dependency). A new file `components/ui/tabs-nav.tsx` provides `TabsNav`, `TabsNavList`, `TabsNavTab`, `TabsNavPanel` to avoid a name conflict with the existing table component. This mirrors how other UI components wrap base-ui primitives.
@@ -216,6 +216,9 @@ Expected: FAIL, cannot find module `./ai.models.js`.
 ```ts
 import type { GenericSchema } from "valibot";
 import type { SettingDefinition } from "../settings/settings.types.js";
+import type { SetupGuide, SetupGuideStep } from "../storage/storage.types.js";
+
+export type { SetupGuide, SetupGuideStep };
 
 export type AiProviderCapabilities = {
   text: boolean;
@@ -266,14 +269,6 @@ export type AiAdapter = {
   embed(args: { model: string; texts: string[] }): Promise<EmbedResult>;
   listModels(): Promise<ModelInfo[]>;
   testConnection(): Promise<TestResult>;
-};
-
-export type SetupGuideStep = { text: string; link?: string; copyValue?: string };
-export type SetupGuide = {
-  title: string;
-  intro: string;
-  steps: SetupGuideStep[];
-  notes: string[];
 };
 
 export type AiProviderDefinition = {
@@ -381,13 +376,12 @@ export const aiSlotSettingDefinitions = [
   }),
 ];
 
-// Filled by Task 2 when the provider registry is built.
-// This is a mutable array so ai.settings can be imported before provider definitions load.
-export const aiProviderSettingDefinitions: SettingDefinition[] = [];
-
+// Provider settings are collected here, matching the storage pattern:
+// storageSettingDefinitions imports storageDriverRegistry and flatMaps its settings.
+// The import from providers/index.ts is added by Task 2.
+// Until Task 2, this is a placeholder that only has slot settings.
 export const aiSettingDefinitions: SettingDefinition[] = [
   ...aiSlotSettingDefinitions,
-  // Provider settings are pushed here by the registry in providers/index.ts
 ];
 ```
 
@@ -447,7 +441,7 @@ EOF
 
 **Files:**
 - Create: `apps/server/src/modules/ai/providers/openrouter.provider.ts`, `openai.provider.ts`, `anthropic.provider.ts`, `ollama.provider.ts`, `mistral.provider.ts`, `deepseek.provider.ts`, `lmstudio.provider.ts`, `custom.provider.ts`, `providers/index.ts`
-- Modify: `apps/server/src/modules/ai/ai.settings.ts`
+- Modify: `apps/server/src/modules/ai/ai.settings.ts` (replace placeholder with complete list)
 - Test: `apps/server/src/modules/ai/providers/providers.test.ts`
 
 **Interfaces:**
@@ -455,7 +449,7 @@ EOF
 - Produces:
   - `aiProviderRegistry`: `Record<string, AiProviderDefinition>` with keys in display order: `openrouter`, `openai`, `anthropic`, `ollama`, `mistral`, `deepseek`, `lmstudio`, `custom`.
   - `aiProviderIds`: `string[]` in display order.
-  - Each definition carries its `settings` array (apiKey + baseUrl), which is pushed into `aiSettingDefinitions` by `providers/index.ts`.
+  - Each definition carries its `settings` array (apiKey + baseUrl). The complete `aiSettingDefinitions` is built in `ai.settings.ts` by importing the registry and flatMapping (same pattern as `storageSettingDefinitions`).
 
 - [ ] **Step 1: Write the test**
 
@@ -919,7 +913,6 @@ export const customProvider: AiProviderDefinition = {
 `apps/server/src/modules/ai/providers/index.ts`:
 ```ts
 import type { AiProviderDefinition } from "../ai.types.js";
-import { aiSettingDefinitions } from "../ai.settings.js";
 import { openrouterProvider } from "./openrouter.provider.js";
 import { openaiProvider } from "./openai.provider.js";
 import { anthropicProvider } from "./anthropic.provider.js";
@@ -946,25 +939,62 @@ for (const def of ordered) {
 }
 
 export const aiProviderIds = ordered.map((d) => d.id);
-
-// Push provider settings into the shared aiSettingDefinitions array.
-// This mirrors how storageSettingDefinitions collects driver settings.
-for (const def of ordered) {
-  aiSettingDefinitions.push(...def.settings);
-}
 ```
 
-- [ ] **Step 4: Run the test**
+- [ ] **Step 4: Update `ai.settings.ts` to build the complete list from the provider registry**
+
+Replace `apps/server/src/modules/ai/ai.settings.ts` with:
+```ts
+import * as v from "valibot";
+import { defineSetting } from "../settings/settings.registry.js";
+import type { SettingDefinition } from "../settings/settings.types.js";
+import { modelUriSchema } from "./ai.schemas.js";
+import { aiProviderRegistry } from "./providers/index.js";
+
+export const aiSlotSettingDefinitions = [
+  defineSetting({
+    key: "ai.model.rules",
+    schema: v.union([modelUriSchema, v.literal("")]),
+    env: "AI_MODEL_RULES",
+    default: "",
+    doc: "Model for sorting rules evaluation. Format: provider://model",
+  }),
+  defineSetting({
+    key: "ai.model.chat",
+    schema: v.union([modelUriSchema, v.literal("")]),
+    env: "AI_MODEL_CHAT",
+    default: "",
+    doc: "Model for document chat. Format: provider://model",
+  }),
+  defineSetting({
+    key: "ai.model.embedding",
+    schema: v.union([modelUriSchema, v.literal("")]),
+    env: "AI_MODEL_EMBEDDING",
+    default: "",
+    doc: "Model for text embeddings. Format: provider://model",
+  }),
+];
+
+// Mirrors the storageSettingDefinitions pattern: import the registry and flatMap its settings.
+export const aiSettingDefinitions: SettingDefinition[] = [
+  ...aiSlotSettingDefinitions,
+  ...Object.values(aiProviderRegistry).flatMap((d) => d.settings),
+];
+```
+
+This ensures provider settings are in `aiSettingDefinitions` at the time `allSettingDefinitions` copies it via spread, because the import of `providers/index.ts` forces it to evaluate first.
+
+- [ ] **Step 5: Run the test**
 
 Run: `pnpm --filter @docmind/server test -- providers`
 Expected: PASS.
 
-- [ ] **Step 5: Run full server tests**
+- [ ] **Step 6: Run full server tests**
 
 Run: `pnpm --filter @docmind/server test`
 Expected: PASS. No regressions.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add apps/server/src/modules/ai/providers/ \
@@ -1228,26 +1258,25 @@ export function createOpenAiCompatibleAdapter(config: AdapterConfig): AiAdapter 
         const jsonSchema = toJsonSchema(schema);
         // Remove the $schema key since OpenAI does not accept it
         const { $schema: _, ...cleanSchema } = jsonSchema as Record<string, unknown>;
-        const extraBody: Record<string, unknown> = {};
-        if (config.isOpenRouter) {
-          extraBody.require_parameters = true;
-        }
-        const response = await client.chat.completions.create({
-          model,
-          messages: [
-            { role: "system", content: system },
-            { role: "user", content: input },
-          ],
-          response_format: {
-            type: "json_schema",
-            json_schema: {
-              name: schemaName,
-              strict: true,
-              schema: cleanSchema as Record<string, unknown>,
+        const response = await client.chat.completions.create(
+          {
+            model,
+            messages: [
+              { role: "system", content: system },
+              { role: "user", content: input },
+            ],
+            response_format: {
+              type: "json_schema",
+              json_schema: {
+                name: schemaName,
+                strict: true,
+                schema: cleanSchema as Record<string, unknown>,
+              },
             },
           },
-          ...(Object.keys(extraBody).length > 0 ? { body: extraBody } : {}),
-        } as OpenAI.ChatCompletionCreateParamsNonStreaming);
+          // OpenRouter: add require_parameters to the request body via SDK options
+          config.isOpenRouter ? { body: { require_parameters: true } } : undefined,
+        );
 
         const content = response.choices[0]?.message?.content;
         if (!content) {
@@ -1980,13 +2009,13 @@ export function createAiService({
         status: 400,
       });
     }
-    const apiKey = await settingsService.get<string>(userId, `ai.${providerId}.apiKey`);
-    const baseUrl = await settingsService.get<string>(userId, `ai.${providerId}.baseUrl`);
-    return {
-      provider,
-      apiKey: apiKey ?? "",
-      baseUrl: baseUrl ?? provider.defaultBaseUrl,
-    };
+    // Only query settings that this provider actually registers.
+    // Ollama and LM Studio have no apiKey setting; querying it would throw settings.unknown_key.
+    const hasApiKey = provider.settings.some((s) => s.key.endsWith(".apiKey"));
+    const hasBaseUrl = provider.settings.some((s) => s.key.endsWith(".baseUrl"));
+    const apiKey = hasApiKey ? (await settingsService.get<string>(userId, `ai.${providerId}.apiKey`)) ?? "" : "";
+    const baseUrl = hasBaseUrl ? (await settingsService.get<string>(userId, `ai.${providerId}.baseUrl`)) ?? provider.defaultBaseUrl : provider.defaultBaseUrl;
+    return { provider, apiKey, baseUrl };
   }
 
   function buildAdapter(provider: AiProviderDefinition, apiKey: string, baseUrl: string): AiAdapter {
@@ -2211,8 +2240,20 @@ EOF
 
 `apps/server/src/modules/ai/ai.routes.test.ts`:
 ```ts
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createTestApp } from "../../shared/test/app.test-utils.js";
+
+// Stub fetch so adapter calls never hit the network.
+const mockFetch = vi.fn<typeof fetch>();
+beforeEach(() => {
+  vi.restoreAllMocks();
+  mockFetch.mockReset();
+  // Default: return a minimal models response so testConnection works
+  mockFetch.mockResolvedValue(
+    new Response(JSON.stringify({ data: [{ id: "test-model", name: "Test" }] }), { status: 200, headers: { "content-type": "application/json" } }),
+  );
+  vi.stubGlobal("fetch", mockFetch);
+});
 
 describe("ai routes", () => {
   it("GET /api/ai/providers returns providers and slots", async () => {
@@ -3356,18 +3397,28 @@ EOF
 
 ---
 
-### Task 8: Docs update and manual checklist
+### Task 8: Final tests, user note for .env.example, and manual checklist
 
 **Files:**
-- Modify: `apps/server/.env.example`
+- None modified. `.env.example` is off-limits to agents (permission rule).
 
 **Interfaces:**
 - Consumes: Everything from Tasks 1 through 7.
-- Produces: Updated `.env.example`, a manual check list in this plan.
+- Produces: A note for the user and a manual check list.
 
-- [ ] **Step 1: Update .env.example**
+- [ ] **Step 1: Run full test suites**
 
-Add these lines to `apps/server/.env.example` after the existing entries:
+Run:
+```bash
+pnpm --filter @docmind/server test
+pnpm --filter @docmind/client test
+pnpm typecheck
+```
+Expected: All PASS.
+
+- [ ] **Step 2: Tell the user to update `.env.example`**
+
+The agent cannot read or edit `.env.example` (permission rule). Ask the user to add these lines to `apps/server/.env.example` after the existing entries:
 
 ```
 # --- AI Providers (optional, at least one needed for sorting) ---
@@ -3382,33 +3433,14 @@ Add these lines to `apps/server/.env.example` after the existing entries:
 # AI_MODEL_EMBEDDING=openrouter://openai/text-embedding-3-small
 ```
 
-- [ ] **Step 2: Run full test suites**
+The user commits this change themselves.
 
-Run:
-```bash
-pnpm --filter @docmind/server test
-pnpm --filter @docmind/client test
-pnpm typecheck
-```
-Expected: All PASS.
+- [ ] **Step 3: Manual check (with the user's real OpenRouter key)**
 
-- [ ] **Step 3: Commit**
-
-```bash
-git add apps/server/.env.example
-git commit -m "$(cat <<'EOF'
-docs: update .env.example with AI provider settings
-
-Adds commented-out lines for OpenRouter, OpenAI, Anthropic, Ollama,
-LM Studio keys and base URLs, plus the three model slot env vars.
-
-Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
-Claude-Session: <session url from the harness>
-EOF
-)"
-```
-
-- [ ] **Step 4: Manual check (with the user's real OpenRouter key)**
+Before testing, verify the suggested model IDs against the live OpenRouter models list
+(`GET https://openrouter.ai/api/v1/models`). If any model id is no longer available,
+update the corresponding provider definition's `suggestedModels` and the `.env.example`
+lines before proceeding.
 
 1. Start the dev server: `pnpm dev`.
 2. Open http://localhost:5173, sign in.
@@ -3421,3 +3453,19 @@ EOF
 9. Try setting Rules to `anthropic://some-model` without an Anthropic key. It should show an error about the missing key.
 10. Switch to the Storage tab. Verify the active driver and local root fields appear with their defaults.
 11. Clear the OpenRouter key. Verify the field resets to the paste-your-key state.
+
+---
+
+## Plan review rulings
+
+Applied by plan-reviewer on 2026-09-16. Each ruling references the finding that prompted it.
+
+1. **B1 fixed: OpenRouter `require_parameters` passed wrong.** Task 3 adapter code spread `{ body: extraBody }` into the params object, adding a `"body"` JSON key instead of the intended top-level `require_parameters`. Fixed: pass `{ body: { require_parameters: true } }` as the second argument to `client.chat.completions.create()` (the SDK `RequestOptions`). Verified against `openai@7.17.0` types.
+2. **B2 fixed: `getCredentials` crashes for providers without an `apiKey` setting.** `settingsService.get("ai.ollama.apiKey")` throws `settings.unknown_key` because Ollama and LM Studio register no apiKey setting. Fixed: `getCredentials` now checks `provider.settings.some(s => s.key.endsWith(".apiKey"))` before querying.
+3. **B3 fixed: Module evaluation order breaks provider settings registration.** `providers/index.ts` pushed settings into `aiSettingDefinitions` as a side effect, but `allSettingDefinitions` spreads the array before that side effect runs. Fixed: `ai.settings.ts` now imports `aiProviderRegistry` and flatMaps its settings, matching the `storageSettingDefinitions` pattern. `providers/index.ts` no longer mutates the settings array.
+4. **M1 fixed: Decision 6 said `messages.parse()` but code uses `messages.create()`.** Updated Decision 6 to match the code. Both work; `.create()` is simpler since we validate with valibot.
+5. **M2 fixed: Route tests make real HTTP requests.** Task 6 route tests now stub `fetch` globally with `vi.stubGlobal`, returning a minimal models response. No network access.
+6. **M3 fixed: Duplicate `SetupGuide` types.** `ai.types.ts` now imports `SetupGuide` and `SetupGuideStep` from `storage.types.ts` instead of redefining them.
+7. **m1 fixed: Task 8 edits `.env.example` in violation of the permission rule.** Replaced with a user note listing the exact lines to add. The user commits this change.
+8. **Ruling: Suggested model IDs are unverifiable at review time.** The manual check step (Task 8 Step 3) now requires verifying them against the live OpenRouter models list before testing.
+9. **Ruling: Custom provider with `requiresKey: true` blocks keyless custom APIs.** Accepted for v1. Workaround: user can enter a dummy key. A future refinement can make the key optional.
