@@ -32,6 +32,19 @@ describe("ai routes", () => {
     });
   });
 
+  it("GET /api/ai/providers never leaks the raw key", async () => {
+    const { app, signIn, services } = await createTestApp();
+    const { cookie, userId } = await signIn();
+    await services.settingsService.set(userId, { "ai.openrouter.apiKey": "sk-or-v1-testkey1234" });
+    const res = await app.request("/api/ai/providers", { headers: { cookie } });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(JSON.stringify(body)).not.toContain("sk-or-v1-testkey1234");
+    const openrouter = body.providers.find((p: { id: string }) => p.id === "openrouter");
+    expect(openrouter).not.toHaveProperty("apiKey");
+    expect(openrouter.keyLastFour).toBeTruthy();
+  });
+
   it("GET /api/ai/providers requires auth", async () => {
     const { app } = await createTestApp();
     const res = await app.request("/api/ai/providers");
@@ -95,6 +108,22 @@ describe("ai routes", () => {
       method: "PUT",
       headers: { cookie, "content-type": "application/json" },
       body: JSON.stringify({ updates: { "ai.model.rules": "openrouter://google/gemini-2.0-flash-001" } }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("PUT /api/settings accepts a combined write of key and slot in one batch", async () => {
+    const { app, signIn } = await createTestApp();
+    const { cookie } = await signIn();
+    const res = await app.request("/api/settings", {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        updates: {
+          "ai.openrouter.apiKey": "sk-or-v1-testkey1234",
+          "ai.model.rules": "openrouter://google/gemini-3.8-flash",
+        },
+      }),
     });
     expect(res.status).toBe(200);
   });

@@ -91,7 +91,7 @@ describe("ai service", () => {
     });
     expect(result.data).toBeTruthy();
     expect(adapter.generateStructured).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "google/gemini-2.0-flash-001" }),
+      expect.objectContaining({ model: "google/gemini-3.8-flash" }),
     );
   });
 

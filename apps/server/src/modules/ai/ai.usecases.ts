@@ -1,6 +1,6 @@
 import * as v from "valibot";
 import type { GenericSchema } from "valibot";
-import type { Logger } from "pino";
+import type { Logger } from "../../shared/logger/logger.js";
 import { createError } from "../../shared/errors/errors.js";
 import { createLogger } from "../../shared/logger/logger.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
@@ -38,6 +38,8 @@ export function createAiService({
   // Model list cache. Keyed by providerId and baseUrl since a base URL can be
   // user-specific (Ollama, LM Studio, Custom): including it in the key keeps one
   // user's results from being served to another user pointed at a different host.
+  // The key omits userId because DocMind is single-user today; add it before any
+  // multi-user work, or one user's cached list will leak to another.
   const modelCache = new Map<string, CacheEntry>();
 
   function getProvider(providerId: string): AiProviderDefinition {

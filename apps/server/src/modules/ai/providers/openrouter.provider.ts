@@ -10,8 +10,11 @@ export const openrouterProvider: AiProviderDefinition = {
   requiresKey: true,
   capabilities: { text: true, structured: true, embeddings: true, listModels: true },
   suggestedModels: {
-    rules: "google/gemini-2.0-flash-001",
-    chat: "anthropic/claude-sonnet-4",
+    rules: "google/gemini-3.8-flash",
+    chat: "anthropic/claude-sonnet-5",
+    // Embedding models are listed separately by OpenRouter's GET /api/v1/embeddings/models
+    // endpoint, not the general models list. This id is verified against that catalog and
+    // should be wired to the dedicated endpoint when embeddings are built.
     embedding: "openai/text-embedding-3-small",
   },
   guide: {

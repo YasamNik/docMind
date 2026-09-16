@@ -21,7 +21,7 @@ export function buildModelUri(providerId: string, model: string): string {
   return `${providerId}://${model}`;
 }
 
-const KEY_PATTERN = /\b(sk-|sk-or-|sk-ant-)[a-zA-Z0-9_-]{16,}\b/g;
+const KEY_PATTERN = /\bsk-[a-zA-Z0-9_-]{16,}\b/g;
 
 export function sanitizeProviderError(text: string): string {
   return text.replace(KEY_PATTERN, "[redacted]");

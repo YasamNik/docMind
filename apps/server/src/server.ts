@@ -55,7 +55,15 @@ export function createServer({ config, db, ocrEngine = createTesseractEngine() }
               throw createError({ code: "ai.unknown_provider", message: `Unknown provider "${providerId}"`, status: 400 });
             }
             if (provider.requiresKey) {
-              const apiKey = await settingsService.get<string>(userId, `ai.${providerId}.apiKey`);
+              // A single PUT can set the provider's key and the slot in the same batch.
+              // Check the pending updates first so that combined write succeeds, and only
+              // fall back to the stored setting when the batch does not touch the key.
+              const apiKeyField = `ai.${providerId}.apiKey`;
+              const pendingApiKey = updates[apiKeyField];
+              const apiKey =
+                typeof pendingApiKey === "string" && pendingApiKey !== ""
+                  ? pendingApiKey
+                  : await settingsService.get<string>(userId, apiKeyField);
               if (!apiKey) {
                 throw createError({
                   code: "ai.provider_not_configured",
@@ -77,6 +85,13 @@ export function createServer({ config, db, ocrEngine = createTesseractEngine() }
               throw createError({
                 code: "ai.capability_missing",
                 message: `Provider "${provider.label}" does not support structured output, which is required for the rules slot.`,
+                status: 400,
+              });
+            }
+            if (slot === "chat" && !provider.capabilities.text) {
+              throw createError({
+                code: "ai.capability_missing",
+                message: `Provider "${provider.label}" does not support text generation, which is required for the chat slot.`,
                 status: 400,
               });
             }
