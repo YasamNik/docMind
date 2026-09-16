@@ -1350,8 +1350,8 @@ git commit -m "feat(extraction): add OCR image extractor with injectable engine 
 
 **Interfaces:**
 - `extraction.usecases.ts`: `createExtractionService({ db, documentsService, settingsService, registry })` with
-  - `extractDocument({ userId, documentId })`: loads the document, reads its file stream fully into a `Uint8Array`, finds an extractor (missing one sets `extraction_status = "failed"` with error `No extractor for <mime> (<filename>)` and throws so the job fails), runs it with `ctx` built from settings, and updates the document: `extracted_text`, `extraction_status = "done"`, `extraction_error = note ?? null`, `updated_at`. On any thrown error, sets `extraction_status = "failed"`, `extraction_error = message`, then rethrows so the job records the failure.
-  - `handler: JobHandler` for job type `"extraction"` with payload `{ documentId, userId }` calling `extractDocument`.
+  - `extractDocument({ userId, documentId, isFinalAttempt })`: marks the document `extraction_status = "processing"`, loads it, reads its file stream fully into a `Uint8Array`, finds an extractor (a missing one throws `extraction.unsupported` with message `No extractor for <mime> (<filename>)`), runs it with `ctx` built from settings, and updates the document: `extracted_text`, `extraction_status = "done"`, `extraction_error = note ?? null`, `updated_at`. On any thrown error it records `extraction_error = message` and sets `extraction_status` to `"failed"` when `isFinalAttempt` is true, otherwise back to `"pending"` because the runner will retry; then it rethrows so the job records the failure. This keeps the document status a faithful cache of the job's state, per the design doc.
+  - `handler: JobHandler` for job type `"extraction"` with payload `{ documentId, userId }` calling `extractDocument` with `isFinalAttempt: job.attempts >= job.maxAttempts` (the runner increments `attempts` before calling the handler).
   - `requestExtraction({ userId, documentId })`: in one transaction sets the document's `extraction_status = "pending"`, `extraction_error = null`, and enqueues an extraction job; returns the job. Used by upload and by the re-extract route.
 - `documents.usecases.ts`: `createDocumentsService` gains an optional `onUploaded?: (args: { userId, document, tx }) => Promise<void>` hook; `upload` inserts the row and calls the hook inside one `db.transaction`. `documents.repository.ts` methods accept an optional `tx` for `insert` and `update`.
 - `server.ts` builds the registry `[textExtractor, pdfExtractor, docxExtractor, xlsxExtractor, pptxExtractor, createImageExtractor(ocrEngine)]`, creates the extraction service, passes `onUploaded` into the documents service so every upload enqueues extraction, registers `POST /api/documents/:id/extract` (returns `{ job }`), and creates the job runner with `{ extraction: extractionService.handler }`. It returns `jobRunner` too but does not start it; `index.ts` calls `jobRunner.start()` after `serve` and stops it on SIGTERM and SIGINT.
@@ -1412,12 +1412,22 @@ describe("extraction", () => {
     const { document } = await t.services.documentsService.upload({ userId, name: "archive.zip", mimeType: "application/zip", body: Readable.from(["zip"]) });
     const runner = createJobRunner({ db: t.db, handlers: { extraction: t.services.extractionService.handler } });
     await runner.runOnce();
-    const doc = await t.services.documentsService.get({ userId, documentId: document.id });
-    expect(doc.extractionStatus).toBe("failed");
+    let doc = await t.services.documentsService.get({ userId, documentId: document.id });
+    expect(doc.extractionStatus).toBe("pending");
     expect(doc.extractionError).toMatch(/No extractor for application\/zip/);
-    const [job] = await t.services.jobsService.list({ userId });
+    let [job] = await t.services.jobsService.list({ userId });
     expect(job).toMatchObject({ status: "pending", attempts: 1 });
     expect(job?.error).toMatch(/No extractor/);
+
+    const { sql } = await import("drizzle-orm");
+    for (let i = 0; i < 2; i += 1) {
+      await t.db.run(sql`update jobs set available_at = '2000-01-01T00:00:00.000Z' where id = ${job!.id}`);
+      await runner.runOnce();
+    }
+    doc = await t.services.documentsService.get({ userId, documentId: document.id });
+    expect(doc.extractionStatus).toBe("failed");
+    [job] = await t.services.jobsService.list({ userId });
+    expect(job).toMatchObject({ status: "failed", attempts: 3 });
   });
 
   it("requestExtraction resets status to pending and enqueues again", async () => {
@@ -1507,9 +1517,10 @@ export function createExtractionService({
   const documents = createDocumentsRepository({ db });
   const jobs = createJobsService({ db });
 
-  async function extractDocument({ userId, documentId }: { userId: string; documentId: string }) {
+  async function extractDocument({ userId, documentId, isFinalAttempt = true }: { userId: string; documentId: string; isFinalAttempt?: boolean }) {
     const now = () => new Date().toISOString();
     try {
+      await documents.update({ userId, documentId, patch: { extractionStatus: "processing", updatedAt: now() } });
       const { document, stream } = await documentsService.openFile({ userId, documentId });
       const extractor = registry.find(document.mimeType ?? "", document.name);
       if (!extractor) {
@@ -1524,14 +1535,14 @@ export function createExtractionService({
       await documents.update({ userId, documentId, patch: { extractedText: result.text, extractionStatus: "done", extractionError: result.note ?? null, updatedAt: now() } });
     } catch (error) {
       const message = ((error as Error).message ?? String(error)).slice(0, 2000);
-      await documents.update({ userId, documentId, patch: { extractionStatus: "failed", extractionError: message, updatedAt: now() } });
+      await documents.update({ userId, documentId, patch: { extractionStatus: isFinalAttempt ? "failed" : "pending", extractionError: message, updatedAt: now() } });
       throw error;
     }
   }
 
   const handler: JobHandler = async (job) => {
     const payload = JSON.parse(job.payload) as { documentId: string; userId: string };
-    await extractDocument({ userId: payload.userId ?? job.userId, documentId: payload.documentId });
+    await extractDocument({ userId: payload.userId ?? job.userId, documentId: payload.documentId, isFinalAttempt: job.attempts >= job.maxAttempts });
   };
 
   async function requestExtraction({ userId, documentId }: { userId: string; documentId: string }) {
@@ -1603,7 +1614,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 ```
 
-`apps/server/src/shared/test/app.test-utils.ts`: change the signature to `createTestApp({ env = {}, ocrEngine }: { env?: Record<string, string>; ocrEngine?: OcrEngine } = {})`, default `ocrEngine` to `{ recognize: async () => "OCR TEXT", terminate: async () => {} }`, and pass it to `createServer`. Update the two existing call sites that pass a bare env object (`documents.routes.test.ts` and `server.test.ts` if it passes one) to the new `{ env }` shape.
+`apps/server/src/shared/test/app.test-utils.ts`: change the signature to `createTestApp({ env = {}, ocrEngine }: { env?: Record<string, string>; ocrEngine?: OcrEngine } = {})`, default `ocrEngine` to `{ recognize: async () => "OCR TEXT", terminate: async () => {} }`, and pass it to `createServer`. Update the one existing call site that passes a bare env object, `documents.routes.test.ts` (`createTestApp({ DOCUMENT_STORAGE_ROOT: root })` becomes `createTestApp({ env: { DOCUMENT_STORAGE_ROOT: root } })`). `server.test.ts` calls it with no arguments and needs no change.
 
 - [ ] **Step 5: Run the whole server suite and typecheck**
 
@@ -1910,11 +1921,20 @@ git commit -m "feat(client): add jobs page, extracted text panel, re-extract, an
 ### Task 8: Docs and milestone wrap-up
 
 **Files:**
-- Modify: `CLAUDE.md` ("Running locally" section), `apps/server/.env.example`
+- Modify: `CLAUDE.md` ("Running locally" section), `apps/server/.env.example`, `DOCMIND-DESIGN.md` (Data Model, jobs table)
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Update the docs**
+- [ ] **Step 1: Update the design doc's jobs table**
+
+In `DOCMIND-DESIGN.md`, in the `jobs` block of the Data Model, add two columns after `attempts`:
+```
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  available_at TEXT NOT NULL,      -- not claimed before this time; backoff between attempts
+```
+and add one sentence to the comment below the block: "While a job is retrying, the document's status column stays `pending` with the last error in its error column; it becomes `failed` only when the job has no attempts left."
+
+- [ ] **Step 2: Update the docs**
 
 In `CLAUDE.md` "Running locally", after the `pnpm dev` line add:
 ```
@@ -1923,15 +1943,15 @@ DATA_DIR (default ./data) on the first image upload; the first OCR takes longer.
 ```
 Confirm `.env.example` lists `DATA_DIR=./data` and `OCR_LANGUAGES=eng` from Task 5.
 
-- [ ] **Step 2: Full verification**
+- [ ] **Step 3: Full verification**
 
 Run from the repo root: `pnpm test && pnpm typecheck && pnpm build`. All green.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add CLAUDE.md apps/server/.env.example
-git commit -m "docs: describe background jobs and OCR data for local runs"
+git add CLAUDE.md DOCMIND-DESIGN.md apps/server/.env.example
+git commit -m "docs: describe background jobs, OCR data, and the jobs table columns"
 ```
 
 Milestone B is complete when the suite passes, a manual run shows an uploaded text file, PDF, and image reaching `done` with text on the document page, a ZIP reaching `failed` with a readable error in Jobs, and Retry re-queuing it.
