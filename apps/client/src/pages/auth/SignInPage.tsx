@@ -57,8 +57,8 @@ export function SignInPage() {
             </div>
             <div>
               <Label htmlFor="password">Password</Label>
-              <Input id="password" type="password" required minLength={12} value={password} onChange={(e) => setPassword(e.target.value)} />
-              {!hasUsers && <p className="text-xs text-muted-foreground mt-1">At least 12 characters. This is the only account; sign up closes after it.</p>}
+              <Input id="password" type="password" required minLength={9} value={password} onChange={(e) => setPassword(e.target.value)} />
+              {!hasUsers && <p className="text-xs text-muted-foreground mt-1">At least 9 characters. This is the only account; sign up closes after it.</p>}
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" disabled={busy}>

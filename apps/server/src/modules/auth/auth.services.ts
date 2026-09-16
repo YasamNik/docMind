@@ -14,7 +14,7 @@ export function createAuth({ db, config }: { db: Database; config: AuthConfig })
     basePath: "/api/auth",
     trustedOrigins: [config.clientBaseUrl, config.serverBaseUrl],
     database: drizzleAdapter(db, { provider: "sqlite", schema: authTables }),
-    emailAndPassword: { enabled: true, minPasswordLength: 12 },
+    emailAndPassword: { enabled: true, minPasswordLength: 9 },
     session: { cookieCache: { enabled: true, maxAge: 5 * 60 } },
     databaseHooks: {
       user: {
