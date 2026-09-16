@@ -7,6 +7,7 @@ export type DocumentRow = {
   sizeBytes: number | null;
   extractionStatus: "pending" | "processing" | "done" | "failed";
   extractionError: string | null;
+  extractedText: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -25,6 +26,9 @@ export const documentsApi = {
   },
   remove(id: string) {
     return api.del(`/api/documents/${id}`);
+  },
+  async reextract(id: string) {
+    return (await api.json<{ job: { id: string; status: string } }>("POST", `/api/documents/${id}/extract`, {})).job;
   },
   fileUrl(id: string, download = false) {
     return `/api/documents/${id}/file${download ? "?download=1" : ""}`;

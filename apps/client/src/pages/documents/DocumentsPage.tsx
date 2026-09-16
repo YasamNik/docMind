@@ -8,7 +8,11 @@ import { formatBytes, formatDate } from "@/lib/format";
 
 export function DocumentsPage() {
   const queryClient = useQueryClient();
-  const { data: documents = [], isLoading } = useQuery({ queryKey: ["documents"], queryFn: documentsApi.list });
+  const { data: documents = [], isLoading } = useQuery({
+    queryKey: ["documents"],
+    queryFn: documentsApi.list,
+    refetchInterval: (query) => (query.state.data?.some((d) => d.extractionStatus === "pending" || d.extractionStatus === "processing") ? 3000 : false),
+  });
 
   return (
     <div className="space-y-6">

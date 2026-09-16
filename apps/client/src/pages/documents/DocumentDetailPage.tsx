@@ -2,7 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { documentsApi } from "@/lib/documents-api";
@@ -26,7 +28,11 @@ export function DocumentDetailPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { data: document } = useQuery({ queryKey: ["documents", id], queryFn: () => documentsApi.get(id) });
+  const { data: document } = useQuery({
+    queryKey: ["documents", id],
+    queryFn: () => documentsApi.get(id),
+    refetchInterval: (q) => (q.state.data && (q.state.data.extractionStatus === "pending" || q.state.data.extractionStatus === "processing") ? 3000 : false),
+  });
   const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [name, setName] = useState("");
@@ -46,6 +52,15 @@ export function DocumentDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["documents"] });
       navigate("/documents");
       toast.success("Deleted");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const reextract = useMutation({
+    mutationFn: () => documentsApi.reextract(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["documents", id] });
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      toast.success("Extraction queued");
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -81,6 +96,28 @@ export function DocumentDetailPage() {
       </div>
 
       <Preview id={id} mimeType={document.mimeType} />
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <CardTitle className="text-base flex items-center gap-2">
+            Text
+            <Badge variant={document.extractionStatus === "failed" ? "destructive" : "secondary"}>{document.extractionStatus}</Badge>
+          </CardTitle>
+          <Button size="sm" variant="outline" onClick={() => reextract.mutate()} disabled={reextract.isPending}>
+            Re-extract
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {document.extractionError && <p className="text-sm text-muted-foreground mb-2">{document.extractionError}</p>}
+          {document.extractedText ? (
+            <pre className="whitespace-pre-wrap break-words text-sm max-h-[50vh] overflow-auto">{document.extractedText}</pre>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              {document.extractionStatus === "done" ? "No text was found in this document." : "Text appears here once extraction finishes."}
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
         <DialogContent>

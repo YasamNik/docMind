@@ -11,12 +11,14 @@ export class ApiError extends Error {
 async function handle<T>(res: Response): Promise<T> {
   if (res.ok) {
     if (res.status === 204) return undefined as T;
-    return (await res.json()) as T;
+    // Read from a clone: some callers reuse the same mocked Response across
+    // calls in tests, and cloning keeps the original body intact and re-readable.
+    return (await res.clone().json()) as T;
   }
   let code = "http_error";
   let message = res.statusText || "Request failed";
   try {
-    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    const body = (await res.clone().json()) as { error?: { code?: string; message?: string } };
     code = body.error?.code ?? code;
     message = body.error?.message ?? message;
   } catch {

@@ -6,6 +6,7 @@ import { authClient } from "@/lib/auth-client";
 import { SignInPage } from "@/pages/auth/SignInPage";
 import { DocumentsPage } from "@/pages/documents/DocumentsPage";
 import { DocumentDetailPage } from "@/pages/documents/DocumentDetailPage";
+import { JobsPage } from "@/pages/jobs/JobsPage";
 
 const queryClient = new QueryClient();
 
@@ -37,7 +38,7 @@ export default function App() {
             <Route path="/documents" element={<DocumentsPage />} />
             <Route path="/documents/:id" element={<DocumentDetailPage />} />
             <Route path="/rules" element={<Placeholder title="Rules" />} />
-            <Route path="/jobs" element={<Placeholder title="Jobs" />} />
+            <Route path="/jobs" element={<JobsPage />} />
             <Route path="/settings" element={<Placeholder title="Settings" />} />
           </Route>
         </Routes>
