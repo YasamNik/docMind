@@ -1,7 +1,7 @@
 # Milestone C: Sorting, design
 
-Status: approved in chat on 2026-09-16 (sections 1 to 6), reviewed by `plan-reviewer`
-before planning. Parent spec: `2026-09-15-phase-1-smart-sorting-design.md`, Milestone C.
+Status: approved in chat on 2026-09-16 (sections 1 to 6); `plan-reviewer` findings
+applied the same day (see `2026-09-16-milestone-c-sorting-design.review.md`). Parent spec: `2026-09-15-phase-1-smart-sorting-design.md`, Milestone C.
 Design doc: `DOCMIND-DESIGN.md`. Where this spec departs from the design doc, the
 "Departures" section says so and the design doc is updated in the last plan.
 
@@ -68,6 +68,16 @@ free tag suggestions by the model (later), physical folder sync to external driv
   `category_source` because a document has at most one category.
 - Storage keys change from `user/document/filename` to
   `user/YYYY/MM/document/filename` for new uploads.
+- Setting keys are `ai.<provider>.apiKey`, `ai.<provider>.baseUrl`, and
+  `ai.model.<slot>` instead of the design doc's `ai.providers.<provider>.apiKey` and
+  `ai.models.<slot>`, matching the existing `storage.<driver>.<field>` shape.
+- `document_tags.applied_by_rule` is named `applied_by_auto`.
+- The design doc's cleanup rule ("applied_by_rule cleared only when no remaining active
+  rule with a passing evaluation targets that tag") is replaced by the proposal-based
+  cleanup in section 9.6.
+- Provider capability flags gain `structured`.
+- Extraction failure on the final attempt also sets `rule_status = 'failed'` with
+  `rule_error = 'Extraction failed'`, so a document without text never sits in the Inbox.
 
 ## 5. Data model
 
@@ -121,19 +131,34 @@ sort_evaluations
   outcome TEXT NOT NULL                 -- 'applied' | 'proposed' | 'dismissed' | 'below_threshold' | 'no_match'
   proposal_kind TEXT                    -- 'add_tag' | 'remove_tag' | 'set_category' | null
   model_id TEXT NOT NULL                -- provider://model
-  job_id TEXT                           -- the sort job, null for dry runs (dry runs are not stored)
+  job_id TEXT NOT NULL                  -- the rules job that produced it (dry runs are not stored)
+  content_hash TEXT                     -- the document's hash at evaluation time, for the dismissed check
   evaluated_at TEXT NOT NULL
 ```
 
 Indexes: `categories(user_id, parent_id)`, `tags(user_id)`, `document_tags(tag_id)`,
 `documents(user_id, category_id)`, `sort_evaluations(document_id, evaluated_at)`,
-`sort_evaluations(target_type, target_id)`, `sort_evaluations(outcome)`.
+`sort_evaluations(target_type, target_id)`, `sort_evaluations(outcome, document_id)`.
+Unique indexes with `COLLATE NOCASE`: `categories(user_id, parent_id, name)` and
+`tags(user_id, name)`. Foreign keys with `ON DELETE CASCADE` from `document_tags` and
+`sort_evaluations` to `documents`, from `document_tags` to `tags`, and from
+`sort_evaluations` on `(target_type, target_id)` handled in application code (see
+rules below), since a polymorphic reference cannot use a foreign key.
 
 Rules:
 
+- Deleting a document deletes its `document_tags` and `sort_evaluations` rows through
+  the cascade, so proposals never outlive their document.
 - Deleting a category moves its children to its parent (or the root) and clears
-  `category_id` and `category_source` on its documents. Its evaluations are deleted.
-- Deleting a tag deletes its links and evaluations.
+  `category_id` and `category_source` on its documents. Its evaluations are deleted by
+  the usecase in the same transaction.
+- Deleting a tag deletes its links (cascade) and its evaluations (usecase).
+- Turning off a category's automatic switch clears `category_id` and `category_source`
+  on documents whose source is `auto`, in one batch update; manual ones stay.
+- Tags list alphabetically by name, case-insensitive. Categories list by `sort_order`
+  then name within a parent.
+- When extraction fails on its final attempt, the extraction handler sets
+  `rule_status = 'failed'` and `rule_error = 'Extraction failed'` in the same update.
 - Changing a description, threshold, or the automatic switch does not touch existing
   documents or evaluations.
 - "Rules not yet run" means `rule_status` is `pending` or `processing`. Needs review
@@ -166,7 +191,9 @@ One definition per provider, in this display order: `openrouter`, `openai`, `ant
 - `settings`: emitted into the settings registry the way storage drivers do:
   `ai.<id>.apiKey` (secret, env `<ID>_API_KEY`, for example `OPENROUTER_API_KEY`) and
   `ai.<id>.baseUrl` (default `defaultBaseUrl`, env `<ID>_BASE_URL`). Ollama and LM
-  Studio do not require a key. Custom requires a base URL.
+  Studio do not require a key. Custom requires a base URL. Base URLs must be `http` or
+  `https`; since the single user is the operator, private and loopback addresses are
+  allowed on purpose (Ollama and LM Studio run there).
 
 Slot settings, defined once in `ai.settings.ts`: `ai.model.rules`, `ai.model.chat`,
 `ai.model.embedding`, each a `provider://model` string or empty. Env fallbacks
@@ -196,8 +223,11 @@ testConnection() -> { ok, latencyMs, message }
 - **Anthropic** on the official `@anthropic-ai/sdk`. Structured output through the
   SDK's structured parse helper with the same JSON schema; streaming for text; models
   endpoint for listing; `embed` throws `ai.unsupported`.
-- Every adapter returns provider error text verbatim inside an `AppError` with code
-  `ai.provider_error`, never the key.
+- Every adapter returns provider error text inside an `AppError` with code
+  `ai.provider_error`. The text is passed through unchanged except that any substring
+  matching a known key shape (`sk-`, `sk-or-`, `sk-ant-` prefixes followed by 16 or more
+  key characters) is replaced by `[redacted]`, so an echoed key never reaches logs or
+  the UI.
 
 ### 7.3 Service, `ai.usecases.ts`
 
@@ -219,8 +249,10 @@ testConnection() -> { ok, latencyMs, message }
 
 ### 7.4 Routes, `ai.routes.ts`
 
-- `GET /api/ai/providers`: registry entries with guide, `keySet`, `keyLastFour`,
-  `baseUrl` with its source, and the three slot values with sources and suggestions.
+- `GET /api/ai/providers`: `{ providers: [...], slots: { rules, chat, embedding } }`.
+  Each provider entry carries the registry fields, the guide, `keySet`, `keyLastFour`,
+  and `baseUrl` with its source. Each slot carries value, source, and the suggested
+  model for the slot's provider.
 - `POST /api/ai/providers/:id/test`: `{ ok, latencyMs, message }`.
 - `GET /api/ai/providers/:id/models`: `{ models, error? }`.
 - Slot and key writes go through the existing `PUT /api/settings`. Writing a slot
@@ -236,8 +268,9 @@ Sidebar entry "Settings", route `/settings`, tabs AI and Storage.
   action, base URL field with a "from environment" badge when applicable, Test button
   with the result inline (latency or the provider's message), and the guide beside the
   form (title, intro, numbered steps with links and copy buttons, notes). Below the
-  cards, three comboboxes for the slots, each fed by the models route of the chosen
-  provider, free text allowed, suggested model shown as placeholder, save per slot.
+  cards, three slot rows, each a provider dropdown beside a model combobox fed by the
+  models route of the chosen provider, free text allowed, suggested model shown as
+  placeholder, save per slot; the saved value is `provider://model`.
 - **Storage tab.** A form generated from the storage settings (active driver, local
   root), with save. Small, included because the page shell exists now.
 
@@ -258,8 +291,8 @@ Directory `apps/server/src/modules/tags/` holds tags and categories.
 - `GET /api/tags`, `POST /api/tags`, `PATCH /api/tags/:id`, `DELETE /api/tags/:id`.
   Body fields: `name`, `color`, `description`, `confidenceThreshold`, `autoApply`. List
   responses include `documentCount`.
-- `GET /api/categories` (flat list with `parentId`, `path`, `documentCount`,
-  `sortOrder`), `POST`, `PATCH /:id` (including `parentId` moves; rejects cycles and
+- `GET /api/categories` (flat list with `parentId`, `path` built in application code
+  from the loaded list, `documentCount`, `sortOrder`), `POST`, `PATCH /:id` (including `parentId` moves; rejects cycles and
   self-parenting with `categories.invalid_parent`), `DELETE /:id` (children move up,
   documents cleared).
 - `PUT /api/documents/:id/category` with `{ categoryId | null }`: sets the category by
@@ -295,7 +328,11 @@ Job type `rules`, payload `{ documentId, userId, mode, targetType?, targetId? }`
 `initial` or `rerun`. The extraction handler enqueues an `initial` job in the same
 transaction that marks extraction `done`, only when at least one automatic item exists;
 otherwise `rule_status` is set to `done` directly. `rule_status` mirrors the job the
-same way `extraction_status` does.
+same way `extraction_status` does. The enqueue uses the same `tx` as the extraction
+status update on the single connection; no second transaction is opened. A rerun job
+whose document or target no longer exists finishes as done without output. A provider
+failure follows the normal retry path; the job ends failed with the provider's message
+after three attempts and the document keeps its previous state.
 
 ### 9.2 Prompt and reply
 
@@ -312,13 +349,20 @@ with valibot:
 ```
 
 Items missing from the reply count as `no_match` with confidence 0. Unknown ids are
-dropped and logged.
+dropped and logged. Category paths in the prompt are full paths from the root so
+same-named children under different parents are unambiguous. Prompt size is unbounded
+by design in this milestone; the engine logs a warning when the assembled prompt exceeds
+50,000 characters and the Sorting page shows the count of automatic items with a hint
+that very many long descriptions cost more per document. A cap is a later refinement.
+Empty extracted text is valid input; the model classifies on the name and metadata
+line alone.
 
 ### 9.3 Initial mode
 
 - Every tag with `matched` and `confidence >= threshold` gets `applied_by_auto = 1`.
 - The category is the matched category with the highest confidence at or above its
-  threshold. On a tie, no category is set. Manual category is never replaced.
+  threshold, set with `category_source = 'auto'`. On a tie, no category is set. A
+  manual category is never replaced.
 - Evaluations are stored with outcome `applied`, `below_threshold`, or `no_match`.
 
 ### 9.4 Rerun mode
@@ -329,10 +373,12 @@ dropped and logged.
   matched category different from the current one when the current one is not manual
   or is null. Results that would change nothing are stored as `applied` (already
   true) or `no_match`.
-- A proposal equal to one dismissed earlier for the same document, item, kind, and
-  unchanged description and document text is stored as `dismissed` again, not offered.
-  Sameness is decided by comparing the item's `updated_at` and the document's
-  `updated_at` to the dismissed evaluation's `evaluated_at`.
+- A proposal equal to one dismissed earlier for the same document, item, and kind is
+  stored as `dismissed` again and not offered, unless the item's description changed
+  (item `updated_at` later than the dismissed evaluation's `evaluated_at`) or the
+  document's text changed (`content_hash` differs from the one recorded on the
+  dismissed evaluation). `sort_evaluations` therefore also stores `content_hash TEXT`.
+  Renames and manual tag or category edits do not re-offer a dismissed proposal.
 
 ### 9.5 Proposals API and review
 
@@ -376,6 +422,13 @@ descriptions.
   each with reasoning and a checkbox; polling reuses the existing job polling.
 - Tag and category editors: the "Test on a document" panel, a document picker and the
   dry-run result.
+
+### 9.10 Untrusted text
+
+Document text is untrusted. The system prompt states that the document content is data
+to classify, never instructions, and the reply is validated against the schema and the
+known item ids, so injected text can at most produce wrong matches, which the
+threshold and the review flow contain. The prompt never includes settings or keys.
 
 ## 10. Testing
 
