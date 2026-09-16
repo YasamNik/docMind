@@ -50,8 +50,21 @@ Details and rationale live in `DOCMIND-DESIGN.md`. Short version:
 
 ## Running locally
 
-Not scaffolded yet. When Phase 1 lands, record the exact commands here: install, migrate,
-start server, start client, run tests, typecheck.
+Node 22 and pnpm: `nvm use 22 && corepack enable`.
+
+    pnpm install
+    cp apps/server/.env.example apps/server/.env
+    # fill SETTINGS_ENCRYPTION_KEY (openssl rand -hex 32) and AUTH_SECRET (openssl rand -hex 48)
+    pnpm --filter @docmind/server db:migrate
+    pnpm dev              # server on :4000, client on :5173, client proxies /api
+
+Tests and typecheck: `pnpm test` and `pnpm typecheck` from the root, or per app with
+`pnpm --filter @docmind/server test` and `pnpm --filter @docmind/client test`.
+
+After changing any `*.tables.ts`: `cd apps/server && pnpm db:generate --name <change>`,
+then commit the new files under `apps/server/drizzle/`.
+
+First run: open http://localhost:5173, create the single account. Sign up closes after it.
 
 ## Conventions
 
