@@ -1,5 +1,5 @@
 import * as v from "valibot";
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createTestDatabase } from "../../shared/test/database.test-utils.js";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
 import { createSettingsRegistry, defineSetting } from "./settings.registry.js";
@@ -69,6 +69,22 @@ describe("settings service", () => {
     const s = await service();
     await expectAppError(() => s.set(user, { "test.limit": "not a number" }), "settings.invalid_value");
     await expectAppError(() => s.set(user, { "nope": 1 }), "settings.unknown_key");
+  });
+
+  it("keeps a multi-key set() atomic when one key is unknown", async () => {
+    const s = await service({ TEST_COLOR: "green" });
+    const before = await s.getResolved(user, "test.color");
+    await expectAppError(() => s.set(user, { "test.color": "red", "nope": 1 }), "settings.unknown_key");
+    expect(await s.getResolved(user, "test.color")).toEqual(before);
+    const rows = await s.debugRows(user);
+    expect(rows.some((r) => r.key === "test.color")).toBe(false);
+  });
+
+  it("does not leak lastFour for a short secret", async () => {
+    const s = await service();
+    await s.set(user, { "test.apiKey": "abcde" });
+    const { value } = await s.getResolved(user, "test.apiKey");
+    expect(value).toEqual({ isSet: true });
   });
 
   it("serves from cache and invalidates on write", async () => {

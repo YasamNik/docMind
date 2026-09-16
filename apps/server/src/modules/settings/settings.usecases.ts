@@ -10,6 +10,7 @@ type ServiceConfig = { settingsEncryptionKey: string; env: Record<string, string
 
 function mask(plaintext: string | undefined): MaskedSecret {
   if (!plaintext) return { isSet: false };
+  if (plaintext.length < 8) return { isSet: true };
   return { isSet: true, lastFour: plaintext.slice(-4) };
 }
 
@@ -74,45 +75,73 @@ export function createSettingsService({
     }
   }
 
+  async function getResolvedFor(userId: string, key: string): Promise<ResolvedSetting> {
+    const definition = registry.get(key);
+    const { value, source } = await resolveRaw(userId, key);
+    return {
+      key,
+      value: definition.secret ? mask(value as string | undefined) : value,
+      source,
+      secret: definition.secret,
+      doc: definition.doc,
+    };
+  }
+
   return {
     async get<T = unknown>(userId: string, key: string): Promise<T | undefined> {
       return (await resolveRaw(userId, key)).value as T | undefined;
     },
 
     async getResolved(userId: string, key: string): Promise<ResolvedSetting> {
-      const definition = registry.get(key);
-      const { value, source } = await resolveRaw(userId, key);
-      return {
-        key,
-        value: definition.secret ? mask(value as string | undefined) : value,
-        source,
-        secret: definition.secret,
-        doc: definition.doc,
-      };
+      return getResolvedFor(userId, key);
     },
 
     async listResolved(userId: string): Promise<ResolvedSetting[]> {
-      return Promise.all(registry.all().map((d) => this.getResolved(userId, d.key)));
+      return Promise.all(registry.all().map((d) => getResolvedFor(userId, d.key)));
     },
 
     async set(userId: string, updates: Record<string, unknown>) {
+      // Two-phase: resolve every write first (throwing on any unknown key or invalid
+      // value before touching the database), then apply them. This keeps a multi-key
+      // set() atomic: a failure on a later key never leaves an earlier key written
+      // with a now-stale cache.
+      const writes: Array<
+        | { type: "remove"; key: string }
+        | { type: "upsert"; key: string; value: string; isSecret: boolean }
+      > = [];
+
       for (const [key, value] of Object.entries(updates)) {
         const definition = registry.get(key);
         const clears = value === null || (definition.secret && value === "");
         if (clears) {
-          await repository.remove({ userId, key });
+          writes.push({ type: "remove", key });
           continue;
         }
         if (definition.secret) {
-          if (typeof value !== "string") {
+          const parsed = parseOrThrow(definition, value);
+          if (typeof parsed !== "string") {
             throw createError({ code: "settings.invalid_value", message: `Secret "${key}" must be a string`, status: 400 });
           }
-          await repository.upsert({ userId, key, isSecret: true, value: encryptSecret({ plaintext: value, keyHex: config.settingsEncryptionKey }) });
+          writes.push({
+            type: "upsert",
+            key,
+            isSecret: true,
+            value: encryptSecret({ plaintext: parsed, keyHex: config.settingsEncryptionKey }),
+          });
           continue;
         }
         const parsed = parseOrThrow(definition, value);
-        await repository.upsert({ userId, key, isSecret: false, value: JSON.stringify(parsed) });
+        writes.push({ type: "upsert", key, isSecret: false, value: JSON.stringify(parsed) });
       }
+
+      for (const write of writes) {
+        if (write.type === "remove") {
+          await repository.remove({ userId, key: write.key });
+        } else {
+          await repository.upsert({ userId, key: write.key, isSecret: write.isSecret, value: write.value });
+        }
+      }
+
       cache.delete(userId);
     },
 
