@@ -18,7 +18,11 @@
     "@libsql/client": "^0.18.0",
     "better-auth": "^1.7.5",
     "drizzle-orm": "^0.45.2",
+    "exceljs": "^4.4.0",
     "hono": "^4.7.0",
+    "jszip": "^3.10.2",
+    "mammoth": "^1.12.3",
+    "pdfjs-dist": "^6.3.289",
     "pino": "^9.6.0",
     "valibot": "^1.1.0"
   },
