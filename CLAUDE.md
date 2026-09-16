@@ -37,6 +37,22 @@ whatever license DocMind ends up under.
    asks to wrap up, or the conversation is clearly closing. It appends the WORKLOG entry,
    saves session memory, proposes bug records, and commits the log. It never pushes.
 
+## Autonomy (set by the user on 2026-09-16)
+
+The user is often busy with other work. Do not wait on them for routine decisions.
+
+- Resolve design and implementation questions with the `plan-reviewer` and
+  `code-reviewer` agents, record the ruling in the ledger or the spec, and continue.
+- Spec review gates and plan review gates are satisfied by the `plan-reviewer` agent;
+  the user reads specs and plans when they choose to, not as a blocker.
+- A local merge into `main` after a clean final review is routine. Pushing, deleting
+  data, changing permissions, or anything that changes what the product does for the
+  user still needs the user.
+- Contact the user only when a question changes the product, when work is blocked
+  by something only they can do, or when a decision is irreversible. Batch such
+  questions and keep them short.
+- Keep the worklog, memory, and ledger current so the user can catch up at any time.
+
 ## Stack
 
 Details and rationale live in `DOCMIND-DESIGN.md`. Short version:
