@@ -1,0 +1,72 @@
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { api } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
+
+export function SignInPage() {
+  const navigate = useNavigate();
+  const [hasUsers, setHasUsers] = useState<boolean | null>(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.get<{ hasUsers: boolean }>("/api/auth/status").then((s) => setHasUsers(s.hasUsers));
+  }, []);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    const result = hasUsers
+      ? await authClient.signIn.email({ email, password })
+      : await authClient.signUp.email({ email, password, name: name || email });
+    setBusy(false);
+    if (result.error) {
+      setError(result.error.message ?? "Sign in failed");
+      return;
+    }
+    navigate("/documents");
+  }
+
+  if (hasUsers === null) return null;
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <CardTitle>{hasUsers ? "Sign in to DocMind" : "Create your DocMind account"}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={submit} className="flex flex-col gap-3">
+            {!hasUsers && (
+              <div>
+                <Label htmlFor="name">Name</Label>
+                <Input id="name" value={name} onChange={(e) => setName(e.target.value)} />
+              </div>
+            )}
+            <div>
+              <Label htmlFor="email">Email</Label>
+              <Input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+            </div>
+            <div>
+              <Label htmlFor="password">Password</Label>
+              <Input id="password" type="password" required minLength={12} value={password} onChange={(e) => setPassword(e.target.value)} />
+              {!hasUsers && <p className="text-xs text-muted-foreground mt-1">At least 12 characters. This is the only account; sign up closes after it.</p>}
+            </div>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <Button type="submit" disabled={busy}>
+              {hasUsers ? "Sign in" : "Create account"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
