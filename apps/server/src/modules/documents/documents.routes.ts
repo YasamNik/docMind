@@ -28,7 +28,7 @@ export function registerDocumentsRoutes({
     if (!c.req.raw.body) throw createError({ code: "validation", message: "Request body is required", status: 400 });
     const body = Readable.fromWeb(c.req.raw.body as unknown as NodeReadableStream);
     const mimeType = c.req.header("content-type")?.split(";")[0]?.trim() || "application/octet-stream";
-    const result = await documentsService.upload({ userId, name, mimeType, body });
+    const result = await documentsService.upload({ userId, name, mimeType, body, maxUploadBytes: MAX_UPLOAD_BYTES });
     return c.json(result, result.duplicateOf ? 200 : 201);
   });
 

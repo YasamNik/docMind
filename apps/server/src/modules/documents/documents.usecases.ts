@@ -11,6 +11,8 @@ function notFound(documentId: string) {
   return createError({ code: "documents.not_found", message: `Document "${documentId}" not found`, status: 404 });
 }
 
+const DEFAULT_MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+
 export function createDocumentsService({ db, storageService }: { db: Database; storageService: StorageService }) {
   const repository = createDocumentsRepository({ db });
 
@@ -21,7 +23,19 @@ export function createDocumentsService({ db, storageService }: { db: Database; s
   }
 
   return {
-    async upload({ userId, name, mimeType, body }: { userId: string; name: string; mimeType?: string; body: Readable }) {
+    async upload({
+      userId,
+      name,
+      mimeType,
+      body,
+      maxUploadBytes = DEFAULT_MAX_UPLOAD_BYTES,
+    }: {
+      userId: string;
+      name: string;
+      mimeType?: string;
+      body: Readable;
+      maxUploadBytes?: number;
+    }) {
       const documentId = newDocumentId();
       const safeName = sanitizeFilename(name);
       const driverId = await storageService.getActiveDriverId(userId);
@@ -35,6 +49,11 @@ export function createDocumentsService({ db, storageService }: { db: Database; s
         driver.put({ key, body: toStorage, mimeType }),
       ]);
       const { sha256, sizeBytes } = counter.result();
+
+      if (sizeBytes > maxUploadBytes) {
+        await driver.delete({ key: stored.key });
+        throw createError({ code: "documents.too_large", message: `Uploads are limited to ${maxUploadBytes} bytes`, status: 413 });
+      }
 
       const existing = await repository.findByHash({ userId, contentHash: sha256 });
       if (existing) {

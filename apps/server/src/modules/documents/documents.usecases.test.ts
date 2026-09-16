@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -65,5 +65,16 @@ describe("documents service", () => {
     const { document } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
     await expectAppError(() => documents.get({ userId: "someone-else", documentId: document.id }), "documents.not_found");
     expect(await documents.list({ userId: "someone-else" })).toEqual([]);
+  });
+
+  it("rejects and cleans up a file that exceeds the upload limit after streaming", async () => {
+    const body = Readable.from(["x".repeat(32)]);
+    await expectAppError(
+      () => documents.upload({ userId, name: "big.txt", mimeType: "text/plain", body, maxUploadBytes: 16 }),
+      "documents.too_large",
+    );
+    expect(await documents.list({ userId })).toEqual([]);
+    const filesInRoot = await readdir(root, { recursive: true });
+    expect(filesInRoot.some((entry) => entry.includes("big.txt"))).toBe(false);
   });
 });
