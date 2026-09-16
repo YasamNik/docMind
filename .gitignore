@@ -16,7 +16,8 @@ coverage/
 *.sqlite-journal
 *.sqlite-wal
 *.sqlite-shm
-documents/
+/documents/
+/apps/server/documents/
 
 # third-party reference source, never committed (see CLAUDE.md)
 ref_code/
