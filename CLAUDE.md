@@ -45,12 +45,13 @@ The user is often busy with other work. Do not wait on them for routine decision
   `code-reviewer` agents, record the ruling in the ledger or the spec, and continue.
 - Spec review gates and plan review gates are satisfied by the `plan-reviewer` agent;
   the user reads specs and plans when they choose to, not as a blocker.
-- A local merge into `main` after a clean final review is routine. Pushing, deleting
-  data, changing permissions, or anything that changes what the product does for the
-  user still needs the user.
-- Contact the user only when a question changes the product, when work is blocked
-  by something only they can do, or when a decision is irreversible. Batch such
-  questions and keep them short.
+- Always ask the user before: any merge into `main`, any push or deploy, any database
+  change (new table, column, migration, data fix), and any other critical decision
+  (permissions, deleting data, changing what the product does). Present the change
+  and wait for a yes.
+- Everything else (design details, implementation choices, test strategy, code
+  review findings) is settled with the reviewer agents. Batch questions for the user
+  and keep them short.
 - Keep the worklog, memory, and ledger current so the user can catch up at any time.
 
 ## Stack
