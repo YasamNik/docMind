@@ -1,0 +1,17 @@
+{
+  "id": "msg_abc123",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"items\":[{\"type\":\"category\",\"id\":\"cat_1\",\"matched\":true,\"confidence\":0.88,\"reasoning\":\"This is a financial document related to taxes.\"}]}"
+    }
+  ],
+  "model": "claude-sonnet-4-20250514",
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 380,
+    "output_tokens": 65
+  }
+}
