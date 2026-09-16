@@ -1,26 +1,33 @@
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
-import { createWorker, type Worker } from "tesseract.js";
+import { createWorker as createTesseractWorker, type Worker } from "tesseract.js";
 
 export type OcrEngine = {
   recognize(bytes: Uint8Array, opts: { languages: string; dataDir: string }): Promise<string>;
   terminate(): Promise<void>;
 };
 
-export function createTesseractEngine(): OcrEngine {
+export function createTesseractEngine(deps?: { createWorker?: typeof createTesseractWorker }): OcrEngine {
+  const createWorker = deps?.createWorker ?? createTesseractWorker;
   const workers = new Map<string, Promise<Worker>>();
 
-  async function workerFor(languages: string, dataDir: string) {
+  function workerFor(languages: string, dataDir: string) {
     const cachePath = resolve(dataDir, "tessdata");
     const key = `${languages}|${cachePath}`;
-    let pending = workers.get(key);
-    if (!pending) {
-      pending = (async () => {
-        await mkdir(cachePath, { recursive: true });
-        return createWorker(languages, 1, { cachePath, langPath: "https://tessdata.projectnaptha.com/4.0.0_fast" });
-      })();
-      workers.set(key, pending);
+    const cached = workers.get(key);
+    if (cached) {
+      return cached;
     }
+    const pending = (async () => {
+      await mkdir(cachePath, { recursive: true });
+      return createWorker(languages, 1, { cachePath, langPath: "https://tessdata.projectnaptha.com/4.0.0_fast" });
+    })();
+    // Evict a failed worker-creation promise so a later call can retry
+    // instead of being stuck with a permanently rejected cache entry.
+    pending.catch(() => {
+      workers.delete(key);
+    });
+    workers.set(key, pending);
     return pending;
   }
 
@@ -31,8 +38,16 @@ export function createTesseractEngine(): OcrEngine {
       return result.data.text;
     },
     async terminate() {
-      await Promise.all([...workers.values()].map(async (p) => (await p).terminate()));
-      workers.clear();
+      const entries = [...workers.values()];
+      try {
+        const settled = await Promise.allSettled(entries);
+        const resolvedWorkers = settled
+          .filter((r): r is PromiseFulfilledResult<Worker> => r.status === "fulfilled")
+          .map((r) => r.value);
+        await Promise.allSettled(resolvedWorkers.map((worker) => worker.terminate()));
+      } finally {
+        workers.clear();
+      }
     },
   };
 }
