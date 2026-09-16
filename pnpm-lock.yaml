@@ -104,6 +104,9 @@ importers:
       '@libsql/client':
         specifier: ^0.18.0
         version: 0.18.0
+      '@valibot/to-json-schema':
+        specifier: ^1.8.0
+        version: 1.8.0(valibot@1.5.0(typescript@5.9.3))
       better-auth:
         specifier: ^1.7.5
         version: 1.7.5(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@libsql/client@0.18.0)(kysely@0.29.6))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vitest@3.2.7(@types/node@22.20.3)(jiti@2.7.0)(jsdom@30.0.1(@noble/hashes@2.4.0))(lightningcss@1.33.0)(tsx@4.23.13))
@@ -122,6 +125,9 @@ importers:
       mammoth:
         specifier: ^1.12.3
         version: 1.12.3
+      openai:
+        specifier: ^7.16.0
+        version: 7.16.0(undici@8.10.2)(ws@8.21.3)(zod@4.6.5)
       pdfjs-dist:
         specifier: ^6.3.289
         version: 6.3.289
@@ -1643,6 +1649,11 @@ packages:
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
+  '@valibot/to-json-schema@1.8.0':
+    resolution: {integrity: sha512-a0M+uwCuQZEPAo65NYkFSJ14O5c213KoSZmPdoCfuFvUhfULi4T2Z6Tpjv6lTVMW9RoLm74RpRAjNEa43KcN+g==}
+    peerDependencies:
+      valibot: ^1.5.0
+
   '@vitejs/plugin-react@6.1.1':
     resolution: {integrity: sha512-yxLaQV9gkhS8ezJqCM6+ndU7mDY6gqAg75NQ+0IjwEI8IYOmQCgkRwHKVSfWXW076DsqMo0Dk+0FK1U+M5RgFw==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -3140,6 +3151,30 @@ packages:
   open@8.4.2:
     resolution: {integrity: sha512-7x81NCL719oNbsq/3mh+hVrAWmFuEYUqrq/Iw3kUzH8ReypT9QQ0BLoJS7/G9k6N81XjW4qHWtjWwe/9eLy1EQ==}
     engines: {node: '>=12'}
+
+  openai@7.16.0:
+    resolution: {integrity: sha512-aeDOKi45g3KdjxBFOQAHLZ75p7ASPBR3Mx7h3P34+tNPsJ+Wzi7SRF8gOcXFvNuLh+7LxHRYgIERrTIzhdI2VA==}
+    engines: {node: '>=22.0.0'}
+    peerDependencies:
+      '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
+      '@smithy/hash-node': '>=4.3.0 <5'
+      '@smithy/signature-v4': '>=5.4.0 <6'
+      undici: '>=5 <9'
+      ws: ^8.21.0
+      zod: ^3.25 || ^4.0
+    peerDependenciesMeta:
+      '@aws-sdk/credential-provider-node':
+        optional: true
+      '@smithy/hash-node':
+        optional: true
+      '@smithy/signature-v4':
+        optional: true
+      undici:
+        optional: true
+      ws:
+        optional: true
+      zod:
+        optional: true
 
   opencollective-postinstall@2.0.3:
     resolution: {integrity: sha512-8AV/sCtuzUeTo8gQK5qDZzARrulB3egtLzFgteqB2tcT4Mw7B8Kt7JcDHmltjz6FOAHsvTevk70gZEbhM4ZS9Q==}
@@ -5147,6 +5182,10 @@ snapshots:
     dependencies:
       '@types/node': 22.20.3
 
+  '@valibot/to-json-schema@1.8.0(valibot@1.5.0(typescript@5.9.3))':
+    dependencies:
+      valibot: 1.5.0(typescript@5.9.3)
+
   '@vitejs/plugin-react@6.1.1(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13))':
     dependencies:
       '@rolldown/pluginutils': 1.0.1
@@ -6513,6 +6552,12 @@ snapshots:
       define-lazy-prop: 2.0.0
       is-docker: 2.2.1
       is-wsl: 2.2.0
+
+  openai@7.16.0(undici@8.10.2)(ws@8.21.3)(zod@4.6.5):
+    optionalDependencies:
+      undici: 8.10.2
+      ws: 8.21.3
+      zod: 4.6.5
 
   opencollective-postinstall@2.0.3: {}
 

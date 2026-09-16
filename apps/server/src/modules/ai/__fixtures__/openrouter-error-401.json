@@ -1,0 +1,7 @@
+{
+  "error": {
+    "message": "Invalid API key provided: sk-or-v1-abcdefghijklmnopqrst. You can find your API key at https://openrouter.ai/settings/keys.",
+    "type": "invalid_request_error",
+    "code": "invalid_api_key"
+  }
+}
