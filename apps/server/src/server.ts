@@ -7,6 +7,8 @@ import { registerAuthRoutes } from "./modules/auth/auth.routes.js";
 import { createAuth } from "./modules/auth/auth.services.js";
 import { registerDocumentsRoutes } from "./modules/documents/documents.routes.js";
 import { createDocumentsService } from "./modules/documents/documents.usecases.js";
+import { registerJobsRoutes } from "./modules/jobs/jobs.routes.js";
+import { createJobsService } from "./modules/jobs/jobs.usecases.js";
 import { allSettingDefinitions } from "./modules/settings/settings.definitions.js";
 import { createSettingsRegistry } from "./modules/settings/settings.registry.js";
 import { registerSettingsRoutes } from "./modules/settings/settings.routes.js";
@@ -27,6 +29,7 @@ export function createServer({ config, db }: { config: Config; db: Database }) {
   });
   const storageService = createStorageService({ settingsService });
   const documentsService = createDocumentsService({ db, storageService });
+  const jobsService = createJobsService({ db });
 
   app.get("/api/health", (c) => c.json({ status: "ok" }));
   registerAuthRoutes({ app, auth, db });
@@ -36,8 +39,9 @@ export function createServer({ config, db }: { config: Config; db: Database }) {
 
   registerSettingsRoutes({ app, settingsService, getUserId });
   registerDocumentsRoutes({ app, documentsService, getUserId });
+  registerJobsRoutes({ app, jobsService, getUserId });
 
-  return { app, auth, settingsService, storageService, documentsService, getUserId };
+  return { app, auth, settingsService, storageService, documentsService, jobsService, getUserId };
 }
 
 export type Server = ReturnType<typeof createServer>;
