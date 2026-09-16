@@ -51,6 +51,19 @@ Outcome: a private place to put files.
 
 Outcome: every file becomes text, and the pipeline is visible.
 
+Decisions fixed for Milestone B (2026-09-16):
+- Libraries: pdfjs-dist for PDF text layers, tesseract.js for images, mammoth for DOCX,
+  exceljs for XLSX, and PPTX read from the zip's slide XML directly. All permissive.
+- Scanned PDFs with no text layer finish as done with empty text and a visible note that
+  OCR for scanned PDFs is not available yet. Rendering PDF pages in Node needs a native
+  dependency, so it is a later item.
+- Runner: polls every two seconds, concurrency two, handlers registered by job type,
+  exponential backoff between attempts, three attempts, manual retry resets attempts.
+- OCR languages default to English only, as the setting `extraction.ocrLanguages`.
+  Language data downloads on first use into the data folder.
+- The library badge and the document page poll while a document is pending or
+  processing, so status changes appear without a reload.
+
 ### C. Sorting
 
 - AI module: provider registry with all definitions and guides, OpenAI-compatible
