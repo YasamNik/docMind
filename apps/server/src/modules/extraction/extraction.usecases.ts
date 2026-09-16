@@ -1,12 +1,16 @@
 import type { Readable } from "node:stream";
+import * as v from "valibot";
 import { createError } from "../../shared/errors/errors.js";
+import { parseOrValidationError } from "../../shared/http/validate.js";
 import type { Database } from "../database/database.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
 import type { JobHandler } from "../jobs/jobs.runner.js";
+import type { Job } from "../jobs/jobs.types.js";
 import { createJobsService } from "../jobs/jobs.usecases.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
 import type { ExtractorRegistry } from "./extraction.registry.js";
+import { extractionPayloadSchema } from "./extraction.schemas.js";
 
 async function readAll(stream: Readable): Promise<Uint8Array> {
   const chunks: Buffer[] = [];
@@ -44,6 +48,7 @@ export function createExtractionService({
       const { document, stream } = await documentsService.openFile({ userId, documentId });
       const extractor = registry.find(document.mimeType ?? "", document.name);
       if (!extractor) {
+        stream.destroy();
         throw createError({
           code: "extraction.unsupported",
           message: `No extractor for ${document.mimeType ?? "unknown"} (${document.name})`,
@@ -72,10 +77,37 @@ export function createExtractionService({
     }
   }
 
+  function parseExtractionPayload(raw: string): v.InferOutput<typeof extractionPayloadSchema> {
+    let value: unknown;
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      throw createError({ code: "extraction.invalid_payload", message: "Extraction job payload is not valid JSON", status: 500 });
+    }
+    return parseOrValidationError(extractionPayloadSchema, value);
+  }
+
+  async function findActiveJob({ userId, documentId }: { userId: string; documentId: string }): Promise<Job | null> {
+    const userJobs = await jobs.list({ userId });
+    for (const job of userJobs) {
+      if (job.type !== "extraction") continue;
+      if (job.status !== "pending" && job.status !== "processing") continue;
+      let raw: unknown;
+      try {
+        raw = JSON.parse(job.payload);
+      } catch {
+        continue;
+      }
+      const parsed = v.safeParse(extractionPayloadSchema, raw);
+      if (parsed.success && parsed.output.documentId === documentId) return job;
+    }
+    return null;
+  }
+
   const handler: JobHandler = async (job) => {
-    const payload = JSON.parse(job.payload) as { documentId: string; userId: string };
+    const payload = parseExtractionPayload(job.payload);
     await extractDocument({
-      userId: payload.userId ?? job.userId,
+      userId: payload.userId,
       documentId: payload.documentId,
       isFinalAttempt: job.attempts >= job.maxAttempts,
     });
@@ -83,6 +115,8 @@ export function createExtractionService({
 
   async function requestExtraction({ userId, documentId }: { userId: string; documentId: string }) {
     await documentsService.get({ userId, documentId });
+    const active = await findActiveJob({ userId, documentId });
+    if (active) return active;
     return db.transaction(async (tx) => {
       await documents.update({
         userId,

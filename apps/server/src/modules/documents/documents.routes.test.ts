@@ -37,6 +37,10 @@ describe("documents routes", () => {
 
     const list = await (await app.request("/api/documents", { headers: { cookie } })).json();
     expect(list.documents.map((d: { id: string }) => d.id)).toEqual([document.id]);
+    expect(list.documents[0]).not.toHaveProperty("extractedText");
+
+    const detail = await (await app.request(`/api/documents/${document.id}`, { headers: { cookie } })).json();
+    expect(detail.document).toHaveProperty("extractedText");
 
     const file = await app.request(`/api/documents/${document.id}/file`, { headers: { cookie } });
     expect(file.status).toBe(200);

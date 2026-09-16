@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestApp } from "../../shared/test/app.test-utils.js";
 import { createJobRunner } from "../jobs/jobs.runner.js";
 import { pdfWithText } from "./test-fixtures.js";
@@ -74,6 +74,35 @@ describe("extraction", () => {
     const job = await t.services.extractionService.requestExtraction({ userId, documentId: document.id });
     expect(job.type).toBe("extraction");
     expect((await t.services.documentsService.get({ userId, documentId: document.id })).extractionStatus).toBe("pending");
+    expect(await t.services.jobsService.list({ userId })).toHaveLength(2);
+  });
+
+  it("destroys the file stream when no extractor matches", async () => {
+    await t.services.documentsService.upload({ userId, name: "archive.zip", mimeType: "application/zip", body: Readable.from(["zip"]) });
+    const original = t.services.documentsService.openFile.bind(t.services.documentsService);
+    let capturedStream: Readable | undefined;
+    const spy = vi.spyOn(t.services.documentsService, "openFile").mockImplementation(async (args) => {
+      const result = await original(args);
+      capturedStream = result.stream as Readable;
+      return result;
+    });
+    const runner = createJobRunner({ db: t.db, handlers: { extraction: t.services.extractionService.handler } });
+    await runner.runOnce();
+    expect(capturedStream?.destroyed).toBe(true);
+    spy.mockRestore();
+  });
+
+  it("does not create a duplicate job while one is already active", async () => {
+    const { document } = await t.services.documentsService.upload({ userId, name: "notes.txt", mimeType: "text/plain", body: Readable.from(["x"]) });
+    const first = await t.services.extractionService.requestExtraction({ userId, documentId: document.id });
+    const second = await t.services.extractionService.requestExtraction({ userId, documentId: document.id });
+    expect(second.id).toBe(first.id);
+    expect(await t.services.jobsService.list({ userId })).toHaveLength(1);
+
+    const runner = createJobRunner({ db: t.db, handlers: { extraction: t.services.extractionService.handler } });
+    await runner.runOnce();
+    const third = await t.services.extractionService.requestExtraction({ userId, documentId: document.id });
+    expect(third.id).not.toBe(first.id);
     expect(await t.services.jobsService.list({ userId })).toHaveLength(2);
   });
 });

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { documentsApi } from "@/lib/documents-api";
+import { documentsApi, type DocumentDetail } from "@/lib/documents-api";
 import { formatBytes, formatDate } from "@/lib/format";
 
 function Preview({ id, mimeType }: { id: string; mimeType: string | null }) {
@@ -28,7 +28,7 @@ export function DocumentDetailPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { data: document } = useQuery({
+  const { data: document } = useQuery<DocumentDetail>({
     queryKey: ["documents", id],
     queryFn: () => documentsApi.get(id),
     refetchInterval: (q) => (q.state.data && (q.state.data.extractionStatus === "pending" || q.state.data.extractionStatus === "processing") ? 3000 : false),

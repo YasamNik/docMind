@@ -7,22 +7,23 @@ export type DocumentRow = {
   sizeBytes: number | null;
   extractionStatus: "pending" | "processing" | "done" | "failed";
   extractionError: string | null;
-  extractedText: string | null;
   createdAt: string;
   updatedAt: string;
 };
 
-export type UploadResult = { document: DocumentRow; duplicateOf?: string };
+export type DocumentDetail = DocumentRow & { extractedText: string | null };
+
+export type UploadResult = { document: DocumentDetail; duplicateOf?: string };
 
 export const documentsApi = {
   async list() {
     return (await api.get<{ documents: DocumentRow[] }>("/api/documents")).documents;
   },
   async get(id: string) {
-    return (await api.get<{ document: DocumentRow }>(`/api/documents/${id}`)).document;
+    return (await api.get<{ document: DocumentDetail }>(`/api/documents/${id}`)).document;
   },
   async rename(id: string, name: string) {
-    return (await api.json<{ document: DocumentRow }>("PATCH", `/api/documents/${id}`, { name })).document;
+    return (await api.json<{ document: DocumentDetail }>("PATCH", `/api/documents/${id}`, { name })).document;
   },
   remove(id: string) {
     return api.del(`/api/documents/${id}`);

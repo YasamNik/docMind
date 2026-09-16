@@ -1,6 +1,7 @@
 import type { Context, Hono } from "hono";
 import { parseOrValidationError } from "../../shared/http/validate.js";
 import { documentIdSchema } from "../documents/documents.schemas.js";
+import { present } from "../jobs/jobs.models.js";
 import type { ExtractionService } from "./extraction.usecases.js";
 
 export function registerExtractionRoutes({
@@ -15,6 +16,6 @@ export function registerExtractionRoutes({
   app.post("/api/documents/:id/extract", async (c) => {
     const documentId = parseOrValidationError(documentIdSchema, c.req.param("id"));
     const job = await extractionService.requestExtraction({ userId: getUserId(c), documentId });
-    return c.json({ job: { ...job, payload: JSON.parse(job.payload) } }, 202);
+    return c.json({ job: present(job) }, 202);
   });
 }

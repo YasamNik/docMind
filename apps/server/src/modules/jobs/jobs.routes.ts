@@ -1,18 +1,8 @@
 import type { Context, Hono } from "hono";
 import { parseOrValidationError } from "../../shared/http/validate.js";
+import { present } from "./jobs.models.js";
 import { jobIdSchema, listJobsQuerySchema } from "./jobs.schemas.js";
-import type { Job } from "./jobs.types.js";
 import type { JobsService } from "./jobs.usecases.js";
-
-function present(job: Job) {
-  let payload: unknown = {};
-  try {
-    payload = JSON.parse(job.payload);
-  } catch {
-    payload = {};
-  }
-  return { ...job, payload };
-}
 
 export function registerJobsRoutes({ app, jobsService, getUserId }: { app: Hono; jobsService: JobsService; getUserId: (c: Context) => string }) {
   app.get("/api/jobs", async (c) => {

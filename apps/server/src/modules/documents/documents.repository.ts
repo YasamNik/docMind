@@ -3,6 +3,25 @@ import type { Database } from "../database/database.js";
 import { documentsTable } from "./documents.tables.js";
 import type { NewDocument } from "./documents.types.js";
 
+const listColumns = {
+  id: documentsTable.id,
+  userId: documentsTable.userId,
+  name: documentsTable.name,
+  mimeType: documentsTable.mimeType,
+  sizeBytes: documentsTable.sizeBytes,
+  contentHash: documentsTable.contentHash,
+  storageDriver: documentsTable.storageDriver,
+  storageKey: documentsTable.storageKey,
+  extractionStatus: documentsTable.extractionStatus,
+  extractionError: documentsTable.extractionError,
+  ruleStatus: documentsTable.ruleStatus,
+  ruleError: documentsTable.ruleError,
+  embeddingStatus: documentsTable.embeddingStatus,
+  embeddingError: documentsTable.embeddingError,
+  createdAt: documentsTable.createdAt,
+  updatedAt: documentsTable.updatedAt,
+};
+
 export function createDocumentsRepository({ db }: { db: Database }) {
   return {
     async insert(document: NewDocument, tx: Database = db) {
@@ -10,7 +29,7 @@ export function createDocumentsRepository({ db }: { db: Database }) {
     },
     async listByUser(userId: string) {
       return db
-        .select()
+        .select(listColumns)
         .from(documentsTable)
         .where(eq(documentsTable.userId, userId))
         .orderBy(desc(documentsTable.createdAt), desc(documentsTable.id));
