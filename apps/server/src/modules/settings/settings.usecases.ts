@@ -6,7 +6,11 @@ import { createSettingsRepository } from "./settings.repository.js";
 import type { SettingsRegistry } from "./settings.registry.js";
 import type { MaskedSecret, ResolvedSetting, SettingDefinition } from "./settings.types.js";
 
-type ServiceConfig = { settingsEncryptionKey: string; env: Record<string, string | undefined> };
+type ServiceConfig = {
+  settingsEncryptionKey: string;
+  env: Record<string, string | undefined>;
+  beforeSet?: (userId: string, updates: Record<string, unknown>) => Promise<void>;
+};
 
 function mask(plaintext: string | undefined): MaskedSecret {
   if (!plaintext) return { isSet: false };
@@ -109,6 +113,10 @@ export function createSettingsService({
         | { type: "remove"; key: string }
         | { type: "upsert"; key: string; value: string; isSecret: boolean }
       > = [];
+
+      if (config.beforeSet) {
+        await config.beforeSet(userId, updates);
+      }
 
       for (const [key, value] of Object.entries(updates)) {
         const definition = registry.get(key);

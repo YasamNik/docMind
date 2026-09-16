@@ -5,6 +5,12 @@ import type { Database } from "./modules/database/database.js";
 import { requireUser, sessionMiddleware } from "./modules/auth/auth.middleware.js";
 import { registerAuthRoutes } from "./modules/auth/auth.routes.js";
 import { createAuth } from "./modules/auth/auth.services.js";
+import { registerAiRoutes } from "./modules/ai/ai.routes.js";
+import { createAiService } from "./modules/ai/ai.usecases.js";
+import { aiProviderRegistry } from "./modules/ai/providers/index.js";
+import { createOpenAiCompatibleAdapter } from "./modules/ai/adapters/openai-compatible.adapter.js";
+import { createAnthropicAdapter } from "./modules/ai/adapters/anthropic.adapter.js";
+import { parseModelUri } from "./modules/ai/ai.models.js";
 import { registerDocumentsRoutes } from "./modules/documents/documents.routes.js";
 import { createDocumentsService } from "./modules/documents/documents.usecases.js";
 import { createImageExtractor } from "./modules/extraction/extractors/image.extractor.js";
@@ -26,6 +32,7 @@ import { registerSettingsRoutes } from "./modules/settings/settings.routes.js";
 import { createSettingsService } from "./modules/settings/settings.usecases.js";
 import { createStorageService } from "./modules/storage/storage.usecases.js";
 import { errorHandler } from "./shared/http/error-handler.js";
+import { createError } from "./shared/errors/errors.js";
 
 export function createServer({ config, db, ocrEngine = createTesseractEngine() }: { config: Config; db: Database; ocrEngine?: OcrEngine }) {
   const app = new Hono();
@@ -36,7 +43,47 @@ export function createServer({ config, db, ocrEngine = createTesseractEngine() }
   const settingsService = createSettingsService({
     db,
     registry: createSettingsRegistry(allSettingDefinitions),
-    config: { settingsEncryptionKey: config.settingsEncryptionKey, env: config.env },
+    config: {
+      settingsEncryptionKey: config.settingsEncryptionKey,
+      env: config.env,
+      beforeSet: async (userId, updates) => {
+        for (const [key, value] of Object.entries(updates)) {
+          if (key.startsWith("ai.model.") && typeof value === "string" && value !== "" && value !== null) {
+            const { providerId } = parseModelUri(value);
+            const provider = aiProviderRegistry[providerId];
+            if (!provider) {
+              throw createError({ code: "ai.unknown_provider", message: `Unknown provider "${providerId}"`, status: 400 });
+            }
+            if (provider.requiresKey) {
+              const apiKey = await settingsService.get<string>(userId, `ai.${providerId}.apiKey`);
+              if (!apiKey) {
+                throw createError({
+                  code: "ai.provider_not_configured",
+                  message: `Provider "${provider.label}" requires an API key. Set it first.`,
+                  status: 400,
+                });
+              }
+            }
+            // Check capability for the slot's task
+            const slot = key.replace("ai.model.", "");
+            if (slot === "embedding" && !provider.capabilities.embeddings) {
+              throw createError({
+                code: "ai.capability_missing",
+                message: `Provider "${provider.label}" does not support embeddings.`,
+                status: 400,
+              });
+            }
+            if (slot === "rules" && !provider.capabilities.structured) {
+              throw createError({
+                code: "ai.capability_missing",
+                message: `Provider "${provider.label}" does not support structured output, which is required for the rules slot.`,
+                status: 400,
+              });
+            }
+          }
+        }
+      },
+    },
   });
   const storageService = createStorageService({ settingsService });
   const registry = createExtractorRegistry([textExtractor, pdfExtractor, docxExtractor, xlsxExtractor, pptxExtractor, createImageExtractor(ocrEngine)]);
@@ -50,6 +97,11 @@ export function createServer({ config, db, ocrEngine = createTesseractEngine() }
   });
   const extractionService: ExtractionService = createExtractionService({ db, documentsService, settingsService, registry });
   const jobRunner = createJobRunner({ db, handlers: { extraction: extractionService.handler } });
+  const adapterFactories = {
+    "openai-compatible": createOpenAiCompatibleAdapter,
+    "anthropic": createAnthropicAdapter,
+  };
+  const aiService = createAiService({ settingsService, registry: aiProviderRegistry, adapterFactories });
 
   app.get("/api/health", (c) => c.json({ status: "ok" }));
   registerAuthRoutes({ app, auth, db });
@@ -61,8 +113,9 @@ export function createServer({ config, db, ocrEngine = createTesseractEngine() }
   registerDocumentsRoutes({ app, documentsService, getUserId });
   registerExtractionRoutes({ app, extractionService, getUserId });
   registerJobsRoutes({ app, jobsService, getUserId });
+  registerAiRoutes({ app, aiService, settingsService, getUserId });
 
-  return { app, auth, settingsService, storageService, documentsService, jobsService, extractionService, jobRunner, ocrEngine, getUserId };
+  return { app, auth, settingsService, storageService, documentsService, jobsService, extractionService, jobRunner, ocrEngine, aiService, getUserId };
 }
 
 export type Server = ReturnType<typeof createServer>;
