@@ -39,7 +39,7 @@ export function ModelSlotRow({
   }, [currentProviderId, currentModel]);
 
   // Fetch models for the selected provider
-  const { data: modelsData } = useQuery({
+  const { data: modelsData, isFetching: isFetchingModels } = useQuery({
     queryKey: ["ai-models", selectedProvider],
     queryFn: () => aiApi.models(selectedProvider),
     enabled: !!selectedProvider,
@@ -103,6 +103,12 @@ export function ModelSlotRow({
             </datalist>
           )}
         </div>
+        {isFetchingModels && (
+          <p className="text-xs text-muted-foreground">Loading models...</p>
+        )}
+        {!isFetchingModels && modelsData?.error && (
+          <p className="text-xs text-muted-foreground">{modelsData.error}</p>
+        )}
       </div>
       <div className="flex gap-2">
         <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>Save</Button>

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { ChevronRightIcon } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,7 +10,15 @@ import { Badge } from "@/components/ui/badge";
 import { aiApi, type ProviderInfo, type TestResult } from "@/lib/ai-api";
 import { settingsApi } from "@/lib/settings-api";
 
-export function ProviderCard({ provider }: { provider: ProviderInfo }) {
+export function ProviderCard({
+  provider,
+  expanded,
+  onExpand,
+}: {
+  provider: ProviderInfo;
+  expanded: boolean;
+  onExpand: () => void;
+}) {
   const queryClient = useQueryClient();
   const [keyInput, setKeyInput] = useState("");
   const [showKeyField, setShowKeyField] = useState(!provider.keySet);
@@ -32,7 +41,9 @@ export function ProviderCard({ provider }: { provider: ProviderInfo }) {
 
   const clearKey = useMutation({
     mutationFn: async () => {
-      await settingsApi.update({ [`ai.${provider.id}.apiKey`]: "" });
+      // The settings service clears a value for either `null` or, for secrets only,
+      // `""`. Use `null` here to match the base URL clear below.
+      await settingsApi.update({ [`ai.${provider.id}.apiKey`]: null });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["ai-providers"] });
@@ -60,10 +71,36 @@ export function ProviderCard({ provider }: { provider: ProviderInfo }) {
     onError: (e: Error) => setTestResult({ ok: false, latencyMs: 0, message: e.message }),
   });
 
+  const keyStatusSummary = provider.requiresKey
+    ? provider.keySet
+      ? `Key set${provider.keyLastFour ? `, ends in ····${provider.keyLastFour}` : ""}`
+      : "Key not set"
+    : "No key required";
+
+  if (!expanded) {
+    return (
+      <Card>
+        <button
+          type="button"
+          onClick={onExpand}
+          className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left text-sm"
+        >
+          <span className="font-medium">{provider.label}</span>
+          <span className="flex items-center gap-2 text-muted-foreground">
+            {keyStatusSummary}
+            <ChevronRightIcon className="size-4" />
+          </span>
+        </button>
+      </Card>
+    );
+  }
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{provider.label}</CardTitle>
+        <button type="button" onClick={onExpand} className="text-left">
+          <CardTitle>{provider.label}</CardTitle>
+        </button>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-4 md:grid-cols-2">
