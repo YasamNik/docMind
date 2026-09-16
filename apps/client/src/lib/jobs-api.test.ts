@@ -5,7 +5,9 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("jobsApi", () => {
   it("lists with an optional status filter", async () => {
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ jobs: [{ id: "job_1" }] }), { status: 200 }));
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(JSON.stringify({ jobs: [{ id: "job_1" }] }), { status: 200 }));
     expect(await jobsApi.list("failed")).toEqual([{ id: "job_1" }]);
     expect(spy.mock.calls[0]?.[0]).toBe("/api/jobs?status=failed");
     await jobsApi.list();
