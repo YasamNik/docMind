@@ -2,6 +2,7 @@ import * as v from "valibot";
 import { defineSetting } from "../settings/settings.registry.js";
 import type { SettingDefinition } from "../settings/settings.types.js";
 import { modelUriSchema } from "./ai.schemas.js";
+import { aiProviderRegistry } from "./providers/index.js";
 
 export const aiSlotSettingDefinitions = [
   defineSetting({
@@ -27,10 +28,8 @@ export const aiSlotSettingDefinitions = [
   }),
 ];
 
-// Provider settings are collected here, matching the storage pattern:
-// storageSettingDefinitions imports storageDriverRegistry and flatMaps its settings.
-// The import from providers/index.ts is added by Task 2.
-// Until Task 2, this is a placeholder that only has slot settings.
+// Mirrors the storageSettingDefinitions pattern: import the registry and flatMap its settings.
 export const aiSettingDefinitions: SettingDefinition[] = [
   ...aiSlotSettingDefinitions,
+  ...Object.values(aiProviderRegistry).flatMap((d) => d.settings),
 ];
