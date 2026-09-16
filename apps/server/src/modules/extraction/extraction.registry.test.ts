@@ -28,4 +28,12 @@ describe("extractor registry", () => {
   it("returns null when nothing matches", () => {
     expect(registry.find("application/zip", "archive.zip")).toBeNull();
   });
+
+  it("does not fall back to the extension for a real, non-generic, unmatched MIME type", () => {
+    expect(registry.find("application/foo", "notes.md")).toBeNull();
+  });
+
+  it("still falls back to the extension when the MIME type is generic", () => {
+    expect(registry.find("application/octet-stream", "notes.md")?.id).toBe("text");
+  });
 });

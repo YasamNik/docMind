@@ -11,8 +11,8 @@ export const pdfExtractor: Extractor = {
     // pdf.js v6 rejects Node Buffers; always hand it a plain Uint8Array copy.
     const data = new Uint8Array(bytes);
     const task = getDocument({ data, useSystemFonts: true, isEvalSupported: false, verbosity: 0 });
-    const doc = await task.promise;
     try {
+      const doc = await task.promise;
       const pages: string[] = [];
       for (let i = 1; i <= doc.numPages; i += 1) {
         const page = await doc.getPage(i);
@@ -26,6 +26,8 @@ export const pdfExtractor: Extractor = {
       return text.length > 0 ? { text } : { text: "", note: NO_TEXT_LAYER_NOTE };
     } finally {
       // destroy() lives on the loading task, not the resolved document, in pdfjs-dist v6.
+      // Wrapping task.promise itself in this try/finally ensures the task is always released,
+      // including when the promise rejects on a corrupted or malformed PDF.
       await task.destroy();
     }
   },

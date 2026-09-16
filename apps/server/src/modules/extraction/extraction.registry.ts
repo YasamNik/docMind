@@ -15,8 +15,7 @@ export function createExtractorRegistry(extractors: Extractor[]) {
     find(mimeType: string, filename: string): Extractor | null {
       const normalized = (mimeType ?? "").split(";")[0]!.trim().toLowerCase();
       if (!GENERIC_MIME.has(normalized)) {
-        const found = byMime(normalized);
-        if (found) return found;
+        return byMime(normalized);
       }
       const guessed = EXTENSION_MIME[extensionOf(filename)];
       return guessed ? byMime(guessed) : null;

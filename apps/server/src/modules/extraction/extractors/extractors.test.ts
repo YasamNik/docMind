@@ -28,6 +28,12 @@ describe("extractors", () => {
     expect(r.note).toMatch(/OCR for scanned PDFs/);
   });
 
+  it("pdf rejects on garbage bytes without leaking the loading task", async () => {
+    await expect(
+      pdfExtractor.extract({ bytes: bytes("not a pdf"), mimeType: "application/pdf", filename: "garbage.pdf" }, ctx),
+    ).rejects.toThrow();
+  });
+
   it("docx reads paragraphs", async () => {
     const r = await docxExtractor.extract({ bytes: await docxWithParagraphs(["First paragraph", "Second paragraph"]), mimeType: docxExtractor.mimeTypes[0]!, filename: "a.docx" }, ctx);
     expect(r.text).toContain("First paragraph");
