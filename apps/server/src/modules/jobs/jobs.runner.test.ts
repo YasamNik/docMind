@@ -76,6 +76,41 @@ describe("job runner", () => {
     expect(await repo.findById({ userId, id: job.id })).toMatchObject({ status: "done" });
   });
 
+  it("survives a runOnce error inside the poll loop and keeps polling", async () => {
+    const { db, jobs, repo } = await setup();
+    let transactionFailures = 1;
+    const flakyDb = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "transaction" && transactionFailures > 0) {
+          transactionFailures -= 1;
+          return async () => {
+            throw new Error("simulated claim failure");
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    const runner = createJobRunner({
+      db: flakyDb as typeof db,
+      handlers: { echo: async () => {} },
+      pollIntervalMs: 10,
+      logger: silentLogger,
+    });
+    const job = await jobs.enqueue({ userId, type: "echo", payload: {} });
+
+    await runner.start();
+    const deadline = Date.now() + 2000;
+    let row = await repo.findById({ userId, id: job.id });
+    while (row?.status !== "done" && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+      row = await repo.findById({ userId, id: job.id });
+    }
+    await runner.stop();
+
+    expect(transactionFailures).toBe(0);
+    expect(row).toMatchObject({ status: "done" });
+  });
+
   it("processes a claimed batch of mixed outcomes sequentially on the single connection", async () => {
     const { db, jobs, repo } = await setup();
     const ok = await jobs.enqueue({ userId, type: "echo", payload: { n: 1 } });
