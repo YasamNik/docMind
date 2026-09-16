@@ -58,6 +58,9 @@ Node 22 and pnpm: `nvm use 22 && corepack enable`.
     pnpm --filter @docmind/server db:migrate
     pnpm dev              # server on :4000, client on :5173, client proxies /api
 
+Background jobs run inside the server process. OCR language data downloads into
+DATA_DIR (default ./data) on the first image upload; the first OCR takes longer.
+
 Tests and typecheck: `pnpm test` and `pnpm typecheck` from the root, or per app with
 `pnpm --filter @docmind/server test` and `pnpm --filter @docmind/client test`.
 

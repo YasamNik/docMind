@@ -140,6 +140,8 @@ jobs (
   payload TEXT NOT NULL,           -- JSON, e.g. {documentId}
   error TEXT,
   attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  available_at TEXT NOT NULL,      -- not claimed before this time; backoff between attempts
   created_at TEXT NOT NULL,
   started_at TEXT,
   finished_at TEXT
@@ -150,6 +152,8 @@ jobs (
 -- it the same way. The jobs table is the source of truth and what the jobs view lists.
 -- Re-evaluating a rule creates one rules job per affected document, so progress is
 -- visible and a crash loses at most one document's work.
+-- While a job is retrying, the document's status column stays `pending` with the last
+-- error in its error column; it becomes `failed` only when the job has no attempts left.
 
 -- Vector Search
 document_chunks (id, document_id, chunk_index, chunk_text, token_count)
