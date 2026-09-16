@@ -18,6 +18,8 @@ coverage/
 *.sqlite-shm
 /documents/
 /apps/server/documents/
+/data/
+/apps/server/data/
 
 # third-party reference source, never committed (see CLAUDE.md)
 ref_code/
