@@ -1,7 +1,8 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { documentsApi, type UploadResult } from "@/lib/documents-api";
+import { filesFromClipboard } from "@/lib/paste";
 
 type Item = { name: string; percent: number; state: "uploading" | "done" | "duplicate" | "failed"; message?: string };
 
@@ -9,6 +10,7 @@ export function UploadDropzone({ onUploaded }: { onUploaded: (result: UploadResu
   const inputRef = useRef<HTMLInputElement>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [over, setOver] = useState(false);
+  const uploadAllRef = useRef<(files: FileList | File[]) => Promise<void>>(async () => {});
 
   function update(index: number, patch: Partial<Item>) {
     setItems((prev) => prev.map((it, i) => (i === index ? { ...it, ...patch } : it)));
@@ -36,6 +38,22 @@ export function UploadDropzone({ onUploaded }: { onUploaded: (result: UploadResu
     }
   }
 
+  uploadAllRef.current = uploadAll;
+
+  useEffect(() => {
+    function handlePaste(event: ClipboardEvent) {
+      if (event.defaultPrevented) return;
+      const target = event.target;
+      if (target instanceof Element && target.closest("input, textarea, [contenteditable]")) return;
+      const files = filesFromClipboard(event.clipboardData, new Date());
+      if (files.length === 0) return;
+      event.preventDefault();
+      void uploadAllRef.current(files);
+    }
+    document.addEventListener("paste", handlePaste);
+    return () => document.removeEventListener("paste", handlePaste);
+  }, []);
+
   return (
     <div
       onDragOver={(e) => {
@@ -50,7 +68,7 @@ export function UploadDropzone({ onUploaded }: { onUploaded: (result: UploadResu
       }}
       className={`rounded-lg border-2 border-dashed p-6 text-center ${over ? "border-primary bg-muted" : "border-muted-foreground/30"}`}
     >
-      <p className="text-sm text-muted-foreground mb-3">Drop files here, or</p>
+      <p className="text-sm text-muted-foreground mb-3">Drop files here, paste with Ctrl+V, or</p>
       <input
         ref={inputRef}
         id="file-picker"
