@@ -4,6 +4,7 @@ import { expectAppError } from "../../shared/test/errors.test-utils.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import { newDocumentId, nowIso } from "../documents/documents.models.js";
 import type { NewDocument } from "../documents/documents.types.js";
+import { createRulesRepository } from "../rules/rules.repository.js";
 import { createTagsRepository } from "./tags.repository.js";
 import { createTagsService } from "./tags.usecases.js";
 
@@ -262,5 +263,52 @@ describe("tags service", () => {
 
     expect(secondCall).toEqual([{ id: tag.id, name: "Rent", color: null, auto: false, manual: true }]);
     expect(await tagsRepository.listTagsForDocument(doc.id! as string)).toHaveLength(1);
+  });
+
+  it("clears applied_by_auto on every document when a tag's auto_apply is turned off", async () => {
+    const { db: freshDb } = await createTestDatabase();
+    const freshTags = createTagsService({ db: freshDb });
+    const freshTagsRepository = createTagsRepository({ db: freshDb });
+    const freshDocuments = createDocumentsRepository({ db: freshDb });
+    const freshRulesRepository = createRulesRepository({ db: freshDb });
+    const tag = await freshTags.createTag({ userId, name: "Rent", description: "Monthly rent" });
+    const doc = documentFixture();
+    await freshDocuments.insert(doc);
+    await freshRulesRepository.setTagAutoApplied({ documentId: doc.id, tagId: tag.id, applied: true });
+    await freshTags.updateTag({ userId, tagId: tag.id, patch: { autoApply: false } });
+    expect(await freshTagsRepository.findDocumentTag({ documentId: doc.id, tagId: tag.id })).toBeNull();
+  });
+
+  it("deletes a tag's sort_evaluations when the tag is deleted", async () => {
+    const { db: freshDb } = await createTestDatabase();
+    const freshTags = createTagsService({ db: freshDb });
+    const freshDocuments = createDocumentsRepository({ db: freshDb });
+    const freshRulesRepository = createRulesRepository({ db: freshDb });
+    const tag = await freshTags.createTag({ userId, name: "Rent", description: "Monthly rent" });
+    const doc = documentFixture();
+    await freshDocuments.insert(doc);
+    await freshRulesRepository.insertEvaluations([
+      {
+        id: "eval_0000000000000001",
+        documentId: doc.id,
+        targetType: "tag",
+        targetId: tag.id,
+        matched: 1,
+        confidence: 0.9,
+        reasoning: "x",
+        outcome: "applied",
+        proposalKind: null,
+        modelId: "openrouter://test",
+        jobId: "job_0000000000000001",
+        contentHash: null,
+        evaluatedAt: new Date().toISOString(),
+      },
+    ]);
+
+    await freshTags.deleteTag({ userId, tagId: tag.id });
+
+    expect(await freshTags.listTags(userId)).toEqual([]);
+    const remaining = await freshDb.select().from((await import("../rules/rules.tables.js")).sortEvaluationsTable);
+    expect(remaining).toEqual([]);
   });
 });

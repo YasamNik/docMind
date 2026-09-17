@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { AutomaticItem, EvaluationOutcome, EvaluationResult, ProposalKind, ReplyItem } from "./rules.types.js";
+import type { AutomaticItem, EvaluationOutcome, EvaluationResult, ProposalKind, ReplyItem, SortScope } from "./rules.types.js";
 
 export function newEvaluationId() {
   return `eval_${randomBytes(8).toString("hex")}`;
@@ -156,4 +156,12 @@ export function deriveRerunOutcome({
     return { outcome: "proposed", proposalKind: "set_category" };
   }
   return { outcome: baseOutcome, proposalKind: null };
+}
+
+export function parseScope(scope: string): SortScope {
+  if (scope === "needs_review") return { kind: "needs_review" };
+  if (scope === "all") return { kind: "all" };
+  const match = /^category:(cat_[0-9a-f]{16})$/.exec(scope);
+  if (match) return { kind: "category", categoryId: match[1]! };
+  throw new Error(`Invalid scope "${scope}"`);
 }

@@ -1,8 +1,20 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Database } from "../database/database.js";
+import { documentsTable } from "../documents/documents.tables.js";
 import { documentTagsTable } from "../tags/tags.tables.js";
 import { sortEvaluationsTable } from "./rules.tables.js";
-import type { NewSortEvaluation } from "./rules.types.js";
+import type { EvaluationOutcome, NewSortEvaluation, ProposalKind, TargetType } from "./rules.types.js";
+
+const proposalColumns = {
+  id: sortEvaluationsTable.id,
+  documentId: sortEvaluationsTable.documentId,
+  targetType: sortEvaluationsTable.targetType,
+  targetId: sortEvaluationsTable.targetId,
+  confidence: sortEvaluationsTable.confidence,
+  reasoning: sortEvaluationsTable.reasoning,
+  proposalKind: sortEvaluationsTable.proposalKind,
+  documentName: documentsTable.name,
+};
 
 export function createRulesRepository({ db }: { db: Database }) {
   return {
@@ -52,6 +64,71 @@ export function createRulesRepository({ db }: { db: Database }) {
         .from(documentTagsTable)
         .where(and(eq(documentTagsTable.documentId, documentId), eq(documentTagsTable.tagId, tagId)));
       return row ?? null;
+    },
+
+    async deleteEvaluationsForTarget({ targetType, targetId, tx = db }: { targetType: TargetType; targetId: string; tx?: Database }) {
+      await tx.delete(sortEvaluationsTable).where(and(eq(sortEvaluationsTable.targetType, targetType), eq(sortEvaluationsTable.targetId, targetId)));
+    },
+
+    async findLastDismissed({
+      documentId,
+      targetType,
+      targetId,
+      proposalKind,
+      tx = db,
+    }: {
+      documentId: string;
+      targetType: TargetType;
+      targetId: string;
+      proposalKind: ProposalKind;
+      tx?: Database;
+    }) {
+      const [row] = await tx
+        .select()
+        .from(sortEvaluationsTable)
+        .where(
+          and(
+            eq(sortEvaluationsTable.documentId, documentId),
+            eq(sortEvaluationsTable.targetType, targetType),
+            eq(sortEvaluationsTable.targetId, targetId),
+            eq(sortEvaluationsTable.proposalKind, proposalKind),
+            eq(sortEvaluationsTable.outcome, "dismissed"),
+          ),
+        )
+        .orderBy(desc(sortEvaluationsTable.evaluatedAt))
+        .limit(1);
+      return row ?? null;
+    },
+
+    async updateEvaluationOutcome({ id, outcome, tx = db }: { id: string; outcome: EvaluationOutcome; tx?: Database }) {
+      await tx.update(sortEvaluationsTable).set({ outcome }).where(eq(sortEvaluationsTable.id, id));
+    },
+
+    async findProposalsByIds({ userId, ids }: { userId: string; ids: string[] }) {
+      if (ids.length === 0) return [];
+      return db
+        .select({ ...proposalColumns })
+        .from(sortEvaluationsTable)
+        .innerJoin(documentsTable, eq(sortEvaluationsTable.documentId, documentsTable.id))
+        .where(and(eq(documentsTable.userId, userId), inArray(sortEvaluationsTable.id, ids), eq(sortEvaluationsTable.outcome, "proposed")));
+    },
+
+    async listProposedForDocument({ userId, documentId }: { userId: string; documentId: string }) {
+      return db
+        .select({ ...proposalColumns })
+        .from(sortEvaluationsTable)
+        .innerJoin(documentsTable, eq(sortEvaluationsTable.documentId, documentsTable.id))
+        .where(and(eq(documentsTable.userId, userId), eq(documentsTable.id, documentId), eq(sortEvaluationsTable.outcome, "proposed")))
+        .orderBy(desc(sortEvaluationsTable.evaluatedAt), desc(sortEvaluationsTable.id));
+    },
+
+    async listProposedForUser(userId: string) {
+      return db
+        .select({ ...proposalColumns })
+        .from(sortEvaluationsTable)
+        .innerJoin(documentsTable, eq(sortEvaluationsTable.documentId, documentsTable.id))
+        .where(and(eq(documentsTable.userId, userId), eq(sortEvaluationsTable.outcome, "proposed")))
+        .orderBy(desc(sortEvaluationsTable.evaluatedAt), desc(sortEvaluationsTable.id));
     },
   };
 }

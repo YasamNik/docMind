@@ -25,11 +25,11 @@ export function createTagsRepository({ db }: { db: Database }) {
         .groupBy(documentTagsTable.tagId);
       return new Map(rows.map((r) => [r.tagId, Number(r.count)]));
     },
-    async updateTag({ userId, tagId, patch }: { userId: string; tagId: string; patch: Partial<NewTag> }) {
-      await db.update(tagsTable).set(patch).where(and(eq(tagsTable.userId, userId), eq(tagsTable.id, tagId)));
+    async updateTag({ userId, tagId, patch, tx = db }: { userId: string; tagId: string; patch: Partial<NewTag>; tx?: Database }) {
+      await tx.update(tagsTable).set(patch).where(and(eq(tagsTable.userId, userId), eq(tagsTable.id, tagId)));
     },
-    async deleteTag({ userId, tagId }: { userId: string; tagId: string }) {
-      await db.delete(tagsTable).where(and(eq(tagsTable.userId, userId), eq(tagsTable.id, tagId)));
+    async deleteTag({ userId, tagId, tx = db }: { userId: string; tagId: string; tx?: Database }) {
+      await tx.delete(tagsTable).where(and(eq(tagsTable.userId, userId), eq(tagsTable.id, tagId)));
     },
 
     async insertCategory(category: NewCategory) {
@@ -101,6 +101,16 @@ export function createTagsRepository({ db }: { db: Database }) {
         .update(documentsTable)
         .set({ categoryId: null, categorySource: null })
         .where(and(eq(documentsTable.userId, userId), eq(documentsTable.categoryId, categoryId), eq(documentsTable.categorySource, "auto")));
+    },
+
+    async clearAutoTagOnDocuments({ tagId, tx = db }: { tagId: string; tx?: Database }) {
+      // Clear the flag first, then delete any link left with both flags at 0: a link
+      // with neither flag set is meaningless (document_tags' own invariant), so leaving
+      // it behind would silently inflate nothing but is still worth tidying up.
+      await tx.update(documentTagsTable).set({ appliedByAuto: 0 }).where(and(eq(documentTagsTable.tagId, tagId), eq(documentTagsTable.appliedByAuto, 1)));
+      await tx
+        .delete(documentTagsTable)
+        .where(and(eq(documentTagsTable.tagId, tagId), eq(documentTagsTable.appliedByAuto, 0), eq(documentTagsTable.appliedByManual, 0)));
     },
 
     async findDocumentTag({ documentId, tagId }: { documentId: string; tagId: string }): Promise<DocumentTag | null> {

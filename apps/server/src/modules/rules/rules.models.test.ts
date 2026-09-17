@@ -7,6 +7,7 @@ import {
   isDismissedProposalStillSame,
   newEvaluationId,
   outcomeFor,
+  parseScope,
   pickCategory,
   PROMPT_TEXT_LIMIT,
   resultsForItems,
@@ -240,6 +241,21 @@ describe("rules models", () => {
           currentCategorySource: "auto",
         }),
       ).toEqual({ outcome: "applied", proposalKind: null });
+    });
+  });
+
+  describe("parseScope", () => {
+    it("parses needs_review and all", () => {
+      expect(parseScope("needs_review")).toEqual({ kind: "needs_review" });
+      expect(parseScope("all")).toEqual({ kind: "all" });
+    });
+
+    it("parses a category scope", () => {
+      expect(parseScope("category:cat_0000000000000001")).toEqual({ kind: "category", categoryId: "cat_0000000000000001" });
+    });
+
+    it("throws on an invalid scope", () => {
+      expect(() => parseScope("bogus")).toThrow();
     });
   });
 });

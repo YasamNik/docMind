@@ -2,6 +2,7 @@ import { LibsqlError } from "@libsql/client";
 import { createError } from "../../shared/errors/errors.js";
 import type { Database } from "../database/database.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
+import { createRulesRepository } from "../rules/rules.repository.js";
 import {
   buildCategoryPaths,
   newCategoryId,
@@ -46,6 +47,7 @@ type CategoryPatch = TagPatch & { parentId?: string | null; sortOrder?: number }
 export function createTagsService({ db }: { db: Database }) {
   const repository = createTagsRepository({ db });
   const documentsRepository = createDocumentsRepository({ db });
+  const rulesRepository = createRulesRepository({ db });
 
   async function getTagOrThrow(userId: string, tagId: string): Promise<Tag> {
     const tag = await repository.findTagById({ userId, tagId });
@@ -129,7 +131,7 @@ export function createTagsService({ db }: { db: Database }) {
     },
 
     async updateTag({ userId, tagId, patch }: { userId: string; tagId: string; patch: TagPatch }): Promise<TagWithCount> {
-      await getTagOrThrow(userId, tagId);
+      const existing = await getTagOrThrow(userId, tagId);
       const dbPatch: Partial<NewTag> = { updatedAt: nowIso() };
       if (patch.name !== undefined) dbPatch.name = normalizeName(patch.name);
       if (patch.color !== undefined) dbPatch.color = patch.color;
@@ -137,7 +139,13 @@ export function createTagsService({ db }: { db: Database }) {
       if (patch.confidenceThreshold !== undefined) dbPatch.confidenceThreshold = patch.confidenceThreshold;
       if (patch.autoApply !== undefined) dbPatch.autoApply = patch.autoApply ? 1 : 0;
       try {
-        await repository.updateTag({ userId, tagId, patch: dbPatch });
+        await db.transaction(async (tx) => {
+          const txDb = tx as unknown as Database;
+          await repository.updateTag({ userId, tagId, patch: dbPatch, tx: txDb });
+          if (patch.autoApply === false && existing.autoApply === 1) {
+            await repository.clearAutoTagOnDocuments({ tagId, tx: txDb });
+          }
+        });
       } catch (error) {
         if (isUniqueConstraintError(error)) throw tagDuplicateName();
         throw error;
@@ -148,7 +156,11 @@ export function createTagsService({ db }: { db: Database }) {
 
     async deleteTag({ userId, tagId }: { userId: string; tagId: string }) {
       await getTagOrThrow(userId, tagId);
-      await repository.deleteTag({ userId, tagId });
+      await db.transaction(async (tx) => {
+        const txDb = tx as unknown as Database;
+        await rulesRepository.deleteEvaluationsForTarget({ targetType: "tag", targetId: tagId, tx: txDb });
+        await repository.deleteTag({ userId, tagId, tx: txDb });
+      });
     },
 
     async listCategories(userId: string) {
@@ -249,6 +261,7 @@ export function createTagsService({ db }: { db: Database }) {
         const txDb = tx as unknown as Database;
         await repository.reparentChildren({ userId, oldParentId: categoryId, newParentId: category.parentId, tx: txDb });
         await repository.clearCategoryOnDocuments({ userId, categoryId, tx: txDb });
+        await rulesRepository.deleteEvaluationsForTarget({ targetType: "category", targetId: categoryId, tx: txDb });
         await repository.deleteCategory({ userId, categoryId, tx: txDb });
       });
     },

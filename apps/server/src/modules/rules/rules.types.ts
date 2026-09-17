@@ -31,6 +31,8 @@ export type ReplyItem = { type: TargetType; id: string; matched: boolean; confid
 
 export type EvaluationResult = { item: AutomaticItem; matched: boolean; confidence: number; reasoning: string };
 
+export type SortScope = { kind: "needs_review" } | { kind: "all" } | { kind: "category"; categoryId: string };
+
 export type Proposal = {
   id: string;
   documentId: string;
