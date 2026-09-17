@@ -18,6 +18,8 @@ const listColumns = {
   ruleError: documentsTable.ruleError,
   embeddingStatus: documentsTable.embeddingStatus,
   embeddingError: documentsTable.embeddingError,
+  categoryId: documentsTable.categoryId,
+  categorySource: documentsTable.categorySource,
   createdAt: documentsTable.createdAt,
   updatedAt: documentsTable.updatedAt,
 };

@@ -7,7 +7,7 @@ import { createLogger } from "./shared/logger/logger.js";
 
 const logger = createLogger("main");
 const config = loadConfig();
-const { db } = createDatabase({ url: config.databaseUrl });
+const { db } = await createDatabase({ url: config.databaseUrl });
 await runMigrations({ db });
 const { app, jobRunner, ocrEngine } = createServer({ config, db });
 

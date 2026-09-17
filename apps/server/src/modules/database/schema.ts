@@ -3,3 +3,4 @@ export * from "../settings/settings.tables.js";
 export * from "../auth/auth.tables.js";
 export * from "../documents/documents.tables.js";
 export * from "../jobs/jobs.tables.js";
+export * from "../tags/tags.tables.js";

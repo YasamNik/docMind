@@ -1,21 +1,27 @@
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
-export const documentsTable = sqliteTable("documents", {
-  id: text("id").primaryKey(),
-  userId: text("user_id").notNull(),
-  name: text("name").notNull(),
-  mimeType: text("mime_type"),
-  sizeBytes: integer("size_bytes"),
-  contentHash: text("content_hash"),
-  storageDriver: text("storage_driver").notNull(),
-  storageKey: text("storage_key").notNull(),
-  extractedText: text("extracted_text"),
-  extractionStatus: text("extraction_status").notNull().default("pending"),
-  extractionError: text("extraction_error"),
-  ruleStatus: text("rule_status").notNull().default("pending"),
-  ruleError: text("rule_error"),
-  embeddingStatus: text("embedding_status").notNull().default("pending"),
-  embeddingError: text("embedding_error"),
-  createdAt: text("created_at").notNull(),
-  updatedAt: text("updated_at").notNull(),
-});
+export const documentsTable = sqliteTable(
+  "documents",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    name: text("name").notNull(),
+    mimeType: text("mime_type"),
+    sizeBytes: integer("size_bytes"),
+    contentHash: text("content_hash"),
+    storageDriver: text("storage_driver").notNull(),
+    storageKey: text("storage_key").notNull(),
+    extractedText: text("extracted_text"),
+    extractionStatus: text("extraction_status").notNull().default("pending"),
+    extractionError: text("extraction_error"),
+    ruleStatus: text("rule_status").notNull().default("pending"),
+    ruleError: text("rule_error"),
+    embeddingStatus: text("embedding_status").notNull().default("pending"),
+    embeddingError: text("embedding_error"),
+    categoryId: text("category_id"),
+    categorySource: text("category_source"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [index("documents_user_category_idx").on(t.userId, t.categoryId)],
+);

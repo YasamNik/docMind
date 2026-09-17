@@ -86,6 +86,8 @@ export function createDocumentsService({
         ruleError: null,
         embeddingStatus: "pending",
         embeddingError: null,
+        categoryId: null,
+        categorySource: null,
         createdAt: timestamp,
         updatedAt: timestamp,
       };
