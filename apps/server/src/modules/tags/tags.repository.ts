@@ -50,8 +50,18 @@ export function createTagsRepository({ db }: { db: Database }) {
         .groupBy(documentsTable.categoryId);
       return new Map(rows.map((r) => [r.categoryId as string, Number(r.count)]));
     },
-    async updateCategory({ userId, categoryId, patch }: { userId: string; categoryId: string; patch: Partial<NewCategory> }) {
-      await db.update(categoriesTable).set(patch).where(and(eq(categoriesTable.userId, userId), eq(categoriesTable.id, categoryId)));
+    async updateCategory({
+      userId,
+      categoryId,
+      patch,
+      tx = db,
+    }: {
+      userId: string;
+      categoryId: string;
+      patch: Partial<NewCategory>;
+      tx?: Database;
+    }) {
+      await tx.update(categoriesTable).set(patch).where(and(eq(categoriesTable.userId, userId), eq(categoriesTable.id, categoryId)));
     },
     async deleteCategory({ userId, categoryId, tx = db }: { userId: string; categoryId: string; tx?: Database }) {
       await tx.delete(categoriesTable).where(and(eq(categoriesTable.userId, userId), eq(categoriesTable.id, categoryId)));
@@ -78,8 +88,16 @@ export function createTagsRepository({ db }: { db: Database }) {
         .set({ categoryId: null, categorySource: null })
         .where(and(eq(documentsTable.userId, userId), eq(documentsTable.categoryId, categoryId)));
     },
-    async clearAutoCategoryOnDocuments({ userId, categoryId }: { userId: string; categoryId: string }) {
-      await db
+    async clearAutoCategoryOnDocuments({
+      userId,
+      categoryId,
+      tx = db,
+    }: {
+      userId: string;
+      categoryId: string;
+      tx?: Database;
+    }) {
+      await tx
         .update(documentsTable)
         .set({ categoryId: null, categorySource: null })
         .where(and(eq(documentsTable.userId, userId), eq(documentsTable.categoryId, categoryId), eq(documentsTable.categorySource, "auto")));
@@ -93,21 +111,31 @@ export function createTagsRepository({ db }: { db: Database }) {
       return row ?? null;
     },
     async upsertDocumentTagManual({ documentId, tagId, manual }: { documentId: string; tagId: string; manual: boolean }) {
-      const existing = await this.findDocumentTag({ documentId, tagId });
-      if (!existing) {
-        if (!manual) return;
-        await db.insert(documentTagsTable).values({ documentId, tagId, appliedByManual: 1, appliedByAuto: 0 });
-        return;
-      }
-      const appliedByManual = manual ? 1 : 0;
-      if (appliedByManual === 0 && existing.appliedByAuto === 0) {
-        await db.delete(documentTagsTable).where(and(eq(documentTagsTable.documentId, documentId), eq(documentTagsTable.tagId, tagId)));
-        return;
-      }
-      await db
-        .update(documentTagsTable)
-        .set({ appliedByManual })
-        .where(and(eq(documentTagsTable.documentId, documentId), eq(documentTagsTable.tagId, tagId)));
+      // The read and the write below must commit as one unit: two concurrent calls for
+      // the same (documentId, tagId) pair would otherwise both see "no row" and both
+      // try to insert, hitting the primary key with an uncaught constraint error.
+      // Running both inside one db.transaction serializes that check-then-act.
+      await db.transaction(async (tx) => {
+        const txDb = tx as unknown as Database;
+        const [existing] = await txDb
+          .select()
+          .from(documentTagsTable)
+          .where(and(eq(documentTagsTable.documentId, documentId), eq(documentTagsTable.tagId, tagId)));
+        if (!existing) {
+          if (!manual) return;
+          await txDb.insert(documentTagsTable).values({ documentId, tagId, appliedByManual: 1, appliedByAuto: 0 });
+          return;
+        }
+        const appliedByManual = manual ? 1 : 0;
+        if (appliedByManual === 0 && existing.appliedByAuto === 0) {
+          await txDb.delete(documentTagsTable).where(and(eq(documentTagsTable.documentId, documentId), eq(documentTagsTable.tagId, tagId)));
+          return;
+        }
+        await txDb
+          .update(documentTagsTable)
+          .set({ appliedByManual })
+          .where(and(eq(documentTagsTable.documentId, documentId), eq(documentTagsTable.tagId, tagId)));
+      });
     },
     async listTagsForDocument(documentId: string): Promise<TagChip[]> {
       const rows = await db

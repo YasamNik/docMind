@@ -163,10 +163,24 @@ describe("tags service", () => {
     await documents.insert(manualDoc);
     await documents.insert(autoDoc);
 
-    await tags.updateCategory({ userId, categoryId: category.id, patch: { autoApply: false } });
+    const updated = await tags.updateCategory({ userId, categoryId: category.id, patch: { autoApply: false } });
 
+    // Regression coverage for review finding 1: the category patch and the auto-document
+    // cleanup must commit together in one transaction, so both sides of the change are
+    // visible once the call returns.
+    expect(updated.autoApply).toBe(false);
     expect(await documents.findById({ userId, documentId: manualDoc.id! as string })).toMatchObject({ categoryId: category.id, categorySource: "manual" });
     expect(await documents.findById({ userId, documentId: autoDoc.id! as string })).toMatchObject({ categoryId: null, categorySource: null });
+  });
+
+  it("rejects an unknown parent when creating a category, with the same error updateCategory uses", async () => {
+    // Regression coverage for review finding 3: createCategory used to throw
+    // categories.not_found for a missing parent while updateCategory threw
+    // categories.invalid_parent for the same situation. Both must agree.
+    await expectAppError(
+      () => tags.createCategory({ userId, name: "Tax", parentId: "cat_0000000000000000" }),
+      "categories.invalid_parent",
+    );
   });
 
   it("counts documents linked to a tag and removes the link (by cascade) when the tag is deleted", async () => {
@@ -228,5 +242,25 @@ describe("tags service", () => {
     expect(cleared).toEqual([]);
 
     await expectAppError(() => tags.setDocumentTag({ userId, documentId: doc.id! as string, tagId: "tag_0000000000000000" }), "tags.not_found");
+    // Regression coverage for review finding 4: clearDocumentTag silently no-op'd on an
+    // unknown tag instead of 404ing, unlike setDocumentTag.
+    await expectAppError(() => tags.clearDocumentTag({ userId, documentId: doc.id! as string, tagId: "tag_0000000000000000" }), "tags.not_found");
+  });
+
+  it("calling setDocumentTag twice for the same document and tag leaves one row with manual = 1 and no error", async () => {
+    // Regression coverage for review finding 2: upsertDocumentTagManual used to
+    // check-then-act outside a transaction, so a second identical call could race the
+    // first and hit the (documentId, tagId) primary key with an uncaught constraint
+    // error. Calling it twice in sequence, and checking there is exactly one row, is
+    // the observable contract the fix must preserve.
+    const doc = documentFixture();
+    await documents.insert(doc);
+    const tag = await tags.createTag({ userId, name: "Rent" });
+
+    await tags.setDocumentTag({ userId, documentId: doc.id! as string, tagId: tag.id });
+    const secondCall = await tags.setDocumentTag({ userId, documentId: doc.id! as string, tagId: tag.id });
+
+    expect(secondCall).toEqual([{ id: tag.id, name: "Rent", color: null, auto: false, manual: true }]);
+    expect(await tagsRepository.listTagsForDocument(doc.id! as string)).toHaveLength(1);
   });
 });

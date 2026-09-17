@@ -172,8 +172,13 @@ export function createTagsService({ db }: { db: Database }) {
       confidenceThreshold?: number;
       autoApply?: boolean;
     }): Promise<CategoryWithMeta> {
-      if (parentId !== null) await getCategoryOrThrow(userId, parentId);
-      const siblings = (await repository.listCategoriesRaw(userId)).filter((c) => c.parentId === parentId);
+      const existingCategories = await repository.listCategoriesRaw(userId);
+      if (parentId !== null && !existingCategories.some((c) => c.id === parentId)) {
+        // Same error as updateCategory uses for an unknown or foreign parent (review
+        // finding 3); createCategory previously threw categories.not_found here instead.
+        throw categoryInvalidParent();
+      }
+      const siblings = existingCategories.filter((c) => c.parentId === parentId);
       const id = newCategoryId();
       const t = nowIso();
       const category: NewCategory = {
@@ -217,13 +222,20 @@ export function createTagsService({ db }: { db: Database }) {
       if (patch.autoApply !== undefined) dbPatch.autoApply = patch.autoApply ? 1 : 0;
       if (patch.sortOrder !== undefined) dbPatch.sortOrder = patch.sortOrder;
       try {
-        await repository.updateCategory({ userId, categoryId, patch: dbPatch });
+        // The category patch and clearing auto-sourced documents must commit together
+        // (review finding 1): if the second statement failed after the first outside a
+        // transaction, the category would end up with autoApply off while its
+        // auto-sourced documents kept a stale category link.
+        await db.transaction(async (tx) => {
+          const txDb = tx as unknown as Database;
+          await repository.updateCategory({ userId, categoryId, patch: dbPatch, tx: txDb });
+          if (patch.autoApply === false && existing.autoApply === 1) {
+            await repository.clearAutoCategoryOnDocuments({ userId, categoryId, tx: txDb });
+          }
+        });
       } catch (error) {
         if (isUniqueConstraintError(error)) throw categoryDuplicateName();
         throw error;
-      }
-      if (patch.autoApply === false && existing.autoApply === 1) {
-        await repository.clearAutoCategoryOnDocuments({ userId, categoryId });
       }
       const counts = await repository.countDocumentsByCategory(userId);
       const paths = buildCategoryPaths(await repository.listCategoriesRaw(userId));
@@ -269,6 +281,7 @@ export function createTagsService({ db }: { db: Database }) {
 
     async clearDocumentTag({ userId, documentId, tagId }: { userId: string; documentId: string; tagId: string }): Promise<TagChip[]> {
       await ensureDocumentExists(userId, documentId);
+      await getTagOrThrow(userId, tagId);
       await repository.upsertDocumentTagManual({ documentId, tagId, manual: false });
       return repository.listTagsForDocument(documentId);
     },
