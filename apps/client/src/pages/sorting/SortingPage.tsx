@@ -6,10 +6,138 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { categoriesApi, tagsApi, type CategoryRow, type TagRow } from "@/lib/tags-api";
-import { jobsApi } from "@/lib/jobs-api";
+import { jobsApi, type JobRow } from "@/lib/jobs-api";
+import { documentsApi, type DocumentRow } from "@/lib/documents-api";
 import { sortApi, type ProposalRow, type SortScope } from "@/lib/sort-api";
 
 type AutomaticItem = { targetType: "tag" | "category"; id: string; name: string; description: string };
+
+// A batch is the set of rules jobs belonging to one sorting run. When the run was
+// started from this page we know its job ids exactly; otherwise we fall back to
+// grouping the most recently created rules jobs by the second they were queued in.
+function secondKey(iso: string): string {
+  return iso.slice(0, 19);
+}
+
+function pickBatch(rulesJobs: JobRow[], trackedIds: string[] | null): JobRow[] {
+  if (trackedIds && trackedIds.length > 0) {
+    const tracked = rulesJobs.filter((j) => trackedIds.includes(j.id));
+    if (tracked.length > 0) return tracked;
+  }
+  if (rulesJobs.length === 0) return [];
+  const latestCreatedAt = rulesJobs.reduce((max, j) => (j.createdAt > max ? j.createdAt : max), rulesJobs[0]!.createdAt);
+  const key = secondKey(latestCreatedAt);
+  return rulesJobs.filter((j) => secondKey(j.createdAt) === key);
+}
+
+type JobOutcome = "applied" | "proposed" | "no_match" | "failed";
+
+// A completed rerun job never generates a proposal when the item was already applied
+// (or already did not match), so "applied" versus "no match" can only be told apart by
+// checking the document's current tags and category against the job's target.
+function classifyJob(job: JobRow, documents: DocumentRow[], proposals: ProposalRow[]): JobOutcome {
+  if (job.status === "failed") return "failed";
+  const documentId = job.payload.documentId;
+  const targetType = job.payload.targetType as "tag" | "category" | undefined;
+  const targetId = job.payload.targetId as string | undefined;
+  const hasProposal = proposals.some((p) => p.documentId === documentId && (!targetId || (p.targetType === targetType && p.targetId === targetId)));
+  if (hasProposal) return "proposed";
+  if (targetType && targetId && documentId) {
+    const doc = documents.find((d) => d.id === documentId);
+    const applied = doc ? (targetType === "tag" ? doc.tags.some((t) => t.id === targetId) : doc.categoryId === targetId) : false;
+    if (applied) return "applied";
+  }
+  return "no_match";
+}
+
+function summarizeBatch(batch: JobRow[], documents: DocumentRow[], proposals: ProposalRow[]) {
+  const finished = batch.filter((j) => j.status === "done" || j.status === "failed");
+  const counts = { applied: 0, proposed: 0, no_match: 0, failed: 0 };
+  for (const job of finished) counts[classifyJob(job, documents, proposals)] += 1;
+  return { ...counts, completed: finished.length, total: batch.length };
+}
+
+function activityBadge(status: JobRow["status"]): { variant: "accent" | "accent2" | "destructive"; label: string; pulse: boolean } {
+  if (status === "failed") return { variant: "destructive", label: "failed", pulse: false };
+  if (status === "done") return { variant: "accent2", label: "done", pulse: false };
+  if (status === "processing") return { variant: "accent", label: "processing", pulse: true };
+  return { variant: "accent", label: "pending", pulse: false };
+}
+
+function SortingActivityCard({
+  rulesJobs,
+  batch,
+  documents,
+  proposals,
+}: {
+  rulesJobs: JobRow[];
+  batch: JobRow[];
+  documents: DocumentRow[];
+  proposals: ProposalRow[];
+}) {
+  if (rulesJobs.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Sorting activity</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">No recent sorting activity.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const isActive = batch.some((j) => j.status === "pending" || j.status === "processing");
+  const summary = summarizeBatch(batch, documents, proposals);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Sorting activity</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {isActive ? (
+          <p className="text-sm font-medium">
+            Sorting {batch.length} document{batch.length === 1 ? "" : "s"}... ({summary.completed}/{batch.length})
+          </p>
+        ) : (
+          <p className="text-sm font-medium">
+            Completed: {summary.applied} applied, {summary.proposed} proposed, {summary.no_match} no match
+            {summary.failed > 0 ? `, ${summary.failed} failed` : ""}
+          </p>
+        )}
+        {batch.length > 1 && (
+          <div className="h-2 w-full rounded-full bg-org-neutral-200">
+            <div
+              className="h-2 rounded-full bg-primary transition-all"
+              style={{ width: `${Math.round((summary.completed / batch.length) * 100)}%` }}
+            />
+          </div>
+        )}
+        <div className="space-y-1">
+          {batch.map((job) => {
+            const name = documents.find((d) => d.id === job.payload.documentId)?.name ?? job.payload.documentId ?? "Unknown document";
+            const badge = activityBadge(job.status);
+            return (
+              <div key={job.id} className="flex items-center justify-between gap-2 border-b py-1 last:border-b-0">
+                <span className="truncate text-sm">{name}</span>
+                <Badge variant={badge.variant} className={badge.pulse ? "animate-pulse" : undefined}>
+                  {badge.label}
+                </Badge>
+              </div>
+            );
+          })}
+        </div>
+        {!isActive && summary.proposed > 0 && (
+          <a href="#proposed-changes" className="block text-xs text-muted-foreground underline-offset-2 hover:underline">
+            {summary.proposed} proposal{summary.proposed === 1 ? "" : "s"} waiting below
+          </a>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 function automaticItemsFrom(tags: TagRow[], categories: CategoryRow[]): AutomaticItem[] {
   const autoTags = tags
@@ -21,7 +149,7 @@ function automaticItemsFrom(tags: TagRow[], categories: CategoryRow[]): Automati
   return [...autoTags, ...autoCategories];
 }
 
-function RunDialog({ item, onClose }: { item: AutomaticItem; onClose: () => void }) {
+function RunDialog({ item, onClose, onQueued }: { item: AutomaticItem; onClose: () => void; onQueued: (jobIds: string[]) => void }) {
   const queryClient = useQueryClient();
   const [scope, setScope] = useState<SortScope>("needs_review");
   const { data: count = 0 } = useQuery({ queryKey: ["sort-count", scope], queryFn: () => sortApi.count(scope) });
@@ -30,6 +158,7 @@ function RunDialog({ item, onClose }: { item: AutomaticItem; onClose: () => void
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       queryClient.invalidateQueries({ queryKey: ["proposals"] });
+      onQueued(result.jobIds);
       toast.success(`Queued ${result.count} document${result.count === 1 ? "" : "s"} for rerun`);
       onClose();
     },
@@ -89,13 +218,22 @@ export function SortingPage() {
     queryFn: () => jobsApi.list(),
     refetchInterval: (q) => (q.state.data?.some((j) => j.status === "pending" || j.status === "processing") ? 3000 : false),
   });
-  const rulesJobsPending = jobs.some((j) => j.type === "rules" && (j.status === "pending" || j.status === "processing"));
+  const rulesJobs = jobs.filter((j) => j.type === "rules");
+  const rulesJobsPending = rulesJobs.some((j) => j.status === "pending" || j.status === "processing");
   const { data: proposalsResult } = useQuery({ queryKey: ["proposals"], queryFn: () => sortApi.list(), refetchInterval: rulesJobsPending ? 3000 : false });
+  const { data: documents = [] } = useQuery({
+    queryKey: ["documents", "sorting-activity"],
+    queryFn: () => documentsApi.list(),
+    enabled: rulesJobs.length > 0,
+    refetchInterval: rulesJobsPending ? 3000 : false,
+  });
   const [runningItem, setRunningItem] = useState<AutomaticItem | null>(null);
+  const [currentBatchIds, setCurrentBatchIds] = useState<string[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const items = automaticItemsFrom(tags, categories);
   const proposals = proposalsResult?.proposals ?? [];
+  const batch = pickBatch(rulesJobs, currentBatchIds);
 
   const apply = useMutation({
     mutationFn: ({ accept, dismiss }: { accept: string[]; dismiss: string[] }) => sortApi.apply(accept, dismiss),
@@ -153,7 +291,9 @@ export function SortingPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <SortingActivityCard rulesJobs={rulesJobs} batch={batch} documents={documents} proposals={proposals} />
+
+      <Card id="proposed-changes">
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <CardTitle className="text-base">Proposed changes</CardTitle>
           {proposals.length > 0 && (
@@ -179,7 +319,7 @@ export function SortingPage() {
         </CardContent>
       </Card>
 
-      {runningItem && <RunDialog item={runningItem} onClose={() => setRunningItem(null)} />}
+      {runningItem && <RunDialog item={runningItem} onClose={() => setRunningItem(null)} onQueued={setCurrentBatchIds} />}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SortingPage } from "./SortingPage";
 
 afterEach(() => cleanup());
@@ -16,13 +16,17 @@ const listProposals = vi.fn(async () => ({
 const countFn = vi.fn(async (_scope: string) => 3);
 const runFn = vi.fn(async (_t: string, _id: string, _scope: string) => ({ count: 3, jobIds: ["job_1", "job_2", "job_3"] }));
 const applyFn = vi.fn(async (_accept: string[], _dismiss: string[]) => ({ appliedCount: 1, dismissedCount: 0 }));
+const listJobsFn = vi.fn(async () => [] as unknown[]);
+const listDocumentsFn = vi.fn(async () => [] as unknown[]);
 
 vi.mock("@/lib/tags-api", () => ({
   tagsApi: { list: () => listForUser() },
   categoriesApi: { list: () => listCategories() },
 }));
 
-vi.mock("@/lib/jobs-api", () => ({ jobsApi: { list: vi.fn(async () => []) } }));
+vi.mock("@/lib/jobs-api", () => ({ jobsApi: { list: () => listJobsFn() } }));
+
+vi.mock("@/lib/documents-api", () => ({ documentsApi: { list: () => listDocumentsFn() } }));
 
 vi.mock("@/lib/sort-api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/sort-api")>("@/lib/sort-api");
@@ -41,6 +45,11 @@ function renderPage() {
 }
 
 describe("SortingPage", () => {
+  beforeEach(() => {
+    listJobsFn.mockReset().mockResolvedValue([]);
+    listDocumentsFn.mockReset().mockResolvedValue([]);
+  });
+
   it("lists automatic items and proposed changes", async () => {
     renderPage();
     // "Rent" appears in both automatic items and proposal, so use getAllByText
@@ -49,6 +58,44 @@ describe("SortingPage", () => {
     expect(await screen.findByText("Finance")).toBeInTheDocument();
     expect(await screen.findByText(/invoice\.pdf/)).toBeInTheDocument();
     expect(screen.getByText(/Add tag/)).toBeInTheDocument();
+  });
+
+  it("shows no recent sorting activity when there are no rules jobs", async () => {
+    renderPage();
+    expect(await screen.findByText("No recent sorting activity.")).toBeInTheDocument();
+  });
+
+  it("shows active sorting progress with status badges while jobs are running", async () => {
+    listJobsFn.mockResolvedValue([
+      { id: "job_1", type: "rules", status: "processing", attempts: 0, error: null, payload: { documentId: "doc_1" }, createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: "job_2", type: "rules", status: "pending", attempts: 0, error: null, payload: { documentId: "doc_2" }, createdAt: "2026-01-01T00:00:00.000Z" },
+    ]);
+    renderPage();
+    expect(await screen.findByText("Sorting 2 documents... (0/2)")).toBeInTheDocument();
+    expect(screen.getByText("processing")).toBeInTheDocument();
+    expect(screen.getByText("pending")).toBeInTheDocument();
+  });
+
+  it("shows completed results split into applied, proposed, and no match", async () => {
+    listJobsFn.mockResolvedValue([
+      { id: "job_1", type: "rules", status: "done", attempts: 1, error: null, payload: { documentId: "doc_a", targetType: "tag", targetId: "tag_9" }, createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: "job_2", type: "rules", status: "done", attempts: 1, error: null, payload: { documentId: "doc_b", targetType: "tag", targetId: "tag_9" }, createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: "job_3", type: "rules", status: "done", attempts: 1, error: null, payload: { documentId: "doc_c", targetType: "tag", targetId: "tag_9" }, createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: "job_4", type: "rules", status: "failed", attempts: 3, error: "boom", payload: { documentId: "doc_d", targetType: "tag", targetId: "tag_9" }, createdAt: "2026-01-01T00:00:00.000Z" },
+    ]);
+    listDocumentsFn.mockResolvedValue([
+      { id: "doc_b", name: "b.pdf", tags: [{ id: "tag_9", name: "Rent", color: null, auto: true, manual: false }], categoryId: null },
+      { id: "doc_c", name: "c.pdf", tags: [], categoryId: null },
+    ]);
+    listProposals.mockResolvedValueOnce({
+      proposals: [
+        { id: "eval_a", documentId: "doc_a", documentName: "a.pdf", targetType: "tag", targetId: "tag_9", itemName: "Rent", kind: "add_tag", confidence: 0.9, reasoning: "Mentions rent." },
+      ],
+      nextCursor: null,
+    });
+    renderPage();
+    expect(await screen.findByText("Completed: 1 applied, 1 proposed, 1 no match, 1 failed")).toBeInTheDocument();
+    expect(screen.getByText("1 proposal waiting below")).toBeInTheDocument();
   });
 
   it("opens the run dialog with the scope count and runs it", async () => {
