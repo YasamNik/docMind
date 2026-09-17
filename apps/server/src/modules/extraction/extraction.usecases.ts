@@ -2,6 +2,7 @@ import type { Readable } from "node:stream";
 import * as v from "valibot";
 import { createError } from "../../shared/errors/errors.js";
 import { parseOrValidationError } from "../../shared/http/validate.js";
+import { createLogger, type Logger } from "../../shared/logger/logger.js";
 import { asTxDb, type Database } from "../database/database.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
@@ -10,8 +11,12 @@ import type { Job } from "../jobs/jobs.types.js";
 import { createJobsService } from "../jobs/jobs.usecases.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
 import type { RulesService } from "../rules/rules.usecases.js";
+import type { AiService } from "../ai/ai.usecases.js";
+import { VISION_OCR_PROMPT, normalizeText } from "./extraction.models.js";
 import type { ExtractorRegistry } from "./extraction.registry.js";
 import { extractionPayloadSchema } from "./extraction.schemas.js";
+
+const DEFAULT_OCR_CONFIDENCE_THRESHOLD = 60;
 
 async function readAll(stream: Readable): Promise<Uint8Array> {
   const chunks: Buffer[] = [];
@@ -26,15 +31,72 @@ export function createExtractionService({
   settingsService,
   registry,
   rulesService,
+  aiService,
+  logger = createLogger("extraction"),
 }: {
   db: Database;
   documentsService: DocumentsService;
   settingsService: SettingsService;
   registry: ExtractorRegistry;
   rulesService: Pick<RulesService, "hasAutomaticItems">;
+  aiService?: Pick<AiService, "recognizeImage">;
+  logger?: Logger;
 }) {
   const documents = createDocumentsRepository({ db });
   const jobs = createJobsService({ db });
+
+  async function applyVisionFallback({
+    userId,
+    documentId,
+    bytes,
+    mimeType,
+    result,
+  }: {
+    userId: string;
+    documentId: string;
+    bytes: Uint8Array;
+    mimeType: string;
+    result: { text: string; note?: string; confidence?: number };
+  }): Promise<{ text: string; note?: string; confidence?: number }> {
+    if (!aiService) return result;
+    if (result.confidence === undefined) return result;
+    const threshold =
+      (await settingsService.get<number>(userId, "ai.vision.ocrConfidenceThreshold")) ?? DEFAULT_OCR_CONFIDENCE_THRESHOLD;
+    if (result.confidence >= threshold) return result;
+
+    const visionModel = await settingsService.get<string>(userId, "ai.model.vision");
+    if (!visionModel) return result;
+
+    try {
+      const visionResult = await aiService.recognizeImage({
+        userId,
+        image: Buffer.from(bytes),
+        mimeType: mimeType || "image/png",
+        prompt: VISION_OCR_PROMPT,
+      });
+      const visionText = normalizeText(visionResult.text);
+      if (!visionText) {
+        logger.info({ documentId, confidence: result.confidence }, "Vision LLM fallback returned no text, keeping OCR result");
+        return {
+          ...result,
+          note: `Vision LLM returned no text. Using OCR result (confidence: ${result.confidence.toFixed(0)}).`,
+        };
+      }
+      logger.info({ documentId, confidence: result.confidence }, "Vision LLM fallback used in place of OCR result");
+      return {
+        text: visionText,
+        confidence: result.confidence,
+        note: `Extracted by vision LLM (OCR confidence was ${result.confidence.toFixed(0)})`,
+      };
+    } catch (error) {
+      const message = (error as Error).message ?? String(error);
+      logger.warn({ error, documentId }, "Vision LLM fallback failed, keeping OCR result");
+      return {
+        ...result,
+        note: `Vision LLM fallback failed: ${message}. Using OCR result (confidence: ${result.confidence.toFixed(0)}).`,
+      };
+    }
+  }
 
   async function extractDocument({
     userId,
@@ -63,7 +125,8 @@ export function createExtractionService({
         ocrLanguages: (await settingsService.get<string>(userId, "extraction.ocrLanguages")) ?? "eng",
         dataDir: (await settingsService.get<string>(userId, "extraction.dataDir")) ?? "./data",
       };
-      const result = await extractor.extract({ bytes, mimeType: document.mimeType ?? "", filename: document.name }, ctx);
+      const ocrResult = await extractor.extract({ bytes, mimeType: document.mimeType ?? "", filename: document.name }, ctx);
+      const result = await applyVisionFallback({ userId, documentId, bytes, mimeType: document.mimeType ?? "", result: ocrResult });
       const hasAutoItems = await rulesService.hasAutomaticItems(userId);
       await db.transaction(async (tx) => {
         const txDb = asTxDb(tx);

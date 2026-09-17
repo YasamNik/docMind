@@ -6,7 +6,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestApp } from "../../shared/test/app.test-utils.js";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
 import { createJobRunner } from "../jobs/jobs.runner.js";
+import type { AiAdapter, ModelInfo, StructuredResult, TestResult } from "../ai/ai.types.js";
+import type { OcrEngine } from "./ocr.js";
 import { pdfWithText } from "./test-fixtures.js";
+
+function fakeVisionAdapter(recognizeImage: AiAdapter["recognizeImage"]): AiAdapter {
+  return {
+    generateStructured: vi.fn(async () => ({ data: {}, usage: { promptTokens: 0, completionTokens: 0 } }) as StructuredResult),
+    streamText: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
+    embed: vi.fn(async () => ({ vectors: [], dimension: 0 })),
+    recognizeImage,
+    listModels: vi.fn(async () => [] as ModelInfo[]),
+    testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1, message: "ok" }) as TestResult),
+  };
+}
 
 let root: string;
 let t: Awaited<ReturnType<typeof createTestApp>>;
@@ -137,5 +150,110 @@ describe("extraction", () => {
   it("rejects requestExtraction for a document that does not exist, without queuing a job", async () => {
     await expectAppError(() => t.services.extractionService.requestExtraction({ userId, documentId: "doc_0000000000000000" }), "documents.not_found");
     expect(await t.services.jobsService.list({ userId })).toHaveLength(0);
+  });
+});
+
+describe("vision LLM OCR fallback", () => {
+  const lowConfidenceOcr: OcrEngine = {
+    recognize: async () => ({ text: "garbled", confidence: 30 }),
+    terminate: async () => {},
+  };
+  const highConfidenceOcr: OcrEngine = {
+    recognize: async () => ({ text: "good text", confidence: 85 }),
+    terminate: async () => {},
+  };
+
+  async function setupWithOcr(ocrEngine: OcrEngine, recognizeImage: AiAdapter["recognizeImage"]) {
+    const root = await mkdtemp(join(tmpdir(), "docmind-extract-vision-"));
+    const adapter = fakeVisionAdapter(recognizeImage);
+    const app = await createTestApp({
+      env: { DOCUMENT_STORAGE_ROOT: root },
+      ocrEngine,
+      adapterFactories: { "openai-compatible": () => adapter, "anthropic": () => adapter },
+    });
+    const { userId: uid } = await app.signIn();
+    const runner = createJobRunner({ db: app.db, handlers: { extraction: app.services.extractionService.handler } });
+    return { app, root, userId: uid, runner };
+  }
+
+  async function uploadImage(app: Awaited<ReturnType<typeof createTestApp>>, uid: string) {
+    return app.services.documentsService.upload({
+      userId: uid,
+      name: "scan.png",
+      mimeType: "image/png",
+      body: Readable.from([Buffer.from([137, 80, 78, 71])]),
+    });
+  }
+
+  it("uses vision fallback when OCR confidence is below threshold", async () => {
+    const recognizeImage = vi.fn(async () => ({ text: "Clean extracted text" }));
+    const { app, root, userId: uid, runner } = await setupWithOcr(lowConfidenceOcr, recognizeImage);
+    try {
+      await app.services.settingsService.set(uid, {
+        "ai.openrouter.apiKey": "sk-or-v1-test",
+        "ai.model.vision": "openrouter://test-vision-model",
+      });
+      const { document } = await uploadImage(app, uid);
+      await runner.runOnce();
+      const after = await app.services.documentsService.get({ userId: uid, documentId: document.id });
+      expect(after.extractedText).toBe("Clean extracted text");
+      expect(after.extractionError).toContain("Extracted by vision LLM");
+      expect(recognizeImage).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps OCR result when vision slot is not configured", async () => {
+    const recognizeImage = vi.fn(async () => ({ text: "Clean extracted text" }));
+    const { app, root, userId: uid, runner } = await setupWithOcr(lowConfidenceOcr, recognizeImage);
+    try {
+      const { document } = await uploadImage(app, uid);
+      await runner.runOnce();
+      const after = await app.services.documentsService.get({ userId: uid, documentId: document.id });
+      expect(after.extractedText).toBe("garbled");
+      expect(after.extractionError).toBeFalsy();
+      expect(recognizeImage).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps OCR result when confidence is above threshold", async () => {
+    const recognizeImage = vi.fn(async () => ({ text: "Clean extracted text" }));
+    const { app, root, userId: uid, runner } = await setupWithOcr(highConfidenceOcr, recognizeImage);
+    try {
+      await app.services.settingsService.set(uid, {
+        "ai.openrouter.apiKey": "sk-or-v1-test",
+        "ai.model.vision": "openrouter://test-vision-model",
+      });
+      const { document } = await uploadImage(app, uid);
+      await runner.runOnce();
+      const after = await app.services.documentsService.get({ userId: uid, documentId: document.id });
+      expect(after.extractedText).toBe("good text");
+      expect(recognizeImage).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps OCR result when vision LLM call fails", async () => {
+    const recognizeImage = vi.fn(async () => {
+      throw new Error("vision provider unavailable");
+    });
+    const { app, root, userId: uid, runner } = await setupWithOcr(lowConfidenceOcr, recognizeImage);
+    try {
+      await app.services.settingsService.set(uid, {
+        "ai.openrouter.apiKey": "sk-or-v1-test",
+        "ai.model.vision": "openrouter://test-vision-model",
+      });
+      const { document } = await uploadImage(app, uid);
+      await runner.runOnce();
+      const after = await app.services.documentsService.get({ userId: uid, documentId: document.id });
+      expect(after.extractedText).toBe("garbled");
+      expect(after.extractionError).toContain("Vision LLM fallback failed");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

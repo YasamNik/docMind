@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extensionOf, normalizeText } from "./extraction.models.js";
+import { extensionOf, normalizeText, VISION_OCR_PROMPT } from "./extraction.models.js";
 
 describe("extensionOf", () => {
   it("returns the lowercased extension for a normal filename", () => {
@@ -34,5 +34,12 @@ describe("normalizeText", () => {
 
   it("normalizes CRLF line endings to LF", () => {
     expect(normalizeText("a\r\nb\r\nc")).toBe("a\nb\nc");
+  });
+});
+
+describe("VISION_OCR_PROMPT", () => {
+  it("is a non-empty instruction string", () => {
+    expect(typeof VISION_OCR_PROMPT).toBe("string");
+    expect(VISION_OCR_PROMPT.length).toBeGreaterThan(0);
   });
 });

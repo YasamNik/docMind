@@ -28,3 +28,6 @@ export const EXTENSION_MIME: Record<string, string> = {
 };
 
 export const GENERIC_MIME = new Set(["", "application/octet-stream", "binary/octet-stream"]);
+
+export const VISION_OCR_PROMPT =
+  "Extract all text from this document image. Preserve the layout and structure as much as possible. Return only the extracted text, nothing else.";
