@@ -37,6 +37,8 @@ import { registerRulesRoutes } from "./modules/rules/rules.routes.js";
 import { createRulesService } from "./modules/rules/rules.usecases.js";
 import { registerSearchRoutes } from "./modules/search/search.routes.js";
 import { createSearchService } from "./modules/search/search.usecases.js";
+import { registerSummaryRoutes } from "./modules/summary/summary.routes.js";
+import { createSummaryService } from "./modules/summary/summary.usecases.js";
 import { registerTagsRoutes } from "./modules/tags/tags.routes.js";
 import { createTagsService } from "./modules/tags/tags.usecases.js";
 import { errorHandler } from "./shared/http/error-handler.js";
@@ -145,7 +147,11 @@ export function createServer({
   const rulesService = createRulesService({ db, aiService, documentsService });
   const extractionService: ExtractionService = createExtractionService({ db, documentsService, settingsService, registry, rulesService, aiService });
   const searchService = createSearchService({ db, aiService, settingsService });
-  const jobRunner = createJobRunner({ db, handlers: { extraction: extractionService.handler, rules: rulesService.handler, embedding: searchService.handler } });
+  const summaryService = createSummaryService({ db, aiService });
+  const jobRunner = createJobRunner({
+    db,
+    handlers: { extraction: extractionService.handler, rules: rulesService.handler, embedding: searchService.handler, summarize: summaryService.handler },
+  });
 
   app.get("/api/health", (c) => c.json({ status: "ok" }));
   registerAuthRoutes({ app, auth, db });
@@ -161,8 +167,25 @@ export function createServer({
   registerTagsRoutes({ app, tagsService, getUserId });
   registerRulesRoutes({ app, rulesService, getUserId });
   registerSearchRoutes({ app, searchService, getUserId });
+  registerSummaryRoutes({ app, summaryService, getUserId });
 
-  return { app, auth, settingsService, storageService, documentsService, jobsService, extractionService, jobRunner, ocrEngine, aiService, tagsService, rulesService, searchService, getUserId };
+  return {
+    app,
+    auth,
+    settingsService,
+    storageService,
+    documentsService,
+    jobsService,
+    extractionService,
+    jobRunner,
+    ocrEngine,
+    aiService,
+    tagsService,
+    rulesService,
+    searchService,
+    summaryService,
+    getUserId,
+  };
 }
 
 export type Server = ReturnType<typeof createServer>;

@@ -137,7 +137,9 @@ export function createDocumentsService({
 
     async rename({ userId, documentId, name }: { userId: string; documentId: string; name: string }) {
       await getOrThrow(userId, documentId);
-      await repository.update({ userId, documentId, patch: { name: sanitizeFilename(name), updatedAt: nowIso() } });
+      // A manual rename overrides any pending suggestion so the accept-title badge
+      // stops showing for a title the user has already replaced by hand.
+      await repository.update({ userId, documentId, patch: { name: sanitizeFilename(name), suggestedTitle: null, updatedAt: nowIso() } });
       return getEnrichedOrThrow(userId, documentId);
     },
 

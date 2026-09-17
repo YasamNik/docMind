@@ -161,6 +161,41 @@ describe("extraction", () => {
     expect(jobs.filter((j) => j.type === "embedding")).toHaveLength(0);
   });
 
+  it("enqueues a summarize job when the rules model slot is configured", async () => {
+    const adapter: AiAdapter = {
+      generateStructured: vi.fn(async () => ({ data: {}, usage: { promptTokens: 0, completionTokens: 0 } }) as StructuredResult),
+      streamText: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
+      embed: vi.fn(async () => ({ vectors: [], dimension: 0 })),
+      recognizeImage: vi.fn(async () => ({ text: "" })),
+      listModels: vi.fn(async () => [] as ModelInfo[]),
+      testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1, message: "ok" }) as TestResult),
+    };
+    const app = await createTestApp({ env: { DOCUMENT_STORAGE_ROOT: root }, adapterFactories: { "openai-compatible": () => adapter, "anthropic": () => adapter } });
+    const uid = (await app.signIn()).userId;
+    await app.services.settingsService.set(uid, { "ai.openrouter.apiKey": "sk-or-v1-test", "ai.model.rules": "openrouter://test-model" });
+    const { document } = await app.services.documentsService.upload({ userId: uid, name: "notes.txt", mimeType: "text/plain", body: Readable.from(["hello summary"]) });
+    const runner = createJobRunner({ db: app.db, handlers: { extraction: app.services.extractionService.handler } });
+    await runner.runOnce();
+
+    const after = await app.services.documentsService.get({ userId: uid, documentId: document.id });
+    expect(after.summaryStatus).toBe("pending");
+    const jobs = await app.services.jobsService.list({ userId: uid, status: "pending" });
+    const summarizeJob = jobs.find((j) => j.type === "summarize");
+    expect(summarizeJob).toBeDefined();
+    expect(JSON.parse(summarizeJob!.payload)).toMatchObject({ documentId: document.id, userId: uid });
+  });
+
+  it("does not enqueue a summarize job when no rules model is configured, and marks summary_status done", async () => {
+    const { document } = await t.services.documentsService.upload({ userId, name: "notes.txt", mimeType: "text/plain", body: Readable.from(["hello"]) });
+    const runner = createJobRunner({ db: t.db, handlers: { extraction: t.services.extractionService.handler } });
+    await runner.runOnce();
+
+    const after = await t.services.documentsService.get({ userId, documentId: document.id });
+    expect(after.summaryStatus).toBe("done");
+    const jobs = await t.services.jobsService.list({ userId });
+    expect(jobs.filter((j) => j.type === "summarize")).toHaveLength(0);
+  });
+
   it("sets rule_status done directly when there are no automatic items", async () => {
     const { document } = await t.services.documentsService.upload({ userId, name: "notes.txt", mimeType: "text/plain", body: Readable.from(["hello"]) });
     const runner = createJobRunner({ db: t.db, handlers: { extraction: t.services.extractionService.handler } });

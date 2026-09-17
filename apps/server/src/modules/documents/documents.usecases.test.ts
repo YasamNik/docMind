@@ -217,6 +217,17 @@ describe("documents service filters and enrichment", () => {
     expect(Array.isArray(renamed.tags)).toBe(true);
   });
 
+  it("rename() clears a pending suggestedTitle", async () => {
+    const { document } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    const repository = createDocumentsRepository({ db });
+    await repository.update({ userId, documentId: document.id, patch: { suggestedTitle: "AI Suggested Name" } });
+    expect((await documents.get({ userId, documentId: document.id })).suggestedTitle).toBe("AI Suggested Name");
+
+    const renamed = await documents.rename({ userId, documentId: document.id, name: "renamed.txt" });
+    expect(renamed.name).toBe("renamed.txt");
+    expect(renamed.suggestedTitle).toBeNull();
+  });
+
   it("needs_review includes a document with a pending proposal even when it already has a category", async () => {
     const { db: testDb } = await createTestDatabase();
     const docsRepo = createDocumentsRepository({ db: testDb });

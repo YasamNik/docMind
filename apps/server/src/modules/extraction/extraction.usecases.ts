@@ -130,6 +130,8 @@ export function createExtractionService({
       const hasAutoItems = await rulesService.hasAutomaticItems(userId);
       const embeddingModel = await settingsService.get<string>(userId, "ai.model.embedding");
       const hasEmbeddingModel = Boolean(embeddingModel);
+      const rulesModel = await settingsService.get<string>(userId, "ai.model.rules");
+      const hasSummaryModel = Boolean(rulesModel);
       await db.transaction(async (tx) => {
         const txDb = asTxDb(tx);
         await documents.update({
@@ -141,6 +143,7 @@ export function createExtractionService({
             extractionError: result.note ?? null,
             ruleStatus: hasAutoItems ? "pending" : "done",
             embeddingStatus: hasEmbeddingModel ? "pending" : "done",
+            summaryStatus: hasSummaryModel ? "pending" : "done",
             updatedAt: now(),
           },
           tx: txDb,
@@ -150,6 +153,9 @@ export function createExtractionService({
         }
         if (hasEmbeddingModel) {
           await jobs.enqueue({ userId, type: "embedding", payload: { documentId, userId }, tx: txDb });
+        }
+        if (hasSummaryModel) {
+          await jobs.enqueue({ userId, type: "summarize", payload: { documentId, userId }, tx: txDb });
         }
       });
     } catch (error) {
