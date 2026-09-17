@@ -12,7 +12,7 @@ function TabsNavList({ className, ...props }: React.ComponentProps<typeof Tabs.L
   return (
     <Tabs.List
       className={cn(
-        "inline-flex h-9 items-center gap-1 rounded-lg bg-muted p-1 text-muted-foreground",
+        "inline-flex h-9 items-center gap-1 rounded-full border border-border bg-secondary p-1 text-muted-foreground",
         className,
       )}
       {...props}
@@ -24,7 +24,7 @@ function TabsNavTab({ className, ...props }: React.ComponentProps<typeof Tabs.Ta
   return (
     <Tabs.Tab
       className={cn(
-        "inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[selected]:bg-background data-[selected]:text-foreground data-[selected]:shadow",
+        "inline-flex items-center justify-center whitespace-nowrap rounded-full px-3 py-1 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[selected]:bg-primary data-[selected]:text-primary-foreground",
         className,
       )}
       {...props}
