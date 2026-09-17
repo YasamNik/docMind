@@ -11,7 +11,8 @@ const fakeOcrEngine: OcrEngine = {
 export async function createTestApp({
   env = {},
   ocrEngine = fakeOcrEngine,
-}: { env?: Record<string, string>; ocrEngine?: OcrEngine } = {}) {
+  adapterFactories,
+}: { env?: Record<string, string>; ocrEngine?: OcrEngine; adapterFactories?: Parameters<typeof createServer>[0]["adapterFactories"] } = {}) {
   const config = parseConfig({
     SETTINGS_ENCRYPTION_KEY: "11".repeat(32),
     AUTH_SECRET: "t".repeat(32),
@@ -19,7 +20,7 @@ export async function createTestApp({
     ...env,
   });
   const { db } = await createTestDatabase();
-  const server = createServer({ config, db, ocrEngine });
+  const server = createServer({ config, db, ocrEngine, adapterFactories });
 
   async function signIn(email = "owner@example.com") {
     const res = await server.app.request("/api/auth/sign-up/email", {

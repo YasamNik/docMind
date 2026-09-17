@@ -10,6 +10,8 @@ import { createAiService } from "./modules/ai/ai.usecases.js";
 import { aiProviderRegistry } from "./modules/ai/providers/index.js";
 import { createOpenAiCompatibleAdapter } from "./modules/ai/adapters/openai-compatible.adapter.js";
 import { createAnthropicAdapter } from "./modules/ai/adapters/anthropic.adapter.js";
+import type { AdapterConfig } from "./modules/ai/adapters/adapter.types.js";
+import type { AiAdapter } from "./modules/ai/ai.types.js";
 import { parseModelUri } from "./modules/ai/ai.models.js";
 import { registerDocumentsRoutes } from "./modules/documents/documents.routes.js";
 import { createDocumentsService } from "./modules/documents/documents.usecases.js";
@@ -31,12 +33,28 @@ import { createSettingsRegistry } from "./modules/settings/settings.registry.js"
 import { registerSettingsRoutes } from "./modules/settings/settings.routes.js";
 import { createSettingsService } from "./modules/settings/settings.usecases.js";
 import { createStorageService } from "./modules/storage/storage.usecases.js";
+import { createRulesService } from "./modules/rules/rules.usecases.js";
 import { registerTagsRoutes } from "./modules/tags/tags.routes.js";
 import { createTagsService } from "./modules/tags/tags.usecases.js";
 import { errorHandler } from "./shared/http/error-handler.js";
 import { createError } from "./shared/errors/errors.js";
 
-export function createServer({ config, db, ocrEngine = createTesseractEngine() }: { config: Config; db: Database; ocrEngine?: OcrEngine }) {
+type AdapterFactories = {
+  "openai-compatible": (config: AdapterConfig) => AiAdapter;
+  "anthropic": (config: AdapterConfig) => AiAdapter;
+};
+
+export function createServer({
+  config,
+  db,
+  ocrEngine = createTesseractEngine(),
+  adapterFactories = { "openai-compatible": createOpenAiCompatibleAdapter, "anthropic": createAnthropicAdapter },
+}: {
+  config: Config;
+  db: Database;
+  ocrEngine?: OcrEngine;
+  adapterFactories?: AdapterFactories;
+}) {
   const app = new Hono();
   app.onError(errorHandler);
   app.use("/api/*", cors({ origin: [config.clientBaseUrl], credentials: true }));
@@ -114,12 +132,9 @@ export function createServer({ config, db, ocrEngine = createTesseractEngine() }
   });
   const extractionService: ExtractionService = createExtractionService({ db, documentsService, settingsService, registry });
   const jobRunner = createJobRunner({ db, handlers: { extraction: extractionService.handler } });
-  const adapterFactories = {
-    "openai-compatible": createOpenAiCompatibleAdapter,
-    "anthropic": createAnthropicAdapter,
-  };
   const aiService = createAiService({ settingsService, registry: aiProviderRegistry, adapterFactories });
   const tagsService = createTagsService({ db });
+  const rulesService = createRulesService({ db, aiService });
 
   app.get("/api/health", (c) => c.json({ status: "ok" }));
   registerAuthRoutes({ app, auth, db });
@@ -134,7 +149,7 @@ export function createServer({ config, db, ocrEngine = createTesseractEngine() }
   registerAiRoutes({ app, aiService, settingsService, getUserId });
   registerTagsRoutes({ app, tagsService, getUserId });
 
-  return { app, auth, settingsService, storageService, documentsService, jobsService, extractionService, jobRunner, ocrEngine, aiService, tagsService, getUserId };
+  return { app, auth, settingsService, storageService, documentsService, jobsService, extractionService, jobRunner, ocrEngine, aiService, tagsService, rulesService, getUserId };
 }
 
 export type Server = ReturnType<typeof createServer>;
