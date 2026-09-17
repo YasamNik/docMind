@@ -98,6 +98,9 @@ First run: open http://localhost:5173, create the single account. Sign up closes
   encrypted at rest and never logged or returned by the API.
 - No em dashes anywhere: code, comments, docs, commit messages, UI copy, replies to the
   user. Use a comma, a colon, a hyphen, or a new sentence.
+- Sorting cost. Every document is sorted with a single LLM call that lists every
+  automatic tag and category description in the prompt. The Sorting page shows the
+  count of automatic items; a very large or verbose set costs more per document to sort.
 - Conventional commits: `feat(server): ...`, `fix(client): ...`, `docs: ...`,
   `chore: ...`, `test: ...`.
 

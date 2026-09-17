@@ -130,27 +130,24 @@ document_tags (
 -- plan C3) adds a sort_evaluations table and the cleanup logic for applied_by_auto.
 
 -- Rules Engine
-rules (
+-- No separate rules table: a non-empty description plus auto_apply on a tag or
+-- category (see the Categorization block above) is the rule.
+sort_evaluations (
   id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  description TEXT NOT NULL,       -- the plain English rule
-  type TEXT NOT NULL,              -- 'tag' | 'category'
-  target_id TEXT NOT NULL,         -- references tags(id) or categories(id) by type
-  confidence_threshold REAL DEFAULT 0.7,  -- 0.0 to 1.0, enforced by schema
-  is_active INTEGER DEFAULT 1,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-)
-
-rule_evaluations (
-  id TEXT PRIMARY KEY,
-  rule_id TEXT NOT NULL,
-  document_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,            -- ON DELETE CASCADE to documents
+  target_type TEXT NOT NULL,            -- 'tag' | 'category'
+  target_id TEXT NOT NULL,              -- references tags(id) or categories(id) by type;
+                                         -- no foreign key, a polymorphic reference is
+                                         -- handled in application code instead
   matched INTEGER NOT NULL,
-  confidence REAL,
-  reasoning TEXT,                  -- the model's explanation
-  model_id TEXT,                   -- provider://model that produced it
+  confidence REAL NOT NULL,             -- 0.0 to 1.0
+  reasoning TEXT NOT NULL,              -- one sentence from the model
+  outcome TEXT NOT NULL,                -- applied | proposed | dismissed | below_threshold | no_match
+  proposal_kind TEXT,                   -- add_tag | remove_tag | set_category | null
+  model_id TEXT NOT NULL,               -- provider://model that produced it
+  job_id TEXT NOT NULL,                 -- the rules job that produced it; dry runs are not stored
+  content_hash TEXT,                    -- the document's hash at evaluation time, used to
+                                         -- decide whether a dismissed proposal is offered again
   evaluated_at TEXT NOT NULL
 )
 
@@ -352,25 +349,39 @@ The Phase 1 differentiator. Users write rules in plain English:
 - "Tag as 'Urgent' if the document contains deadlines within 30 days"
 
 **Evaluation flow.**
-1. Text is extracted.
-2. All active rules for the user are loaded.
-3. One prompt is assembled with the document text and every rule, each with its id,
-   description, and target name resolved from its target id. Text is truncated to
-   8000 characters in Phase 1. Known limitation: a rule that matches only on content
-   past that point will miss. Later phases can evaluate per chunk.
-4. The rules model returns structured JSON validated by valibot: per rule, matched,
-   confidence, reasoning.
-5. Rules with matched true and confidence at or above their threshold are applied.
-6. Every evaluation is stored in `rule_evaluations` with the model that produced it.
+1. Text is extracted; on the first upload, if at least one tag or category has both a
+   description and automatic sorting on, an initial rules job is enqueued.
+2. The user's automatic tags and categories are loaded (auto_apply on, description
+   non-empty).
+3. One prompt is assembled with the document name, the document text, and every
+   automatic item, each with its id, description, and full path (for a category) or name
+   (for a tag). Text is truncated to 8000 characters with a note that it is truncated.
+   Known limitation: an item that matches only on content past that point will miss.
+   Later phases can evaluate per chunk.
+4. The rules model returns structured JSON validated by valibot: per item, matched,
+   confidence, reasoning. Unknown ids in the reply are dropped and logged.
+5. On the first pass (initial mode), every tag matched at or above its threshold is
+   applied, and the highest-confidence matched category at or above its own threshold is
+   set (none on a tie), unless the document already has a manual category. On every later
+   pass (rerun mode, per document or per item over a scope), nothing is applied directly:
+   each result becomes a reviewable proposal (add a tag, remove a tag, or set a category),
+   and a proposal identical to one the user already dismissed for that document, item, and
+   kind is not offered again unless the item's description or the document's content
+   changed since the dismissal.
+6. Every evaluation is stored in `sort_evaluations` with the model that produced it and
+   the job that produced it (dry runs are never stored).
 
-**Design decisions.** One LLM call per document for all rules. Reasoning is stored so
-users can tune rules. Re-evaluation on demand: after editing a rule, or for one
-document. A dry run tests a rule against a chosen document before saving. The
-confidence threshold is per rule, on a 0.0 to 1.0 scale. Rules point at a tag or
-category by id, so renaming a tag never breaks a rule, and nested categories are
-unambiguous. There is no rule priority: every rule is evaluated in one call and every
-match above its threshold is applied. Later phases add inbox triage and rules that learn
-from corrections; see `docs/FEATURES.md`.
+**Design decisions.** One LLM call per document, covering every automatic tag and
+category at once. Reasoning is stored so users can tune descriptions. A dry run tests a
+description against a chosen document before saving, on unsaved text. The confidence
+threshold is per tag or category, on a 0.0 to 1.0 scale. Items are referenced by id, so
+renaming a tag never breaks anything, and nested categories are unambiguous through full
+paths in the prompt. There is no priority between items: every automatic item is
+evaluated in one call and every tag match above its threshold applies (a category picks
+its single best match). Manual assignments are never touched by the engine. A very large
+or verbose set of automatic items costs more per document to sort; the engine logs a
+warning past 50,000 prompt characters rather than capping it. Later phases add inbox
+triage and rules that learn from corrections; see `docs/FEATURES.md`.
 
 ## Search and Chat
 
