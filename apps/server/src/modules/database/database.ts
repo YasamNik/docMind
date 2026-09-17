@@ -3,9 +3,13 @@ import { drizzle } from "drizzle-orm/libsql";
 import * as schema from "./schema.js";
 
 export async function createDatabase({ url }: { url: string }) {
-  const client = createClient({ url });
-  // SQLite defaults to foreign_keys=off per connection; the document_tags table relies
-  // on ON DELETE CASCADE, so this must be turned on explicitly for every connection.
+  // The file-mode client pools up to 20 real connections by default. PRAGMA foreign_keys
+  // is per connection, so a pool with more than one open connection cannot guarantee the
+  // PRAGMA below applies everywhere. The rest of the codebase also assumes a single
+  // connection (job runner, transaction helpers), so force exactly one here.
+  const client = createClient({ url, concurrency: 1 });
+  // Set explicitly rather than relying on the driver's default, since that default is not
+  // guaranteed across driver versions.
   await client.execute("PRAGMA foreign_keys = ON");
   const db = drizzle(client, { schema });
   return { db, client };

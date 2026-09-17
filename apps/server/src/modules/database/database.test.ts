@@ -1,6 +1,11 @@
+import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { createTestDatabase } from "../../shared/test/database.test-utils.js";
+import { createDatabase } from "./database.js";
 
 describe("database", () => {
   it("applies migrations to an in-memory database", async () => {
@@ -35,5 +40,27 @@ describe("database", () => {
       sql`select name from sqlite_master where type = 'table' and name = 'sort_evaluations'`,
     );
     expect(rows.length).toBe(1);
+  });
+
+  it("holds a file database to a single pooled connection", async () => {
+    // An in-memory database is always a single connection regardless of client config, so
+    // this has to use a real file to exercise the pool. Without forcing `concurrency: 1`,
+    // a query issued while a transaction holds the only known connection would silently
+    // open a second one instead of waiting for the first to be released.
+    const filePath = join(tmpdir(), `docmind-test-${randomUUID()}.db`);
+    const { client } = await createDatabase({ url: `file:${filePath}` });
+    try {
+      const tx = await client.transaction();
+      try {
+        await expect(client.execute("select 1")).rejects.toThrow(/single connection/i);
+      } finally {
+        await tx.rollback();
+      }
+    } finally {
+      client.close();
+      await rm(filePath, { force: true });
+      await rm(`${filePath}-wal`, { force: true });
+      await rm(`${filePath}-shm`, { force: true });
+    }
   });
 });
