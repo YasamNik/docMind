@@ -12,6 +12,7 @@ import { createStorageService } from "../storage/storage.usecases.js";
 import { createTagsService } from "../tags/tags.usecases.js";
 import { createDocumentsRepository } from "./documents.repository.js";
 import { createDocumentsService } from "./documents.usecases.js";
+import type { NewDocument } from "./documents.types.js";
 
 let root: string;
 let documents: ReturnType<typeof createDocumentsService>;
@@ -204,5 +205,54 @@ describe("documents service filters and enrichment", () => {
     expect(renamed.name).toBe("renamed.txt");
     expect(renamed).toHaveProperty("categoryPath");
     expect(Array.isArray(renamed.tags)).toBe(true);
+  });
+
+  it("needs_review includes a document with a pending proposal even when it already has a category", async () => {
+    const { db: testDb } = await createTestDatabase();
+    const docsRepo = createDocumentsRepository({ db: testDb });
+    const { createRulesRepository } = await import("../rules/rules.repository.js");
+    const rulesRepo = createRulesRepository({ db: testDb });
+    const t = new Date().toISOString();
+    const doc: NewDocument = {
+      id: "doc_0000000000000001",
+      userId: "user-1",
+      name: "a.txt",
+      mimeType: "text/plain",
+      sizeBytes: 1,
+      contentHash: "hash",
+      storageDriver: "local",
+      storageKey: "key",
+      extractedText: "",
+      extractionStatus: "done",
+      extractionError: null,
+      ruleStatus: "done",
+      ruleError: null,
+      embeddingStatus: "pending",
+      embeddingError: null,
+      categoryId: "cat_0000000000000001",
+      categorySource: "manual",
+      createdAt: t,
+      updatedAt: t,
+    };
+    await docsRepo.insert(doc);
+    await rulesRepo.insertEvaluations([
+      {
+        id: "eval_0000000000000001",
+        documentId: doc.id,
+        targetType: "category",
+        targetId: "cat_0000000000000002",
+        matched: 1,
+        confidence: 0.9,
+        reasoning: "x",
+        outcome: "proposed",
+        proposalKind: "set_category",
+        modelId: "openrouter://test",
+        jobId: "job_0000000000000001",
+        contentHash: null,
+        evaluatedAt: t,
+      },
+    ]);
+    const rows = await docsRepo.listByUser({ userId: "user-1", view: "needs_review" });
+    expect(rows.map((r) => r.id)).toEqual([doc.id]);
   });
 });

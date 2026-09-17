@@ -33,6 +33,7 @@ import { createSettingsRegistry } from "./modules/settings/settings.registry.js"
 import { registerSettingsRoutes } from "./modules/settings/settings.routes.js";
 import { createSettingsService } from "./modules/settings/settings.usecases.js";
 import { createStorageService } from "./modules/storage/storage.usecases.js";
+import { registerRulesRoutes } from "./modules/rules/rules.routes.js";
 import { createRulesService } from "./modules/rules/rules.usecases.js";
 import { registerTagsRoutes } from "./modules/tags/tags.routes.js";
 import { createTagsService } from "./modules/tags/tags.usecases.js";
@@ -148,6 +149,7 @@ export function createServer({
   registerJobsRoutes({ app, jobsService, getUserId });
   registerAiRoutes({ app, aiService, settingsService, getUserId });
   registerTagsRoutes({ app, tagsService, getUserId });
+  registerRulesRoutes({ app, rulesService, getUserId });
 
   return { app, auth, settingsService, storageService, documentsService, jobsService, extractionService, jobRunner, ocrEngine, aiService, tagsService, rulesService, getUserId };
 }

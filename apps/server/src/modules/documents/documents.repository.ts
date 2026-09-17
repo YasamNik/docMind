@@ -1,6 +1,7 @@
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import type { Database } from "../database/database.js";
 import { buildCategoryPaths, collectDescendantIds } from "../tags/tags.models.js";
+import { sortEvaluationsTable } from "../rules/rules.tables.js";
 import { categoriesTable, documentTagsTable, tagsTable } from "../tags/tags.tables.js";
 import type { TagChip } from "../tags/tags.types.js";
 import { documentsTable } from "./documents.tables.js";
@@ -77,7 +78,12 @@ export function createDocumentsRepository({ db }: { db: Database }) {
       if (view === "inbox") conditions.push(inArray(documentsTable.ruleStatus, ["pending", "processing"]));
       if (view === "needs_review") {
         conditions.push(eq(documentsTable.ruleStatus, "done"));
-        conditions.push(isNull(documentsTable.categoryId));
+        const proposedRows = await db
+          .selectDistinct({ documentId: sortEvaluationsTable.documentId })
+          .from(sortEvaluationsTable)
+          .where(eq(sortEvaluationsTable.outcome, "proposed"));
+        const proposedIds = proposedRows.map((r) => r.documentId);
+        conditions.push(proposedIds.length > 0 ? or(isNull(documentsTable.categoryId), inArray(documentsTable.id, proposedIds))! : isNull(documentsTable.categoryId));
       }
       if (categoryId) {
         const categories = await db.select().from(categoriesTable).where(eq(categoriesTable.userId, userId));
