@@ -11,6 +11,10 @@ export type DocumentRow = {
   categoryId: string | null;
   categoryPath: string | null;
   tags: TagChip[];
+  summary: string | null;
+  suggestedTitle: string | null;
+  summaryStatus: "pending" | "processing" | "done" | "failed";
+  summaryError: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -44,6 +48,9 @@ export const documentsApi = {
   },
   async reextract(id: string) {
     return (await api.json<{ job: { id: string; status: string } }>("POST", `/api/documents/${id}/extract`, {})).job;
+  },
+  async acceptTitle(id: string) {
+    return (await api.json<{ document: DocumentDetail }>("POST", `/api/documents/${id}/accept-title`, {})).document;
   },
   fileUrl(id: string, download = false) {
     return `/api/documents/${id}/file${download ? "?download=1" : ""}`;

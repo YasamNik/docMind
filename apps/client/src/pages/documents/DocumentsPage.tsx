@@ -60,6 +60,7 @@ export function DocumentsPage() {
                   <Link to={`/documents/${d.id}`} className="underline-offset-2 hover:underline">
                     {d.name}
                   </Link>
+                  {d.summary && <p className="text-xs text-muted-foreground line-clamp-1">{d.summary}</p>}
                 </TableCell>
                 <TableCell className="text-muted-foreground">{d.categoryPath ?? "None"}</TableCell>
                 <TableCell>

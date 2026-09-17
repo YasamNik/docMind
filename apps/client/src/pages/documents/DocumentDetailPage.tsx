@@ -243,10 +243,20 @@ export function DocumentDetailPage() {
     },
     onError: (e: Error) => toast.error(e.message),
   });
+  const acceptTitle = useMutation({
+    mutationFn: () => documentsApi.acceptTitle(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["documents", id] });
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
+      toast.success("Title updated");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   if (!document) return null;
 
   const extractionBadgeVariant = document.extractionStatus === "failed" ? "destructive" : document.extractionStatus === "done" ? "accent2" : "neutral";
+  const hasSuggestedTitle = Boolean(document.suggestedTitle && document.suggestedTitle !== document.name);
 
   return (
     <div className="space-y-6">
@@ -285,6 +295,16 @@ export function DocumentDetailPage() {
         </div>
       </div>
 
+      {hasSuggestedTitle && (
+        <div className="flex flex-wrap items-center gap-2 rounded-full bg-org-accent-100 px-3 py-1.5 text-org-accent-800">
+          <Badge variant="accent">Suggested title</Badge>
+          <span className="text-sm">{document.suggestedTitle}</span>
+          <Button size="sm" variant="secondary" className="rounded-full" onClick={() => acceptTitle.mutate()} disabled={acceptTitle.isPending}>
+            Accept
+          </Button>
+        </div>
+      )}
+
       <div className="flex flex-col gap-3">
         <CategoryPicker document={document} id={id} queryClient={queryClient} />
         <TagPicker document={document} id={id} queryClient={queryClient} />
@@ -314,6 +334,24 @@ export function DocumentDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      {(document.summary || document.summaryStatus === "processing" || document.summaryStatus === "failed") && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0">
+            <CardTitle className="text-base flex items-center gap-2">
+              Summary
+              {document.summaryStatus === "processing" && <Badge variant="neutral">Summarizing...</Badge>}
+              {document.summaryStatus === "failed" && <Badge variant="destructive">Failed</Badge>}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {document.summaryStatus === "failed" && document.summaryError && (
+              <p className="text-sm text-muted-foreground mb-2">{document.summaryError}</p>
+            )}
+            {document.summary && <p className="text-sm">{document.summary}</p>}
+          </CardContent>
+        </Card>
+      )}
 
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
         <DialogContent>

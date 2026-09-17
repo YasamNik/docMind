@@ -18,6 +18,10 @@ const documentDetail = {
   categoryPath: null,
   categorySource: null,
   tags: [{ id: "tag_1", name: "Rent", color: null, auto: false, manual: true }],
+  summary: null as string | null,
+  suggestedTitle: null as string | null,
+  summaryStatus: "done" as "pending" | "processing" | "done" | "failed",
+  summaryError: null as string | null,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
@@ -26,6 +30,7 @@ const getMock = vi.fn(async () => documentDetail);
 const setCategoryMock = vi.fn(async (_id: string, categoryId: string | null) => ({ ...documentDetail, categoryId }));
 const addTagMock = vi.fn(async (_id: string, _tagId: string) => [...documentDetail.tags, { id: "tag_2", name: "Bills", color: null, auto: false, manual: true }]);
 const removeTagMock = vi.fn(async (_id: string, _tagId: string) => []);
+const acceptTitleMock = vi.fn(async (_id: string) => ({ ...documentDetail, name: documentDetail.suggestedTitle ?? documentDetail.name, suggestedTitle: null }));
 
 vi.mock("@/lib/documents-api", () => ({
   documentsApi: {
@@ -34,6 +39,7 @@ vi.mock("@/lib/documents-api", () => ({
     rename: vi.fn(),
     remove: vi.fn(),
     reextract: vi.fn(),
+    acceptTitle: (id: string) => acceptTitleMock(id),
   },
 }));
 
@@ -145,5 +151,57 @@ describe("DocumentDetailPage rules", () => {
     renderPage();
     await screen.findByText("Rent");
     expect(screen.queryByText(/Review proposals/)).not.toBeInTheDocument();
+  });
+});
+
+describe("DocumentDetailPage summary", () => {
+  afterEach(() => {
+    getMock.mockImplementation(async () => documentDetail);
+  });
+
+  it("shows the summary card when a summary is present", async () => {
+    getMock.mockImplementationOnce(async () => ({ ...documentDetail, summary: "A short summary of the invoice." }));
+    renderPage();
+    expect(await screen.findByText("A short summary of the invoice.")).toBeInTheDocument();
+  });
+
+  it("shows no summary card when there is no summary and status is done", async () => {
+    renderPage();
+    await screen.findByText("Rent");
+    expect(screen.queryByText("Summary")).not.toBeInTheDocument();
+  });
+
+  it("shows a summarizing indicator while summaryStatus is processing", async () => {
+    getMock.mockImplementationOnce(async () => ({ ...documentDetail, summaryStatus: "processing" as const }));
+    renderPage();
+    expect(await screen.findByText("Summarizing...")).toBeInTheDocument();
+  });
+
+  it("shows the error when summaryStatus is failed", async () => {
+    getMock.mockImplementationOnce(async () => ({ ...documentDetail, summaryStatus: "failed" as const, summaryError: "Model timed out" }));
+    renderPage();
+    expect(await screen.findByText("Model timed out")).toBeInTheDocument();
+  });
+
+  it("shows a suggested title badge and accepts it", async () => {
+    getMock.mockImplementationOnce(async () => ({ ...documentDetail, suggestedTitle: "January Invoice" }));
+    renderPage();
+    expect(await screen.findByText("Suggested title")).toBeInTheDocument();
+    expect(screen.getByText("January Invoice")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Accept"));
+    await waitFor(() => expect(acceptTitleMock).toHaveBeenCalledWith("doc_1"));
+  });
+
+  it("hides the badge when there is no suggested title", async () => {
+    renderPage();
+    await screen.findByText("Rent");
+    expect(screen.queryByText("Suggested title")).not.toBeInTheDocument();
+  });
+
+  it("hides the badge when the suggested title matches the current name", async () => {
+    getMock.mockImplementationOnce(async () => ({ ...documentDetail, suggestedTitle: documentDetail.name }));
+    renderPage();
+    await screen.findByText("Rent");
+    expect(screen.queryByText("Suggested title")).not.toBeInTheDocument();
   });
 });

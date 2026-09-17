@@ -20,6 +20,10 @@ const listMock = vi.fn(async (_filters?: unknown) => [
       { id: "tag_1", name: "Rent", color: null, auto: false, manual: true },
       { id: "tag_2", name: "Bills", color: null, auto: true, manual: false },
     ],
+    summary: "A rent invoice for January.",
+    suggestedTitle: null,
+    summaryStatus: "done",
+    summaryError: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   },
@@ -47,6 +51,11 @@ describe("DocumentsPage", () => {
     renderAt("/documents");
     expect(await screen.findByText("Finance / Tax")).toBeInTheDocument();
     expect(screen.getByText("Rent")).toBeInTheDocument();
+  });
+
+  it("shows a summary snippet below the document name", async () => {
+    renderAt("/documents");
+    expect(await screen.findByText("A rent invoice for January.")).toBeInTheDocument();
   });
 
   it("marks an auto-applied tag chip", async () => {
