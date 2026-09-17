@@ -3,7 +3,7 @@
 Newest entry first. The `end-session` skill appends one entry per session. Each entry has
 four parts: Done, Decisions, Comments (the user's words, not a paraphrase), Open / Next.
 
-Active branch: `feat/milestone-c2`
+Active branch: `main`
 
 ## 2026-09-17: Milestone C2 built overnight
 
