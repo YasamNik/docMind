@@ -38,4 +38,22 @@ describe("documentsApi", () => {
     expect(progress).toContain(50);
     vi.unstubAllGlobals();
   });
+
+  it("builds the query string from filters", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ documents: [] }), { status: 200 }));
+    await documentsApi.list({ categoryId: "cat_1", tagId: "tag_1", view: "inbox" });
+    expect(fetchSpy).toHaveBeenCalledWith("/api/documents?categoryId=cat_1&tagId=tag_1&view=inbox", expect.anything());
+  });
+
+  it('omits view from the query string when it is "all" or absent', async () => {
+    // A fresh Response per call: mockResolvedValue would hand back the same instance for
+    // both calls below, and a Response body can only be read once.
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(JSON.stringify({ documents: [] }), { status: 200 }));
+    await documentsApi.list({ view: "all" });
+    await documentsApi.list();
+    expect(fetchSpy).toHaveBeenNthCalledWith(1, "/api/documents", expect.anything());
+    expect(fetchSpy).toHaveBeenNthCalledWith(2, "/api/documents", expect.anything());
+  });
 });

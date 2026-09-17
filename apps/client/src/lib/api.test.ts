@@ -15,4 +15,14 @@ describe("api client", () => {
     );
     await expect(api.get("/api/documents/doc_x")).rejects.toMatchObject({ code: "documents.not_found", status: 404 } satisfies Partial<ApiError>);
   });
+
+  it("del resolves to undefined on a 204", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
+    expect(await api.del("/api/documents/doc_1")).toBeUndefined();
+  });
+
+  it("del returns a parsed body when the server sends one", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ tags: [] }), { status: 200 }));
+    expect(await api.del<{ tags: unknown[] }>("/api/documents/doc_1/tags/tag_1")).toEqual({ tags: [] });
+  });
 });

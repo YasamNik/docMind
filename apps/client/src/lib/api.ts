@@ -37,7 +37,7 @@ export const api = {
       body: JSON.stringify(body),
     }).then((r) => handle<T>(r));
   },
-  del(path: string) {
-    return fetch(path, { method: "DELETE", credentials: "include" }).then((r) => handle<void>(r));
+  del<T = void>(path: string) {
+    return fetch(path, { method: "DELETE", credentials: "include" }).then((r) => handle<T>(r));
   },
 };

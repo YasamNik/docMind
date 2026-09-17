@@ -10,7 +10,7 @@ export function DocumentsPage() {
   const queryClient = useQueryClient();
   const { data: documents = [], isLoading } = useQuery({
     queryKey: ["documents"],
-    queryFn: documentsApi.list,
+    queryFn: () => documentsApi.list(),
     refetchInterval: (query) => (query.state.data?.some((d) => d.extractionStatus === "pending" || d.extractionStatus === "processing") ? 3000 : false),
   });
 

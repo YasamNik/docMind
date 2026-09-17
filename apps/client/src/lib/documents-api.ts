@@ -1,4 +1,5 @@
 import { api, ApiError } from "./api";
+import type { TagChip } from "./tags-api";
 
 export type DocumentRow = {
   id: string;
@@ -7,17 +8,27 @@ export type DocumentRow = {
   sizeBytes: number | null;
   extractionStatus: "pending" | "processing" | "done" | "failed";
   extractionError: string | null;
+  categoryId: string | null;
+  categoryPath: string | null;
+  tags: TagChip[];
   createdAt: string;
   updatedAt: string;
 };
 
-export type DocumentDetail = DocumentRow & { extractedText: string | null };
+export type DocumentDetail = DocumentRow & { extractedText: string | null; categorySource: "manual" | "auto" | null };
 
 export type UploadResult = { document: DocumentDetail; duplicateOf?: string };
 
+export type DocumentListFilters = { categoryId?: string; tagId?: string; view?: "inbox" | "needs_review" | "all" };
+
 export const documentsApi = {
-  async list() {
-    return (await api.get<{ documents: DocumentRow[] }>("/api/documents")).documents;
+  async list(filters: DocumentListFilters = {}) {
+    const params = new URLSearchParams();
+    if (filters.categoryId) params.set("categoryId", filters.categoryId);
+    if (filters.tagId) params.set("tagId", filters.tagId);
+    if (filters.view && filters.view !== "all") params.set("view", filters.view);
+    const qs = params.toString();
+    return (await api.get<{ documents: DocumentRow[] }>(`/api/documents${qs ? `?${qs}` : ""}`)).documents;
   },
   async get(id: string) {
     return (await api.get<{ document: DocumentDetail }>(`/api/documents/${id}`)).document;
