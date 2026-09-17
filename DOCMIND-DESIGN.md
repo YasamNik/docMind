@@ -90,21 +90,44 @@ documents (
 )
 
 -- Categorization
-categories (id, user_id, name, parent_id, color)
-tags (id, user_id, name, color)
+categories (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,                    -- unique among siblings, case-insensitive
+  parent_id TEXT,                        -- null at the root; no cycles
+  color TEXT,
+  description TEXT NOT NULL DEFAULT '',  -- up to 2000 characters; the plain-language rule
+  confidence_threshold REAL NOT NULL DEFAULT 0.7,
+  auto_apply INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+)
+tags (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,                    -- unique per user, case-insensitive
+  color TEXT,
+  description TEXT NOT NULL DEFAULT '',  -- up to 300 characters; the plain-language rule
+  confidence_threshold REAL NOT NULL DEFAULT 0.7,
+  auto_apply INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+)
 document_tags (
-  document_id TEXT NOT NULL,
-  tag_id TEXT NOT NULL,
-  applied_by_rule INTEGER NOT NULL DEFAULT 0,
+  document_id TEXT NOT NULL,             -- ON DELETE CASCADE to documents
+  tag_id TEXT NOT NULL,                  -- ON DELETE CASCADE to tags
   applied_by_manual INTEGER NOT NULL DEFAULT 0,
+  applied_by_auto INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (document_id, tag_id)
 )
-document_categories (same shape, with category_id)
--- One row per pair. A rule and a manual action can both apply the same tag; each
--- source is tracked and removed independently. The row goes away when both are 0.
--- On re-evaluation or rule deletion, applied_by_rule is set to 0 for a pair only when
--- no remaining active rule with a passing evaluation targets that tag for that
--- document. rule_evaluations is the record used to decide that.
+-- documents also carries category_id (nullable) and category_source ('manual' | 'auto' |
+-- null): a document has at most one category, so there is no document_categories table.
+-- One document_tags row per pair. A rule and a manual action can both apply the same
+-- tag; each source is tracked and removed independently. The row goes away when both
+-- flags are 0. There is no separate rules table: a non-empty description plus
+-- auto_apply on a tag or category is the rule. The sorting engine (Milestone C,
+-- plan C3) adds a sort_evaluations table and the cleanup logic for applied_by_auto.
 
 -- Rules Engine
 rules (
@@ -282,8 +305,10 @@ the key, because Google Drive and OneDrive address files by id rather than path.
 settings definitions, an optional OAuth hook, a setup guide, and a factory.
 
 **Drivers.**
-- **Local.** Root path, default `./documents`. Keys are `userId/documentId/filename`,
-  resolved inside the root with traversal rejected. Guide: absolute paths, permissions,
+- **Local.** Root path, default `./documents`. Keys are
+  `userId/yyyy/mm/documentId/filename` using the upload time in UTC, so no folder grows
+  without bound, resolved inside the root with traversal rejected. Existing keys are not
+  migrated when this format changed in Milestone C. Guide: absolute paths, permissions,
   Docker volumes.
 - **S3 compatible.** Bucket, region, optional endpoint, path-style flag, key prefix,
   access key id, secret. Health check is head-bucket. Guide: IAM user with a minimal
