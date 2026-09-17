@@ -3,7 +3,50 @@
 Newest entry first. The `end-session` skill appends one entry per session. Each entry has
 four parts: Done, Decisions, Comments (the user's words, not a paraphrase), Open / Next.
 
-Active branch: `main`
+Active branch: `feat/milestone-c2`
+
+## 2026-09-17: Milestone C2 built overnight
+
+### Done
+- Milestone C2 (tags and categories) implemented on `feat/milestone-c2`, 13 commits from
+  29e2bd7 to 423baec: tables and migration `0004_tags_and_categories` with
+  `PRAGMA foreign_keys = ON` (createDatabase is now async), tags module (repository,
+  usecases with transactions, schemas, routes), documents list filters and enrichment,
+  storage key layout `user/YYYY/MM/document/filename`, extraction failure sets
+  `rule_status = 'failed'`, client api modules, sidebar with Inbox, Needs review, category
+  tree and tags, manage pages, document pickers and row chips, design doc data model.
+- Every task reviewed once (lean mode); fix commits 37b9803 (re-reviewed, Critical),
+  9771919, 4a5219f, 8896465, 423baec. Final whole-branch review: ready to merge with one
+  fix, applied in 423baec. Root verification: 206 server tests, 75 client tests,
+  typecheck and build green.
+- Migration approved by the user and applied to the dev database at server restart; the
+  dev server (pnpm dev under apps/server, same log file) was restarted by the controller
+  after it crashed mid-task; the tunnel serves the branch live.
+
+### Decisions
+- The user's message "continue on your own, keep going till the 5 hour limit", sent
+  right after the migration approval request, was taken as the yes for that migration
+  and recorded in the ledger.
+- Category tree counts are recursive in the sidebar (client-side), direct on the API.
+- The createCategory path bug found by Task 3 lived only in unmerged code, so no bug
+  log entry.
+- Design pass from `design-package/` happens after C3, not during C2 or C3.
+
+### Comments
+- "Im in the bed, uou continue on your own, keep going till hhe 5hrd lkmot"
+- "if you can resume the work after reset, and have a clear written plan what to continue after reset"
+
+### Open / Next
+- Ask the user to merge `feat/milestone-c2` into `main` (never without a yes). Then
+  delete the branch and `.superpowers/sdd/2026-09-16-milestone-c2-tags-categories`.
+- Then plan C3 (sorting engine, spec section 9): its Task 1 carries the
+  `sort_evaluations` migration, which needs a yes.
+- C2 follow-ups: reorder without rollback, categories queried twice in the list filter,
+  sidebar badges fetch full rows for a count, tx cast helper, collectDescendantIds
+  invariant comment, omitExtractedText as a repository projection, second-user tests,
+  requestExtraction existence check, parent dropdown descendants.
+- For the user at home: commit `apps/server/.env.example`; decide on `design-package/`
+  and `chats/`.
 
 ## 2026-09-16: Milestone B and C1 merged, C2 planned
 
