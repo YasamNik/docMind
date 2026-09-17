@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Briefcase, FileText, LogOut, Settings, Sparkles, Tags as TagsIcon } from "lucide-react";
+import { Briefcase, FileText, LogOut, Search, Settings, Sparkles, Tags as TagsIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
@@ -13,10 +13,11 @@ import { CategoryTreeNav } from "./CategoryTreeNav";
 // it shows that section's links. Pattern similar to editors like VS Code that pair an
 // activity bar with a contextual side panel.
 
-type RailTab = "files" | "tags" | "sorting" | "settings" | "jobs";
+type RailTab = "files" | "search" | "tags" | "sorting" | "settings" | "jobs";
 
 const railItems: { tab: RailTab; label: string; to: string; icon: LucideIcon }[] = [
   { tab: "files", label: "Files", to: "/documents", icon: FileText },
+  { tab: "search", label: "Search", to: "/search", icon: Search },
   { tab: "tags", label: "Tags", to: "/tags", icon: TagsIcon },
   { tab: "sorting", label: "Sorting", to: "/sorting", icon: Sparkles },
   { tab: "settings", label: "Settings", to: "/settings", icon: Settings },
@@ -24,6 +25,7 @@ const railItems: { tab: RailTab; label: string; to: string; icon: LucideIcon }[]
 ];
 
 function tabForPath(pathname: string): RailTab {
+  if (pathname.startsWith("/search")) return "search";
   if (pathname.startsWith("/tags") || pathname.startsWith("/categories")) return "tags";
   if (pathname.startsWith("/sorting")) return "sorting";
   if (pathname.startsWith("/settings")) return "settings";
@@ -157,6 +159,19 @@ function FilesPanel({
   );
 }
 
+function SearchPanel() {
+  return (
+    <>
+      <span className="font-heading text-lg">Search</span>
+      <nav className="flex flex-col gap-1">
+        <NavLink to="/search" className={navPillClass}>
+          Search documents
+        </NavLink>
+      </nav>
+    </>
+  );
+}
+
 function TagsPanel({ tags, categories }: { tags: TagRow[]; categories: CategoryRow[] }) {
   return (
     <>
@@ -225,6 +240,7 @@ export function AppShell() {
         {activeTab === "files" && (
           <FilesPanel inboxCount={counts.inbox} needsReviewCount={counts.needsReview} categories={categories} tags={tags} />
         )}
+        {activeTab === "search" && <SearchPanel />}
         {activeTab === "tags" && <TagsPanel tags={tags} categories={categories} />}
         {activeTab === "sorting" && <SortingPanel automaticCount={countAutomaticItems(tags, categories)} />}
         {activeTab === "settings" && <SettingsPanel />}
