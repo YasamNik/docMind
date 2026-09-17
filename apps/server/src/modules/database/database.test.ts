@@ -42,6 +42,32 @@ describe("database", () => {
     expect(rows.length).toBe(1);
   });
 
+  it("creates the document_chunks table and the documents summary columns", async () => {
+    const { db } = await createTestDatabase();
+    const tables = await db.all<{ name: string }>(
+      sql`select name from sqlite_master where type = 'table' and name = 'document_chunks'`,
+    );
+    expect(tables.length).toBe(1);
+    const columns = await db.all<{ name: string }>(sql`pragma table_info(documents)`);
+    const names = columns.map((c) => c.name);
+    expect(names).toContain("summary");
+    expect(names).toContain("suggested_title");
+    expect(names).toContain("summary_status");
+    expect(names).toContain("summary_error");
+  });
+
+  it("creates the document_chunks_fts virtual table and content-sync triggers", async () => {
+    const { db } = await createTestDatabase();
+    const virtualTables = await db.all<{ name: string }>(
+      sql`select name from sqlite_master where type = 'table' and name = 'document_chunks_fts'`,
+    );
+    expect(virtualTables.length).toBe(1);
+    const triggers = await db.all<{ name: string }>(
+      sql`select name from sqlite_master where type = 'trigger' and name like 'document_chunks_fts_%'`,
+    );
+    expect(triggers.map((t) => t.name).sort()).toEqual(["document_chunks_fts_ad", "document_chunks_fts_ai"]);
+  });
+
   it("holds a file database to a single pooled connection", async () => {
     // An in-memory database is always a single connection regardless of client config, so
     // this has to use a real file to exercise the pool. Without forcing `concurrency: 1`,

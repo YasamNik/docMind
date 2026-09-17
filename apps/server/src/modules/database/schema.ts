@@ -5,3 +5,4 @@ export * from "../documents/documents.tables.js";
 export * from "../jobs/jobs.tables.js";
 export * from "../tags/tags.tables.js";
 export * from "../rules/rules.tables.js";
+export * from "../search/search.tables.js";
