@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { UploadIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { documentsApi, type UploadResult } from "@/lib/documents-api";
@@ -66,8 +67,13 @@ export function UploadDropzone({ onUploaded }: { onUploaded: (result: UploadResu
         setOver(false);
         if (e.dataTransfer.files.length) void uploadAll(e.dataTransfer.files);
       }}
-      className={`rounded-lg border-2 border-dashed p-6 text-center ${over ? "border-primary bg-muted" : "border-muted-foreground/30"}`}
+      className={`rounded-[1.75rem] border-[1.5px] border-dashed border-foreground/20 p-8 text-center transition-colors ${over ? "bg-primary/10" : "bg-primary/5"}`}
     >
+      <div className="mb-3 flex justify-center">
+        <span className="flex size-12 items-center justify-center rounded-full bg-org-accent-200 text-org-accent-800">
+          <UploadIcon className="size-5" />
+        </span>
+      </div>
       <p className="text-sm text-muted-foreground mb-3">Drop files here, paste with Ctrl+V, or</p>
       <input
         ref={inputRef}

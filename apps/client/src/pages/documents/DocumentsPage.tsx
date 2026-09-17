@@ -28,7 +28,7 @@ export function DocumentsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2">
-        <h1 className="text-xl font-semibold">{filterLabel ?? "Documents"}</h1>
+        <h1 className="font-heading text-2xl">{filterLabel ?? "Documents"}</h1>
         {hasFilter && (
           <Link to="/documents" className="text-xs text-muted-foreground underline-offset-2 hover:underline">
             Clear filter
@@ -65,9 +65,9 @@ export function DocumentsPage() {
                 <TableCell>
                   <div className="flex flex-wrap gap-1">
                     {d.tags.map((t) => (
-                      <Badge key={t.id} variant="outline" className="gap-1">
+                      <Badge key={t.id} variant={t.auto ? "accent2" : "accent"} className="gap-1">
                         {t.name}
-                        {t.auto && <span className="text-xs text-muted-foreground">(auto)</span>}
+                        {t.auto && <span className="text-xs opacity-70">(auto)</span>}
                       </Badge>
                     ))}
                   </div>
