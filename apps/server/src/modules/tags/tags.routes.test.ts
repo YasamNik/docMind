@@ -44,6 +44,20 @@ describe("tags and categories routes", () => {
     const dup = await app.request("/api/tags", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "rent" }) });
     expect(dup.status).toBe(409);
     expect((await dup.json()).error.code).toBe("tags.duplicate_name");
+
+    const tooLongName = await app.request("/api/tags", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ name: "a".repeat(61) }),
+    });
+    expect(tooLongName.status).toBe(400);
+
+    const badThreshold = await app.request("/api/tags", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Utilities", confidenceThreshold: 1.5 }),
+    });
+    expect(badThreshold.status).toBe(400);
   });
 
   it("creates nested categories, moves one, and rejects a cycle", async () => {
@@ -94,7 +108,9 @@ describe("tags and categories routes", () => {
       headers: { cookie, "content-type": "application/json" },
       body: JSON.stringify({ categoryId: category.id }),
     });
-    expect((await setCategory.json()).document).toMatchObject({ categoryId: category.id, categorySource: "manual" });
+    const setCategoryBody = await setCategory.json();
+    expect(setCategoryBody.document).toMatchObject({ categoryId: category.id, categorySource: "manual" });
+    expect(Object.keys(setCategoryBody.document)).not.toContain("extractedText");
 
     const addTag = await app.request(`/api/documents/${document.id}/tags/${tag.id}`, { method: "POST", headers: { cookie } });
     expect((await addTag.json()).tags).toEqual([{ id: tag.id, name: "Rent", color: null, auto: false, manual: true }]);
@@ -107,7 +123,9 @@ describe("tags and categories routes", () => {
       headers: { cookie, "content-type": "application/json" },
       body: JSON.stringify({ categoryId: null }),
     });
-    expect((await clearCategory.json()).document).toMatchObject({ categoryId: null, categorySource: null });
+    const clearCategoryBody = await clearCategory.json();
+    expect(clearCategoryBody.document).toMatchObject({ categoryId: null, categorySource: null });
+    expect(Object.keys(clearCategoryBody.document)).not.toContain("extractedText");
 
     const missing = await app.request(`/api/documents/doc_0000000000000000/category`, {
       method: "PUT",
