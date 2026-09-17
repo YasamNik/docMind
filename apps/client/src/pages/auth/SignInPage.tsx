@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -59,6 +59,11 @@ export function SignInPage() {
               <Label htmlFor="password">Password</Label>
               <Input id="password" type="password" required minLength={9} value={password} onChange={(e) => setPassword(e.target.value)} />
               {!hasUsers && <p className="text-xs text-muted-foreground mt-1">At least 9 characters. This is the only account; sign up closes after it.</p>}
+              {hasUsers && (
+                <Link to="/forgot-password" className="text-xs text-primary hover:underline mt-1 inline-block">
+                  Forgot password?
+                </Link>
+              )}
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" disabled={busy}>

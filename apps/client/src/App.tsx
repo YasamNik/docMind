@@ -11,6 +11,8 @@ import { JobsPage } from "@/pages/jobs/JobsPage";
 import { SettingsPage } from "@/pages/settings/SettingsPage";
 import { SortingPage } from "@/pages/sorting/SortingPage";
 import { TagsPage } from "@/pages/tags/TagsPage";
+import { ForgotPasswordPage } from "@/pages/auth/ForgotPasswordPage";
+import { ResetPasswordPage } from "@/pages/auth/ResetPasswordPage";
 
 const queryClient = new QueryClient();
 
@@ -27,6 +29,8 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/sign-in" element={<SignInPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route
             element={
               <RequireSession>

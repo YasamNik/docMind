@@ -14,7 +14,13 @@ export function createAuth({ db, config }: { db: Database; config: AuthConfig })
     basePath: "/api/auth",
     trustedOrigins: [config.clientBaseUrl, config.serverBaseUrl, "https://*.trycloudflare.com"],
     database: drizzleAdapter(db, { provider: "sqlite", schema: authTables }),
-    emailAndPassword: { enabled: true, minPasswordLength: 9 },
+    emailAndPassword: {
+      enabled: true,
+      minPasswordLength: 9,
+      sendResetPassword: async ({ user, url }) => {
+        console.log(`\n[DocMind] Password reset link for ${user.email}:\n${url}\n`);
+      },
+    },
     session: { cookieCache: { enabled: true, maxAge: 5 * 60 } },
     databaseHooks: {
       user: {
