@@ -12,6 +12,7 @@ const definitions = [
   defineSetting({ key: "test.color", schema: v.string(), env: "TEST_COLOR", default: "blue", doc: "A color" }),
   defineSetting({ key: "test.apiKey", schema: v.string(), env: "TEST_API_KEY", secret: true, doc: "A key" }),
   defineSetting({ key: "test.limit", schema: v.number(), default: 25, doc: "A number" }),
+  defineSetting({ key: "test.internalDimension", schema: v.number(), internal: true, default: 0, doc: "Internal only" }),
 ];
 
 function service(env: Record<string, string | undefined> = {}) {
@@ -93,5 +94,40 @@ describe("settings service", () => {
     expect(await s.get(user, "test.limit")).toBe(5);
     await s.set(user, { "test.limit": 6 });
     expect(await s.get(user, "test.limit")).toBe(6);
+  });
+
+  it("excludes internal settings from listResolved", async () => {
+    const s = await service();
+    const keys = (await s.listResolved(user)).map((r) => r.key);
+    expect(keys).not.toContain("test.internalDimension");
+    expect(keys).toContain("test.color");
+  });
+
+  it("rejects a public set() write to an internal key", async () => {
+    const s = await service();
+    await expectAppError(() => s.set(user, { "test.internalDimension": 1536 }), "settings.internal_only");
+  });
+
+  it("keeps other keys unwritten when a set() call touches an internal key", async () => {
+    const s = await service();
+    await expectAppError(
+      () => s.set(user, { "test.color": "red", "test.internalDimension": 1536 }),
+      "settings.internal_only",
+    );
+    expect(await s.get(user, "test.color")).toBe("blue");
+  });
+
+  it("setInternal writes and reads back an internal setting", async () => {
+    const s = await service();
+    await s.setInternal(user, "test.internalDimension", 1536);
+    expect(await s.get(user, "test.internalDimension")).toBe(1536);
+    expect(await s.getResolved(user, "test.internalDimension")).toMatchObject({ value: 1536, source: "db" });
+  });
+
+  it("setInternal throws when called on a non-internal setting", async () => {
+    const s = await service();
+    await expect(s.setInternal(user, "test.color", "red")).rejects.toThrow(
+      /setInternal called on non-internal setting/,
+    );
   });
 });

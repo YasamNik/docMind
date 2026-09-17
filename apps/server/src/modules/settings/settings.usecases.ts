@@ -101,7 +101,12 @@ export function createSettingsService({
     },
 
     async listResolved(userId: string): Promise<ResolvedSetting[]> {
-      return Promise.all(registry.all().map((d) => getResolvedFor(userId, d.key)));
+      return Promise.all(
+        registry
+          .all()
+          .filter((d) => !d.internal)
+          .map((d) => getResolvedFor(userId, d.key)),
+      );
     },
 
     async set(userId: string, updates: Record<string, unknown>) {
@@ -120,6 +125,13 @@ export function createSettingsService({
 
       for (const [key, value] of Object.entries(updates)) {
         const definition = registry.get(key);
+        if (definition.internal) {
+          throw createError({
+            code: "settings.internal_only",
+            message: `Setting "${key}" is managed internally and cannot be changed through the API`,
+            status: 403,
+          });
+        }
         const clears = value === null || (definition.secret && value === "");
         if (clears) {
           writes.push({ type: "remove", key });
@@ -150,6 +162,18 @@ export function createSettingsService({
         }
       }
 
+      cache.delete(userId);
+    },
+
+    // For other server modules only, never exposed through the API. Bypasses the
+    // internal-key rejection in set().
+    async setInternal(userId: string, key: string, value: unknown) {
+      const definition = registry.get(key);
+      if (!definition.internal) {
+        throw new Error(`setInternal called on non-internal setting "${key}"`);
+      }
+      const parsed = parseOrThrow(definition, value);
+      await repository.upsert({ userId, key, isSecret: false, value: JSON.stringify(parsed) });
       cache.delete(userId);
     },
 

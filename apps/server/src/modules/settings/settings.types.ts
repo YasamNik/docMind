@@ -6,6 +6,9 @@ export type SettingDefinition<T = unknown> = {
   env?: string;
   default?: T;
   secret: boolean;
+  // Internal settings are written by other server modules only. They never appear in
+  // GET /api/settings and PUT /api/settings rejects writes to them.
+  internal?: boolean;
   doc: string;
 };
 

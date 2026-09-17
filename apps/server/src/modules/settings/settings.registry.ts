@@ -8,9 +8,10 @@ export function defineSetting<T>(args: {
   env?: string;
   default?: T;
   secret?: boolean;
+  internal?: boolean;
   doc: string;
 }): SettingDefinition<T> {
-  return { secret: false, ...args };
+  return { secret: false, internal: args.internal ?? false, ...args };
 }
 
 export function createSettingsRegistry(definitions: SettingDefinition[]) {
