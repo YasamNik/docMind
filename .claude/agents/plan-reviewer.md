@@ -1,7 +1,7 @@
 ---
 name: plan-reviewer
 description: Use when a design spec, implementation plan, brainstorm output, or technical proposal for DocMind needs rigorous review before implementation begins. Surfaces backward compatibility risks, conflicts with the design doc and existing modules, overengineering, missing edge cases, and ambiguities. Invoke after a spec or plan is written and before the first task starts.
-model: opus
+model: sonnet
 color: purple
 memory: project
 tools: Read, Grep, Glob, Bash

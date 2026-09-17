@@ -1,7 +1,7 @@
 ---
 name: coder
 description: Use for implementing a well-specified task from a DocMind implementation plan, a bug fix with a known root cause, or a contained refactor. Best when the task names the files, the behavior, and the tests. Not for design decisions or open-ended exploration.
-model: opus
+model: sonnet
 color: blue
 tools: Read, Edit, Write, Grep, Glob, Bash
 ---

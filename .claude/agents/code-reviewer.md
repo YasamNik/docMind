@@ -1,7 +1,7 @@
 ---
 name: code-reviewer
 description: Use before every commit in the DocMind repo, and after any substantial change to a module, route, migration, settings definition, or storage driver. Performs regression impact analysis and reviews correctness, security, and adherence to project conventions. Reports findings ranked by severity with file and line references.
-model: opus
+model: sonnet
 color: yellow
 tools: Read, Grep, Glob, Bash
 ---
