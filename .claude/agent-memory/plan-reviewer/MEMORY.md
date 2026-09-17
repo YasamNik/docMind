@@ -6,3 +6,4 @@
 - [Milestone C1 plan review](review-plan-c1.md) -- module eval order bug, SDK extra_body error, provider settings lookup crash, 9 rulings
 - [Milestone C2 plan review](review-plan-c2.md) -- CategoryInput type gap, unverified PRAGMA foreign_keys, sidebar count mismatch, 8 rulings
 - [Milestone C3 plan review](review-plan-c3.md) -- missing proposals polling on Sorting page, 13 verified checks
+- [Phase 2 Find and Ask spec review](review-spec-phase2-find-and-ask.md) -- sqlite-vec/@libsql pooling infeasibility (verified in node_modules), unprotected internal setting, vec-wipe blast radius
