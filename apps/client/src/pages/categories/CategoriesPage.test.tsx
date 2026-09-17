@@ -1,7 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "@/lib/api";
 import { CategoriesPage } from "./CategoriesPage";
+
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 afterEach(() => {
   cleanup();
@@ -99,5 +103,33 @@ describe("CategoriesPage", () => {
     const dialog = within(screen.getByRole("dialog"));
     fireEvent.click(dialog.getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(removeMock).toHaveBeenCalledWith("cat_1"));
+  });
+
+  it("edits a category and saves the change", async () => {
+    renderPage();
+    fireEvent.click((await screen.findAllByText("Edit"))[0]);
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.change(dialog.getByLabelText("Name"), { target: { value: "Finance (updated)" } });
+    fireEvent.click(dialog.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(updateMock).toHaveBeenCalledWith("cat_1", {
+        name: "Finance (updated)",
+        parentId: null,
+        color: null,
+        description: "",
+        confidenceThreshold: 0.7,
+        autoApply: true,
+      }),
+    );
+  });
+
+  it("shows the server's error message when creating a duplicate category fails", async () => {
+    createMock.mockRejectedValueOnce(new ApiError({ code: "duplicate_name", message: 'A category named "Finance" already exists.', status: 409 }));
+    renderPage();
+    fireEvent.click(await screen.findByText("New category"));
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.change(dialog.getByLabelText("Name"), { target: { value: "Finance" } });
+    fireEvent.click(dialog.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('A category named "Finance" already exists.'));
   });
 });

@@ -48,15 +48,18 @@ vi.mock("@/lib/tags-api", () => ({
 }));
 
 function renderPage() {
-  return render(
+  const queryClient = new QueryClient();
+  const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+  render(
     <MemoryRouter initialEntries={["/documents/doc_1"]}>
-      <QueryClientProvider client={new QueryClient()}>
+      <QueryClientProvider client={queryClient}>
         <Routes>
           <Route path="/documents/:id" element={<DocumentDetailPage />} />
         </Routes>
       </QueryClientProvider>
     </MemoryRouter>,
   );
+  return { invalidateSpy };
 }
 
 describe("DocumentDetailPage pickers", () => {
@@ -76,5 +79,29 @@ describe("DocumentDetailPage pickers", () => {
 
     fireEvent.click(screen.getByLabelText("Remove Rent"));
     await waitFor(() => expect(removeTagMock).toHaveBeenCalledWith("doc_1", "tag_1"));
+  });
+
+  it("refreshes category and tag counts after changing the category", async () => {
+    const { invalidateSpy } = renderPage();
+    const select = await screen.findByDisplayValue("No category");
+    fireEvent.change(select, { target: { value: "cat_1" } });
+    await waitFor(() => expect(setCategoryMock).toHaveBeenCalled());
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["categories"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["tags"] });
+  });
+
+  it("refreshes category and tag counts after adding and removing a tag", async () => {
+    const { invalidateSpy } = renderPage();
+    const addSelect = await screen.findByDisplayValue("Add a tag");
+    fireEvent.change(addSelect, { target: { value: "tag_2" } });
+    await waitFor(() => expect(addTagMock).toHaveBeenCalled());
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["categories"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["tags"] });
+
+    invalidateSpy.mockClear();
+    fireEvent.click(screen.getByLabelText("Remove Rent"));
+    await waitFor(() => expect(removeTagMock).toHaveBeenCalled());
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["categories"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["tags"] });
   });
 });

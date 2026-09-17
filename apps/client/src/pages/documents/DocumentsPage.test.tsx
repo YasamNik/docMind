@@ -16,7 +16,10 @@ const listMock = vi.fn(async (_filters?: unknown) => [
     extractionError: null,
     categoryId: "cat_1",
     categoryPath: "Finance / Tax",
-    tags: [{ id: "tag_1", name: "Rent", color: null, auto: false, manual: true }],
+    tags: [
+      { id: "tag_1", name: "Rent", color: null, auto: false, manual: true },
+      { id: "tag_2", name: "Bills", color: null, auto: true, manual: false },
+    ],
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   },
@@ -44,6 +47,12 @@ describe("DocumentsPage", () => {
     renderAt("/documents");
     expect(await screen.findByText("Finance / Tax")).toBeInTheDocument();
     expect(screen.getByText("Rent")).toBeInTheDocument();
+  });
+
+  it("marks an auto-applied tag chip", async () => {
+    renderAt("/documents");
+    expect(await screen.findByText("Bills")).toBeInTheDocument();
+    expect(screen.getByText("(auto)")).toBeInTheDocument();
   });
 
   it("reads categoryId, tagId, and view from the URL and passes them to the api", async () => {

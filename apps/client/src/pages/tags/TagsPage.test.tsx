@@ -1,9 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "@/lib/api";
 import { TagsPage } from "./TagsPage";
 
-afterEach(() => cleanup());
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 const listMock = vi.fn(async () => [
   {
@@ -20,12 +27,13 @@ const listMock = vi.fn(async () => [
 ]);
 const createMock = vi.fn(async (input: unknown) => ({ id: "tag_2", documentCount: 0, createdAt: "", updatedAt: "", ...(input as object) }));
 const removeMock = vi.fn(async (_id: string) => undefined);
+const updateMock = vi.fn(async (id: string, patch: unknown) => ({ id, ...(patch as object) }));
 
 vi.mock("@/lib/tags-api", () => ({
   tagsApi: {
     list: () => listMock(),
     create: (input: unknown) => createMock(input),
-    update: vi.fn(async (id: string, patch: unknown) => ({ id, ...(patch as object) })),
+    update: (id: string, patch: unknown) => updateMock(id, patch),
     remove: (id: string) => removeMock(id),
   },
 }));
@@ -60,5 +68,32 @@ describe("TagsPage", () => {
     const dialog = within(screen.getByRole("dialog"));
     fireEvent.click(dialog.getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(removeMock).toHaveBeenCalledWith("tag_1"));
+  });
+
+  it("edits a tag and saves the change", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByText("Edit"));
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.change(dialog.getByLabelText("Name"), { target: { value: "Rent (updated)" } });
+    fireEvent.click(dialog.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(updateMock).toHaveBeenCalledWith("tag_1", {
+        name: "Rent (updated)",
+        color: "#4f46e5",
+        description: "Monthly rent",
+        confidenceThreshold: 0.7,
+        autoApply: true,
+      }),
+    );
+  });
+
+  it("shows the server's error message when creating a duplicate tag fails", async () => {
+    createMock.mockRejectedValueOnce(new ApiError({ code: "duplicate_name", message: 'A tag named "Rent" already exists.', status: 409 }));
+    renderPage();
+    fireEvent.click(await screen.findByText("New tag"));
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.change(dialog.getByLabelText("Name"), { target: { value: "Rent" } });
+    fireEvent.click(dialog.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('A tag named "Rent" already exists.'));
   });
 });

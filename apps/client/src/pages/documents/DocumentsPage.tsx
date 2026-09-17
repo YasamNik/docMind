@@ -65,8 +65,9 @@ export function DocumentsPage() {
                 <TableCell>
                   <div className="flex flex-wrap gap-1">
                     {d.tags.map((t) => (
-                      <Badge key={t.id} variant="outline">
+                      <Badge key={t.id} variant="outline" className="gap-1">
                         {t.name}
+                        {t.auto && <span className="text-xs text-muted-foreground">(auto)</span>}
                       </Badge>
                     ))}
                   </div>

@@ -32,6 +32,8 @@ function CategoryPicker({ document, id, queryClient }: { document: DocumentDetai
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["documents", id] });
       queryClient.invalidateQueries({ queryKey: ["documents"] });
+      queryClient.invalidateQueries({ queryKey: ["categories"] });
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
       toast.success("Category updated");
     },
     onError: (e: Error) => toast.error(e.message),
@@ -63,6 +65,9 @@ function TagPicker({ document, id, queryClient }: { document: DocumentDetail; id
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["documents", id] });
       queryClient.invalidateQueries({ queryKey: ["documents"] });
+      queryClient.invalidateQueries({ queryKey: ["categories"] });
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
+      toast.success("Tag added");
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -71,6 +76,9 @@ function TagPicker({ document, id, queryClient }: { document: DocumentDetail; id
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["documents", id] });
       queryClient.invalidateQueries({ queryKey: ["documents"] });
+      queryClient.invalidateQueries({ queryKey: ["categories"] });
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
+      toast.success("Tag removed");
     },
     onError: (e: Error) => toast.error(e.message),
   });
