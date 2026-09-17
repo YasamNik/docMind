@@ -95,6 +95,7 @@ export function TagsPage() {
     mutationFn: (id: string) => tagsApi.remove(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tags"] });
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
       setDeleting(null);
       toast.success("Tag deleted");
     },
@@ -118,7 +119,9 @@ export function TagsPage() {
                 <CardTitle className="text-base flex items-center gap-2">
                   {t.color && <span className="inline-block h-3 w-3 rounded-full" style={{ backgroundColor: t.color }} />}
                   {t.name}
-                  <Badge variant="secondary">{t.documentCount} documents</Badge>
+                  <Badge variant="secondary">
+                    {t.documentCount} {t.documentCount === 1 ? "document" : "documents"}
+                  </Badge>
                   {!t.autoApply && <Badge variant="outline">Manual only</Badge>}
                 </CardTitle>
                 <div className="flex gap-2">

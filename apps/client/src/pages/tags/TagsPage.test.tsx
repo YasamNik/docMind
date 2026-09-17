@@ -39,11 +39,14 @@ vi.mock("@/lib/tags-api", () => ({
 }));
 
 function renderPage() {
-  return render(
-    <QueryClientProvider client={new QueryClient()}>
+  const queryClient = new QueryClient();
+  const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+  render(
+    <QueryClientProvider client={queryClient}>
       <TagsPage />
     </QueryClientProvider>,
   );
+  return { invalidateSpy };
 }
 
 describe("TagsPage", () => {
@@ -62,12 +65,13 @@ describe("TagsPage", () => {
     await waitFor(() => expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ name: "Bills" })));
   });
 
-  it("deletes a tag after confirming", async () => {
-    renderPage();
+  it("deletes a tag after confirming and refreshes the documents query", async () => {
+    const { invalidateSpy } = renderPage();
     fireEvent.click(await screen.findByText("Delete"));
     const dialog = within(screen.getByRole("dialog"));
     fireEvent.click(dialog.getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(removeMock).toHaveBeenCalledWith("tag_1"));
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["documents"] });
   });
 
   it("edits a tag and saves the change", async () => {

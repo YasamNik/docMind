@@ -183,4 +183,26 @@ describe("documents service filters and enrichment", () => {
     const detail = await documents.get({ userId, documentId: document.id });
     expect(detail).toMatchObject({ categoryId: category.id, categoryPath: "Finance", tags: [] });
   });
+
+  it("upload() returns the enriched row with categoryPath and tags", async () => {
+    const { document } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    expect(document).toHaveProperty("categoryPath");
+    expect(Array.isArray(document.tags)).toBe(true);
+  });
+
+  it("upload() returns the enriched duplicate row with categoryPath and tags", async () => {
+    const first = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["same"]) });
+    const second = await documents.upload({ userId, name: "b.txt", mimeType: "text/plain", body: Readable.from(["same"]) });
+    expect(second.duplicateOf).toBe(first.document.id);
+    expect(second.document).toHaveProperty("categoryPath");
+    expect(Array.isArray(second.document.tags)).toBe(true);
+  });
+
+  it("rename() returns the enriched row with categoryPath and tags", async () => {
+    const { document } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    const renamed = await documents.rename({ userId, documentId: document.id, name: "renamed.txt" });
+    expect(renamed.name).toBe("renamed.txt");
+    expect(renamed).toHaveProperty("categoryPath");
+    expect(Array.isArray(renamed.tags)).toBe(true);
+  });
 });

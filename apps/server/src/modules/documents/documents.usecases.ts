@@ -73,7 +73,7 @@ export function createDocumentsService({
       const existing = await repository.findByHash({ userId, contentHash: sha256 });
       if (existing) {
         await driver.delete({ key: stored.key });
-        return { document: existing, duplicateOf: existing.id };
+        return { document: await getEnrichedOrThrow(userId, existing.id), duplicateOf: existing.id };
       }
 
       const timestamp = uploadedAt.toISOString();
@@ -102,7 +102,7 @@ export function createDocumentsService({
         await repository.insert(document, tx as unknown as Database);
         if (onUploaded) await onUploaded({ userId, document, tx: tx as unknown as Database });
       });
-      return { document };
+      return { document: await getEnrichedOrThrow(userId, documentId) };
     },
 
     list({
@@ -126,7 +126,7 @@ export function createDocumentsService({
     async rename({ userId, documentId, name }: { userId: string; documentId: string; name: string }) {
       await getOrThrow(userId, documentId);
       await repository.update({ userId, documentId, patch: { name: sanitizeFilename(name), updatedAt: nowIso() } });
-      return getOrThrow(userId, documentId);
+      return getEnrichedOrThrow(userId, documentId);
     },
 
     async remove({ userId, documentId }: { userId: string; documentId: string }) {

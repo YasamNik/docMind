@@ -115,6 +115,7 @@ export function CategoriesPage() {
     mutationFn: (input: CategoryInput) => categoriesApi.update(editing!.id, input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["categories"] });
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
       setEditing(null);
       toast.success("Category saved");
     },
@@ -124,6 +125,7 @@ export function CategoriesPage() {
     mutationFn: (id: string) => categoriesApi.remove(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["categories"] });
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
       setDeleting(null);
       toast.success("Category deleted");
     },
@@ -164,11 +166,13 @@ export function CategoriesPage() {
         <div className="grid gap-3">
           {categories.map((c) => (
             <Card key={c.id}>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0">
+              <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
                 <CardTitle className="text-base flex items-center gap-2">
                   {c.color && <span className="inline-block h-3 w-3 rounded-full" style={{ backgroundColor: c.color }} />}
                   {c.path}
-                  <Badge variant="secondary">{c.documentCount} documents</Badge>
+                  <Badge variant="secondary">
+                    {c.documentCount} {c.documentCount === 1 ? "document" : "documents"}
+                  </Badge>
                   {!c.autoApply && <Badge variant="outline">Manual only</Badge>}
                 </CardTitle>
                 <div className="flex gap-2">

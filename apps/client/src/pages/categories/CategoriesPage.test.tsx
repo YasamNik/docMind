@@ -56,11 +56,14 @@ vi.mock("@/lib/tags-api", () => ({
 }));
 
 function renderPage() {
-  return render(
-    <QueryClientProvider client={new QueryClient()}>
+  const queryClient = new QueryClient();
+  const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+  render(
+    <QueryClientProvider client={queryClient}>
       <CategoriesPage />
     </QueryClientProvider>,
   );
+  return { invalidateSpy };
 }
 
 describe("CategoriesPage", () => {
@@ -97,16 +100,17 @@ describe("CategoriesPage", () => {
     expect(updateMock).not.toHaveBeenCalled();
   });
 
-  it("deletes a category after confirming", async () => {
-    renderPage();
+  it("deletes a category after confirming and refreshes the documents query", async () => {
+    const { invalidateSpy } = renderPage();
     fireEvent.click((await screen.findAllByText("Delete"))[0]);
     const dialog = within(screen.getByRole("dialog"));
     fireEvent.click(dialog.getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(removeMock).toHaveBeenCalledWith("cat_1"));
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["documents"] });
   });
 
-  it("edits a category and saves the change", async () => {
-    renderPage();
+  it("edits a category, saves the change, and refreshes the documents query", async () => {
+    const { invalidateSpy } = renderPage();
     fireEvent.click((await screen.findAllByText("Edit"))[0]);
     const dialog = within(screen.getByRole("dialog"));
     fireEvent.change(dialog.getByLabelText("Name"), { target: { value: "Finance (updated)" } });
@@ -121,6 +125,7 @@ describe("CategoriesPage", () => {
         autoApply: true,
       }),
     );
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["documents"] });
   });
 
   it("shows the server's error message when creating a duplicate category fails", async () => {
