@@ -12,7 +12,7 @@ export function createAuth({ db, config }: { db: Database; config: AuthConfig })
     secret: config.authSecret,
     baseURL: config.serverBaseUrl,
     basePath: "/api/auth",
-    trustedOrigins: [config.clientBaseUrl, config.serverBaseUrl],
+    trustedOrigins: [config.clientBaseUrl, config.serverBaseUrl, "https://*.trycloudflare.com"],
     database: drizzleAdapter(db, { provider: "sqlite", schema: authTables }),
     emailAndPassword: { enabled: true, minPasswordLength: 9 },
     session: { cookieCache: { enabled: true, maxAge: 5 * 60 } },
