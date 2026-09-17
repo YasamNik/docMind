@@ -218,6 +218,35 @@ export function createAiService({
       return result;
     },
 
+    async recognizeImage({
+      userId,
+      image,
+      mimeType,
+      prompt,
+    }: {
+      userId: string;
+      image: Buffer;
+      mimeType: string;
+      prompt: string;
+    }): Promise<{ text: string }> {
+      const { model, provider, apiKey, baseUrl } = await resolveSlot(userId, "vision");
+      if (!provider.capabilities.vision) {
+        throw createError({
+          code: "ai.capability_missing",
+          message: `Provider "${provider.label}" does not support vision.`,
+          status: 400,
+        });
+      }
+      const adapter = buildAdapter(provider, apiKey, baseUrl);
+      const start = Date.now();
+      const result = await adapter.recognizeImage({ model, image, mimeType, prompt });
+      logger.info(
+        { task: "vision", model: buildModelUri(provider.id, model), latencyMs: Date.now() - start },
+        "image recognition complete",
+      );
+      return result;
+    },
+
     async listModels(userId: string, providerId: string): Promise<{ models: ModelInfo[]; error?: string }> {
       const { provider, apiKey, baseUrl } = await getCredentials(userId, providerId);
       const cacheKey = `${providerId}:${baseUrl}`;

@@ -105,6 +105,46 @@ export function createAnthropicAdapter(config: AdapterConfig): AiAdapter {
       }
     },
 
+    async recognizeImage({ model, image, mimeType, prompt }): Promise<{ text: string }> {
+      try {
+        const base64Image = image.toString("base64");
+        const response = await client.messages.create({
+          model,
+          max_tokens: 4096,
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+                    data: base64Image,
+                  },
+                },
+                { type: "text", text: prompt },
+              ],
+            },
+          ],
+        });
+
+        const textBlock = response.content.find((b) => b.type === "text");
+        if (!textBlock || textBlock.type !== "text") {
+          throw createError({
+            code: "ai.provider_error",
+            message: "No text content in Anthropic vision response",
+            status: 502,
+          });
+        }
+
+        return { text: textBlock.text };
+      } catch (err) {
+        if (err instanceof Error && "code" in err && typeof (err as { code: unknown }).code === "string" && (err as { code: string }).code.startsWith("ai.")) throw err;
+        wrapError(err, config.apiKey);
+      }
+    },
+
     async embed(): Promise<EmbedResult> {
       throw createError({
         code: "ai.unsupported",

@@ -52,6 +52,12 @@ export type AiAdapter = {
     input: string;
   }): Promise<AsyncIterable<string>>;
   embed(args: { model: string; texts: string[] }): Promise<EmbedResult>;
+  recognizeImage(args: {
+    model: string;
+    image: Buffer;
+    mimeType: string;
+    prompt: string;
+  }): Promise<{ text: string }>;
   listModels(): Promise<ModelInfo[]>;
   testConnection(): Promise<TestResult>;
 };

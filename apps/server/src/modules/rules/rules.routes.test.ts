@@ -10,6 +10,7 @@ function fakeAdapter(replyRef: { current: unknown }): AiAdapter {
     generateStructured: vi.fn(async () => ({ data: replyRef.current, usage: { promptTokens: 10, completionTokens: 10 } }) as StructuredResult),
     streamText: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
     embed: vi.fn(async () => ({ vectors: [], dimension: 0 })),
+    recognizeImage: vi.fn(async () => ({ text: "" })),
     listModels: vi.fn(async () => [] as ModelInfo[]),
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1, message: "ok" }) as TestResult),
   };

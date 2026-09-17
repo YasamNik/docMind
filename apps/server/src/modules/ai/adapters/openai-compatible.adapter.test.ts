@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createOpenAiCompatibleAdapter } from "./openai-compatible.adapter.js";
 import modelsFixture from "../__fixtures__/openrouter-models.json" with { type: "json" };
 import completionFixture from "../__fixtures__/openrouter-completion.json" with { type: "json" };
+import visionFixture from "../__fixtures__/openrouter-vision.json" with { type: "json" };
 import errorFixture from "../__fixtures__/openrouter-error-401.json" with { type: "json" };
 import * as v from "valibot";
 import type { AdapterConfig } from "./adapter.types.js";
@@ -93,6 +94,37 @@ describe("openai-compatible adapter", () => {
         type: "json_schema",
         json_schema: { name: "sort_result", strict: true },
       });
+    });
+  });
+
+  describe("recognizeImage", () => {
+    it("sends the image as a base64 data URL and returns the extracted text", async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify(visionFixture), { status: 200, headers: { "content-type": "application/json" } }),
+      );
+      const adapter = createOpenAiCompatibleAdapter(config);
+      const image = Buffer.from("fake image bytes");
+      const result = await adapter.recognizeImage({
+        model: "google/gemini-2.5-flash",
+        image,
+        mimeType: "image/png",
+        prompt: "Extract all text from this document image.",
+      });
+      expect(result.text).toBe("Invoice #4471\nTotal Due: $128.50\nDate: 2026-01-15");
+
+      const [callUrl, callInit] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(callUrl).toBe("https://openrouter.ai/api/v1/chat/completions");
+      const callBody = JSON.parse(callInit.body as string) as {
+        model: string;
+        messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+      };
+      expect(callBody.model).toBe("google/gemini-2.5-flash");
+      const [message] = callBody.messages;
+      expect(message?.role).toBe("user");
+      expect(message?.content).toEqual([
+        { type: "text", text: "Extract all text from this document image." },
+        { type: "image_url", image_url: { url: `data:image/png;base64,${image.toString("base64")}` } },
+      ]);
     });
   });
 

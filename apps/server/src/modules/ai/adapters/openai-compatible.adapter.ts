@@ -125,6 +125,38 @@ export function createOpenAiCompatibleAdapter(config: AdapterConfig): AiAdapter 
       }
     },
 
+    async recognizeImage({ model, image, mimeType, prompt }): Promise<{ text: string }> {
+      try {
+        const base64Image = image.toString("base64");
+        const response = await client.chat.completions.create({
+          model,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: prompt },
+                { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}` } },
+              ],
+            },
+          ],
+        });
+
+        const content = response.choices[0]?.message?.content;
+        if (!content) {
+          throw createError({
+            code: "ai.provider_error",
+            message: "No content in vision completion response",
+            status: 502,
+          });
+        }
+
+        return { text: content };
+      } catch (err) {
+        if (err instanceof Error && "code" in err && typeof (err as { code: unknown }).code === "string" && (err as { code: string }).code.startsWith("ai.")) throw err;
+        wrapError(err, config.apiKey);
+      }
+    },
+
     async embed({ model, texts }): Promise<EmbedResult> {
       try {
         const response = await client.embeddings.create({

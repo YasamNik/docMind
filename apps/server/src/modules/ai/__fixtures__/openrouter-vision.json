@@ -1,0 +1,21 @@
+{
+  "id": "gen-vision123",
+  "object": "chat.completion",
+  "created": 1726500000,
+  "model": "google/gemini-2.5-flash",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Invoice #4471\nTotal Due: $128.50\nDate: 2026-01-15"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 1200,
+    "completion_tokens": 40,
+    "total_tokens": 1240
+  }
+}

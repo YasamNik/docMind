@@ -1,0 +1,17 @@
+{
+  "id": "msg_vision123",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "Invoice #4471\nTotal Due: $128.50\nDate: 2026-01-15"
+    }
+  ],
+  "model": "claude-sonnet-4-20250514",
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 1150,
+    "output_tokens": 40
+  }
+}

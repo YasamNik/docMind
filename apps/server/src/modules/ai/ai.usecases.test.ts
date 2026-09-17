@@ -22,6 +22,7 @@ function fakeAdapter(overrides: Partial<AiAdapter> = {}): AiAdapter {
       async *[Symbol.asyncIterator]() { yield "hello"; },
     })),
     embed: vi.fn(async () => ({ vectors: [[0.1, 0.2]], dimension: 2 })),
+    recognizeImage: vi.fn(async () => ({ text: "extracted text" })),
     listModels: vi.fn(async () => [
       { id: "test-model", label: "Test Model", contextLength: 8000 },
     ] as ModelInfo[]),
@@ -111,6 +112,42 @@ describe("ai service", () => {
     await expectAppError(
       () => aiService.generateStructured({ userId, task: "rules", schema, schemaName: "test", system: "test", input: "test" }),
       "ai.provider_not_configured",
+    );
+  });
+
+  it("resolves the vision slot and delegates to the adapter", async () => {
+    const { settingsService, aiService, adapter } = await setup();
+    await settingsService.set(userId, {
+      "ai.openrouter.apiKey": "sk-or-v1-test",
+      "ai.model.vision": "openrouter://google/gemini-2.5-flash",
+    });
+    const image = Buffer.from("fake image bytes");
+    const result = await aiService.recognizeImage({
+      userId,
+      image,
+      mimeType: "image/png",
+      prompt: "Extract all text from this document image.",
+    });
+    expect(result.text).toBe("extracted text");
+    expect(adapter.recognizeImage).toHaveBeenCalledWith({
+      model: "google/gemini-2.5-flash",
+      image,
+      mimeType: "image/png",
+      prompt: "Extract all text from this document image.",
+    });
+  });
+
+  it("throws ai.slot_not_configured for vision when no slot and no key", async () => {
+    const { aiService } = await setup();
+    await expectAppError(
+      () =>
+        aiService.recognizeImage({
+          userId,
+          image: Buffer.from("x"),
+          mimeType: "image/png",
+          prompt: "Extract all text from this document image.",
+        }),
+      "ai.slot_not_configured",
     );
   });
 

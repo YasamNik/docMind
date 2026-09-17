@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createAnthropicAdapter } from "./anthropic.adapter.js";
 import modelsFixture from "../__fixtures__/anthropic-models.json" with { type: "json" };
 import structuredFixture from "../__fixtures__/anthropic-structured.json" with { type: "json" };
+import visionFixture from "../__fixtures__/anthropic-vision.json" with { type: "json" };
 import errorFixture from "../__fixtures__/anthropic-error-401.json" with { type: "json" };
 import * as v from "valibot";
 import { toJsonSchema } from "@valibot/to-json-schema";
@@ -83,6 +84,42 @@ describe("anthropic adapter", () => {
         type: "object" as const,
       } as Parameters<typeof jsonSchemaOutputFormat>[0]);
       expect(callBody.output_config.format.schema).toEqual(expectedFormat.schema);
+    });
+  });
+
+  describe("recognizeImage", () => {
+    it("sends the image as a base64 content block and returns the extracted text", async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify(visionFixture), { status: 200, headers: { "content-type": "application/json" } }),
+      );
+      const adapter = createAnthropicAdapter(config);
+      const image = Buffer.from("fake image bytes");
+      const result = await adapter.recognizeImage({
+        model: "claude-sonnet-4-20250514",
+        image,
+        mimeType: "image/png",
+        prompt: "Extract all text from this document image.",
+      });
+      expect(result.text).toBe("Invoice #4471\nTotal Due: $128.50\nDate: 2026-01-15");
+
+      const [callUrl, callInit] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(callUrl).toBe("https://api.anthropic.com/v1/messages");
+      const callBody = JSON.parse(callInit.body as string) as {
+        model: string;
+        max_tokens: number;
+        messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+      };
+      expect(callBody.model).toBe("claude-sonnet-4-20250514");
+      expect(callBody.max_tokens).toBe(4096);
+      const [message] = callBody.messages;
+      expect(message?.role).toBe("user");
+      expect(message?.content).toEqual([
+        {
+          type: "image",
+          source: { type: "base64", media_type: "image/png", data: image.toString("base64") },
+        },
+        { type: "text", text: "Extract all text from this document image." },
+      ]);
     });
   });
 
