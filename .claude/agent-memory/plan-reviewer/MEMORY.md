@@ -4,3 +4,4 @@
 - [Milestone B plan review](review-plan-1b.md) -- doc status cache invariant broken on retriable failure, missing design doc updates
 - [Milestone C spec review](review-milestone-c-spec.md) -- cascade gaps, Inbox orphans, setting-key departures, prompt size, 12 rulings
 - [Milestone C1 plan review](review-plan-c1.md) -- module eval order bug, SDK extra_body error, provider settings lookup crash, 9 rulings
+- [Milestone C2 plan review](review-plan-c2.md) -- CategoryInput type gap, unverified PRAGMA foreign_keys, sidebar count mismatch, 8 rulings

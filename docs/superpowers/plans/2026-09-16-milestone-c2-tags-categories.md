@@ -46,7 +46,7 @@ Per the autonomy rule in CLAUDE.md and spec section 13, these implementation det
 8. **Tag ordering is alphabetical, case-insensitive, computed in application code** (review ruling 2), not with a raw-SQL `ORDER BY ... COLLATE NOCASE`, to keep "no raw SQL outside migrations" strict. `tags.models.ts` exports `sortByNameCI<T extends { name: string }>(items: T[]): T[]` using `localeCompare(b.name, undefined, { sensitivity: "base" })`. Categories sort by `sortOrder` then name the same way, via `sortCategories`.
 9. **Category deletion and the auto-apply-off cleanup are two different clears.** Deleting a category clears `category_id`/`category_source` on every document pointing at it, regardless of source (the category no longer exists). Turning `autoApply` off on an existing category clears the same two columns only where `category_source = 'auto'`; a manual assignment survives. Both are implemented as one batch `UPDATE` in `tags.repository.ts` (`clearCategoryOnDocuments` and `clearAutoCategoryOnDocuments`). The equivalent behavior for tags (clearing `applied_by_auto` when a tag's `autoApply` is turned off) is explicitly section 9.6, plan C3; this plan does not implement it, matching the task's instruction to leave sorting-engine behavior to C3.
 10. **Category path computation** (review ruling 7): `tags.models.ts` exports `buildCategoryPaths(categories, separator = " / ")`, loading every category for the user in one query and walking the parent chain in memory with a `Map`, never a recursive CTE. The separator is `" / "`, matching the spec's own example ("Finance / Tax / Receipts").
-11. **Category document counts are direct, not recursive.** `documentCount` on a category counts documents whose `category_id` is exactly that category, not its descendants. The client can sum descendant counts itself if it ever needs a rollup; nothing in the spec asks for one now.
+11. **Category document counts are direct in the API, recursive in the sidebar.** `documentCount` on a category in the API response counts documents whose `category_id` is exactly that category, not its descendants. The manage page shows this direct count. The sidebar's `CategoryTreeNav` computes recursive counts client-side (own plus all descendants) so the badge matches the filtered list, which includes descendants per spec section 8.1. The `recursiveCounts` helper in `CategoryTreeNav.tsx` does this in one pass over the flat list.
 12. **Cross-module repository imports.** `apps/server/src/modules/tags/tags.repository.ts` imports `documentsTable` from `../documents/documents.tables.js` (to count and clear categories on documents). `apps/server/src/modules/documents/documents.repository.ts` imports `categoriesTable`, `tagsTable`, `documentTagsTable` from `../tags/tags.tables.js` and the pure `buildCategoryPaths`/`collectDescendantIds` helpers from `../tags/tags.models.js` (to build the enriched, filtered list). This mirrors the already-existing precedent of `extraction.usecases.ts` importing `createDocumentsRepository` from `../documents/documents.repository.js`. Models stay free of IO and are imported freely in both directions; repositories only touch Drizzle.
 13. **`documents.usecases.ts`'s `get()` now returns the enriched row** (`categoryPath`, `tags`) via a new `repository.findByIdWithExtras`, used only by the single-document route. `rename`, `remove`, and `openFile` keep using the existing lightweight `getOrThrow`/`findById` unchanged, so their cost and behavior do not change.
 14. **No pagination is introduced.** Tags and categories lists stay small (single user) and unpaginated, matching the existing unpaginated `GET /api/documents`. `GET /api/documents` gains filter query params but no `page`/`limit`.
@@ -547,6 +547,12 @@ describe("database", () => {
     const names = columns.map((c) => c.name);
     expect(names).toContain("category_id");
     expect(names).toContain("category_source");
+  });
+
+  it("has foreign key enforcement enabled", async () => {
+    const { db } = await createTestDatabase();
+    const [row] = await db.all<{ foreign_keys: number }>(sql`pragma foreign_keys`);
+    expect(row.foreign_keys).toBe(1);
   });
 });
 ```
@@ -2550,7 +2556,7 @@ export type TagInput = {
   autoApply?: boolean;
 };
 
-export type CategoryInput = TagInput & { parentId?: string | null };
+export type CategoryInput = TagInput & { parentId?: string | null; sortOrder?: number };
 
 export const tagsApi = {
   async list() {
@@ -2702,7 +2708,7 @@ function category(overrides: Partial<CategoryRow>): CategoryRow {
 }
 
 describe("CategoryTreeNav", () => {
-  it("renders a nested tree with document counts", () => {
+  it("renders a nested tree with recursive document counts", () => {
     const categories = [
       category({ id: "cat_1", name: "Finance", documentCount: 2 }),
       category({ id: "cat_2", name: "Tax", parentId: "cat_1", documentCount: 1, path: "Finance / Tax" }),
@@ -2714,7 +2720,8 @@ describe("CategoryTreeNav", () => {
     );
     expect(screen.getByText("Finance")).toBeInTheDocument();
     expect(screen.getByText("Tax")).toBeInTheDocument();
-    expect(screen.getByText("2")).toBeInTheDocument();
+    // Finance shows 3 (its own 2 plus Tax's 1); Tax shows 1 (leaf, direct only).
+    expect(screen.getByText("3")).toBeInTheDocument();
     expect(screen.getByText("1")).toBeInTheDocument();
   });
 
@@ -2745,8 +2752,33 @@ function childrenOf(categories: CategoryRow[], parentId: string | null): Categor
   return categories.filter((c) => c.parentId === parentId);
 }
 
-function CategoryNode({ category, categories, depth }: { category: CategoryRow; categories: CategoryRow[]; depth: number }) {
+/** Computes the recursive count for each category: its own documentCount plus all descendants'. */
+function recursiveCounts(categories: CategoryRow[]): Map<string, number> {
+  const childrenMap = new Map<string, string[]>();
+  for (const c of categories) {
+    if (!c.parentId) continue;
+    const list = childrenMap.get(c.parentId) ?? [];
+    list.push(c.id);
+    childrenMap.set(c.parentId, list);
+  }
+  const byId = new Map(categories.map((c) => [c.id, c]));
+  const cache = new Map<string, number>();
+  function total(id: string): number {
+    if (cache.has(id)) return cache.get(id)!;
+    const node = byId.get(id);
+    if (!node) return 0;
+    let sum = node.documentCount;
+    for (const childId of childrenMap.get(id) ?? []) sum += total(childId);
+    cache.set(id, sum);
+    return sum;
+  }
+  for (const c of categories) total(c.id);
+  return cache;
+}
+
+function CategoryNode({ category, categories, depth, counts }: { category: CategoryRow; categories: CategoryRow[]; depth: number; counts: Map<string, number> }) {
   const children = childrenOf(categories, category.id);
+  const count = counts.get(category.id) ?? category.documentCount;
   return (
     <div>
       <NavLink
@@ -2755,10 +2787,10 @@ function CategoryNode({ category, categories, depth }: { category: CategoryRow; 
         style={{ paddingLeft: `${12 + depth * 12}px` }}
       >
         <span className="truncate">{category.name}</span>
-        {category.documentCount > 0 && <span className="text-xs text-muted-foreground">{category.documentCount}</span>}
+        {count > 0 && <span className="text-xs text-muted-foreground">{count}</span>}
       </NavLink>
       {children.map((child) => (
-        <CategoryNode key={child.id} category={child} categories={categories} depth={depth + 1} />
+        <CategoryNode key={child.id} category={child} categories={categories} depth={depth + 1} counts={counts} />
       ))}
     </div>
   );
@@ -2767,10 +2799,11 @@ function CategoryNode({ category, categories, depth }: { category: CategoryRow; 
 export function CategoryTreeNav({ categories }: { categories: CategoryRow[] }) {
   const roots = childrenOf(categories, null);
   if (roots.length === 0) return <p className="px-3 text-xs text-muted-foreground">No categories yet.</p>;
+  const counts = recursiveCounts(categories);
   return (
     <nav className="flex flex-col gap-0.5">
       {roots.map((c) => (
-        <CategoryNode key={c.id} category={c} categories={categories} depth={0} />
+        <CategoryNode key={c.id} category={c} categories={categories} depth={0} counts={counts} />
       ))}
     </nav>
   );
@@ -4240,3 +4273,18 @@ Claude-Session: https://claude.ai/code/session_01StVmb7TK3ajFeKogfXKR46
 EOF
 )"
 ```
+
+---
+
+## Plan review rulings
+
+Applied by plan-reviewer on 2026-09-16. Each ruling is a fix applied directly to the plan text above.
+
+1. **CategoryInput missing sortOrder (blocker).** `CategoriesPage.tsx` calls `categoriesApi.update(id, { sortOrder })` but the `CategoryInput` type had no `sortOrder` field; TypeScript would reject it. Fixed: added `sortOrder?: number` to `CategoryInput` in Task 5.
+2. **PRAGMA foreign_keys not verified (blocker).** The plan relies on libsql enforcing foreign keys by default for ON DELETE CASCADE, but the database module has no explicit PRAGMA and no test asserts it. Fixed: added a "has foreign key enforcement enabled" test to Task 1 Step 9 so a cascade failure surfaces immediately rather than as a silent orphan row.
+3. **Sidebar tree counts mismatch the filter (major).** Decision 11 said counts are direct only, but the category filter in `listByUser` includes descendants. A parent category with 2 direct docs and a child with 3 would show "2" in the sidebar badge but 5 documents when clicked. Fixed: `CategoryTreeNav` now computes recursive counts client-side via a `recursiveCounts` helper, and the test asserts the summed value. The API response stays direct so the manage page shows per-category counts.
+4. **Verified: libsql cascade claim is plausible.** The plan claims `@libsql/client` enables foreign keys by default. This matches libsql's documented behavior (it differs from stock SQLite). The new PRAGMA test (ruling 2) will confirm at runtime. If it fails, the fix is to add `PRAGMA foreign_keys = ON` to `createDatabase` in `database.ts`.
+5. **Verified: no em dashes or en dashes in the plan.** Grep confirmed only the convention-quoting line references the term.
+6. **Verified: spec fidelity.** Routes, error codes, validation limits, cascade behavior, view filter definitions, storage key layout, and extraction failure gap all match spec sections 5, 6, 8, and review rulings 1, 2, 3, 7, 8, and edge case 6.
+7. **Noted (no fix): duplicated tag-loading logic.** `documents.repository.ts`'s `loadTagsByDocument` reimplements the same query as `tags.repository.ts`'s `listTagsForDocuments`. Acceptable per the cross-module import pattern; can be refactored later.
+8. **Noted (no fix): CategoryForm parent picker does not filter descendants.** Selecting a descendant as parent triggers a server 400 (categories.invalid_parent), which is caught and toasted. Adding client-side descendant filtering would be a nice-to-have but is not needed for correctness.
