@@ -22,6 +22,11 @@ Active branch: `main`
 - Migration approved by the user and applied to the dev database at server restart; the
   dev server (pnpm dev under apps/server, same log file) was restarted by the controller
   after it crashed mid-task; the tunnel serves the branch live.
+- C2 merged into `main` by fast-forward on the user's "Merge and continue"; branch and
+  ledger workspace deleted. C3 plan written and reviewed:
+  `docs/superpowers/plans/2026-09-17-milestone-c3-sorting-engine.md` (2f959c7, fdc31e0).
+  Execution paused: the weekly usage bucket reached 99% (resets 2026-09-18 21:00
+  Toronto) and C3 Task 1 needs the user's yes for the `sort_evaluations` migration.
 
 ### Decisions
 - The user's message "continue on your own, keep going till the 5 hour limit", sent
@@ -34,13 +39,15 @@ Active branch: `main`
 
 ### Comments
 - "Im in the bed, uou continue on your own, keep going till hhe 5hrd lkmot"
+- "Merge and continue"
 - "if you can resume the work after reset, and have a clear written plan what to continue after reset"
 
 ### Open / Next
-- Ask the user to merge `feat/milestone-c2` into `main` (never without a yes). Then
-  delete the branch and `.superpowers/sdd/2026-09-16-milestone-c2-tags-categories`.
-- Then plan C3 (sorting engine, spec section 9): its Task 1 carries the
-  `sort_evaluations` migration, which needs a yes.
+- First thing next session (after the weekly reset on 2026-09-18 evening): get the
+  user's yes for the C3 migration (one table `sort_evaluations`, three indexes, cascade
+  on document delete), then branch `feat/milestone-c3`, SDD ledger, pre-flight scan, and
+  run Tasks 1 to 8 of the C3 plan in lean mode. Revisit the process flow with the user
+  first if they want (they asked to make it token-optimal).
 - C2 follow-ups: reorder without rollback, categories queried twice in the list filter,
   sidebar badges fetch full rows for a count, tx cast helper, collectDescendantIds
   invariant comment, omitExtractedText as a repository projection, second-user tests,
