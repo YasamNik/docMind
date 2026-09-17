@@ -24,6 +24,10 @@ coverage/
 # third-party reference source, never committed (see CLAUDE.md)
 ref_code/
 
+# design handoff and chat transcripts (reference only)
+design-package/
+chats/
+
 # local tooling
 .claude/settings.local.json
 .DS_Store
