@@ -1,13 +1,41 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
+@import "@fontsource/caprasimo";
+@import "@fontsource-variable/figtree";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-    --font-heading: var(--font-sans);
-    --font-sans: 'Geist Variable', sans-serif;
+    --font-heading: 'Caprasimo', system-ui, sans-serif;
+    --font-sans: 'Figtree Variable', 'Figtree', system-ui, sans-serif;
+    --color-org-accent-100: #fff2eb;
+    --color-org-accent-200: #ffd4b8;
+    --color-org-accent-300: #e8a070;
+    --color-org-accent-400: #c67139;
+    --color-org-accent-500: #c67139;
+    --color-org-accent-600: #b2622d;
+    --color-org-accent-700: #8c491a;
+    --color-org-accent-800: #5c2f0e;
+    --color-org-accent-900: #402310;
+    --color-org-accent2-100: #f0fae1;
+    --color-org-accent2-200: #d4eaad;
+    --color-org-accent2-300: #a8c472;
+    --color-org-accent2-400: #7a8a5e;
+    --color-org-accent2-500: #7a8a5e;
+    --color-org-accent2-600: #5e6e3d;
+    --color-org-accent2-700: #485528;
+    --color-org-accent2-800: #323b1b;
+    --color-org-accent2-900: #272e1b;
+    --color-org-neutral-100: #f9f4ed;
+    --color-org-neutral-200: #eee7db;
+    --color-org-neutral-300: #e2d9cb;
+    --color-org-neutral-400: #c4b8a6;
+    --color-org-neutral-500: #a89d8d;
+    --color-org-neutral-600: #8a7f6f;
+    --color-org-neutral-700: #645c50;
+    --color-org-neutral-800: #3d3830;
+    --color-org-neutral-900: #2e2b25;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -49,40 +77,42 @@
 }
 
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
+    --background: #f5ead8;
+    --foreground: #201e1d;
+    --card: #ebddc5;
+    --card-foreground: #201e1d;
+    --popover: #ebddc5;
+    --popover-foreground: #201e1d;
+    --primary: #c67139;
+    --primary-foreground: #f5ead8;
+    --secondary: #eee7db;
+    --secondary-foreground: #201e1d;
+    --muted: #eee7db;
+    --muted-foreground: #645c50;
+    --accent: #eee7db;
+    --accent-foreground: #201e1d;
     --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
+    --border: color-mix(in srgb, #201e1d 16%, transparent);
+    --input: color-mix(in srgb, #201e1d 16%, transparent);
+    --ring: #c67139;
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    --radius: 1rem;
+    --sidebar: #ebddc5;
+    --sidebar-foreground: #201e1d;
+    --sidebar-primary: #c67139;
+    --sidebar-primary-foreground: #f5ead8;
+    --sidebar-accent: #eee7db;
+    --sidebar-accent-foreground: #201e1d;
+    --sidebar-border: color-mix(in srgb, #201e1d 16%, transparent);
+    --sidebar-ring: #c67139;
 }
 
+/* Organic is light-only. Dark theme deferred. */
+/*
 .dark {
     --background: oklch(0.145 0 0);
     --foreground: oklch(0.985 0 0);
@@ -116,6 +146,7 @@
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0);
 }
+*/
 
 @layer base {
   * {
@@ -127,4 +158,8 @@
   html {
     @apply font-sans;
     }
+}
+
+::selection {
+    background: color-mix(in srgb, #c67139 30%, transparent);
 }
