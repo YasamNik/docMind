@@ -28,4 +28,12 @@ describe("database", () => {
     const [row] = await db.all<{ foreign_keys: number }>(sql`pragma foreign_keys`);
     expect(row.foreign_keys).toBe(1);
   });
+
+  it("creates the sort_evaluations table", async () => {
+    const { db } = await createTestDatabase();
+    const rows = await db.all<{ name: string }>(
+      sql`select name from sqlite_master where type = 'table' and name = 'sort_evaluations'`,
+    );
+    expect(rows.length).toBe(1);
+  });
 });
