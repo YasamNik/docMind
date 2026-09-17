@@ -6,3 +6,8 @@ export const embeddingJobPayloadSchema = v.object({
 });
 
 export type EmbeddingJobPayloadInput = v.InferOutput<typeof embeddingJobPayloadSchema>;
+
+export const searchQuerySchema = v.object({
+  q: v.pipe(v.string(), v.minLength(1)),
+  limit: v.optional(v.pipe(v.string(), v.transform(Number), v.integer(), v.minValue(1), v.maxValue(100))),
+});
