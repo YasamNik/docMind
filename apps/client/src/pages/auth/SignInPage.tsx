@@ -41,7 +41,7 @@ export function SignInPage() {
     <div className="min-h-screen flex items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>{hasUsers ? "Sign in to DocMind" : "Create your DocMind account"}</CardTitle>
+          <CardTitle className="text-2xl">{hasUsers ? "Sign in to DocMind" : "Create your DocMind account"}</CardTitle>
         </CardHeader>
         <CardContent>
           <form onSubmit={submit} className="flex flex-col gap-3">

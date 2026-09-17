@@ -164,7 +164,7 @@ export function ProviderCard({
                 {test.isPending ? "Testing..." : "Test"}
               </Button>
               {testResult && (
-                <span className={`text-sm ${testResult.ok ? "text-green-600" : "text-destructive"}`}>
+                <span className={`text-sm ${testResult.ok ? "text-org-accent2-700" : "text-destructive"}`}>
                   {testResult.ok ? `OK (${testResult.latencyMs}ms)` : testResult.message}
                 </span>
               )}

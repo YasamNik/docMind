@@ -5,7 +5,7 @@ import { StorageTab } from "./StorageTab";
 export function SettingsPage() {
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Settings</h1>
+      <h1 className="font-heading text-2xl">Settings</h1>
       <TabsNav defaultValue="ai">
         <TabsNavList>
           <TabsNavTab value="ai">AI</TabsNavTab>

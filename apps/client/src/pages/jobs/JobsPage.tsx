@@ -18,8 +18,8 @@ const FILTERS: { label: string; value?: JobRow["status"] }[] = [
 
 function statusVariant(status: JobRow["status"]) {
   if (status === "failed") return "destructive" as const;
-  if (status === "done") return "secondary" as const;
-  return "default" as const;
+  if (status === "done") return "accent2" as const;
+  return "accent" as const;
 }
 
 export function JobsPage() {
@@ -42,7 +42,7 @@ export function JobsPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Jobs</h1>
+      <h1 className="font-heading text-2xl">Jobs</h1>
       <div className="flex gap-2 flex-wrap">
         {FILTERS.map((f) => (
           <Button key={f.label} size="sm" variant={f.value === status ? "default" : "outline"} onClick={() => setStatus(f.value)}>

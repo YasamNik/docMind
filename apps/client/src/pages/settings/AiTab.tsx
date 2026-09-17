@@ -22,7 +22,7 @@ export function AiTab() {
   return (
     <div className="space-y-6">
       <section className="space-y-4">
-        <h2 className="text-lg font-medium">Providers</h2>
+        <h2 className="font-heading text-lg font-medium">Providers</h2>
         {providers.map((p) => (
           <ProviderCard
             key={p.id}
@@ -34,7 +34,7 @@ export function AiTab() {
       </section>
 
       <section className="space-y-4">
-        <h2 className="text-lg font-medium">Model slots</h2>
+        <h2 className="font-heading text-lg font-medium">Model slots</h2>
         <p className="text-sm text-muted-foreground">
           Pick a provider and model for each task. The rules slot must use a model that supports structured output.
         </p>
