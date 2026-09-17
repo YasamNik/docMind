@@ -24,7 +24,7 @@ function TagForm({ initial, onSubmit, submitting }: { initial: TagInput; onSubmi
         <Label htmlFor="tag-description">Description (the rule)</Label>
         <textarea
           id="tag-description"
-          className="w-full min-h-24 rounded border bg-transparent p-2 text-sm"
+          className="w-full min-h-24 rounded-[1.75rem] border bg-secondary px-4 py-3 text-sm"
           maxLength={300}
           value={form.description ?? ""}
           onChange={(e) => setForm({ ...form, description: e.target.value })}
@@ -51,12 +51,17 @@ function TagForm({ initial, onSubmit, submitting }: { initial: TagInput; onSubmi
           max={1}
           step={0.05}
           value={form.confidenceThreshold ?? 0.7}
-          className="w-full"
+          className="w-full accent-primary"
           onChange={(e) => setForm({ ...form, confidenceThreshold: Number(e.target.value) })}
         />
       </div>
       <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={form.autoApply ?? true} onChange={(e) => setForm({ ...form, autoApply: e.target.checked })} />
+        <input
+          type="checkbox"
+          className="accent-primary"
+          checked={form.autoApply ?? true}
+          onChange={(e) => setForm({ ...form, autoApply: e.target.checked })}
+        />
         Automatic: let the sorter apply this tag
       </label>
       <Button disabled={submitting || !form.name.trim()} onClick={() => onSubmit(form)}>
@@ -106,7 +111,7 @@ export function TagsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Tags</h1>
+        <h1 className="font-heading text-2xl">Tags</h1>
         <Button onClick={() => setCreateOpen(true)}>New tag</Button>
       </div>
 
@@ -118,12 +123,12 @@ export function TagsPage() {
             <Card key={t.id}>
               <CardHeader className="flex flex-row items-center justify-between space-y-0">
                 <CardTitle className="text-base flex items-center gap-2">
-                  {t.color && <span className="inline-block h-3 w-3 rounded-full" style={{ backgroundColor: t.color }} />}
+                  {t.color && <span className="inline-block h-[7px] w-[7px] rounded-full" style={{ backgroundColor: t.color }} />}
                   {t.name}
-                  <Badge variant="secondary">
+                  <Badge variant="accent2">
                     {t.documentCount} {t.documentCount === 1 ? "document" : "documents"}
                   </Badge>
-                  {!t.autoApply && <Badge variant="outline">Manual only</Badge>}
+                  {!t.autoApply && <Badge variant="neutral">Manual only</Badge>}
                 </CardTitle>
                 <div className="flex gap-2">
                   <Button size="sm" variant="outline" onClick={() => setEditing(t)}>
