@@ -10,6 +10,7 @@ export type KeywordSearchRow = {
   chunkId: number;
   documentId: string;
   chunkText: string;
+  chunkIndex: number;
   rank: number;
 };
 
@@ -17,6 +18,7 @@ export type VectorSearchRow = {
   chunkId: number;
   documentId: string;
   chunkText: string;
+  chunkIndex: number;
   distance: number;
 };
 
@@ -61,6 +63,7 @@ export function createSearchRepository({ db }: { db: Database }) {
         SELECT document_chunks.id AS chunkId,
                document_chunks.document_id AS documentId,
                document_chunks.chunk_text AS chunkText,
+               document_chunks.chunk_index AS chunkIndex,
                document_chunks_fts.rank AS rank
         FROM document_chunks_fts
         JOIN document_chunks ON document_chunks.id = document_chunks_fts.rowid
@@ -78,6 +81,7 @@ export function createSearchRepository({ db }: { db: Database }) {
         SELECT id AS chunkId,
                document_id AS documentId,
                chunk_text AS chunkText,
+               chunk_index AS chunkIndex,
                vector_distance_cos(emb, vector(${vectorJson})) AS distance
         FROM document_chunks
         WHERE emb IS NOT NULL

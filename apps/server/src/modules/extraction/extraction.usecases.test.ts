@@ -79,6 +79,10 @@ describe("extraction", () => {
     expect(doc.extractionStatus).toBe("failed");
     expect(doc.ruleStatus).toBe("failed");
     expect(doc.ruleError).toBe("Extraction failed");
+    expect(doc.embeddingStatus).toBe("failed");
+    expect(doc.embeddingError).toBe("Extraction failed");
+    expect(doc.summaryStatus).toBe("failed");
+    expect(doc.summaryError).toBe("Extraction failed");
     [job] = await t.services.jobsService.list({ userId });
     expect(job).toMatchObject({ status: "failed", attempts: 3 });
   });
@@ -120,6 +124,41 @@ describe("extraction", () => {
     const rulesJob = jobs.find((j) => j.type === "rules");
     expect(rulesJob).toBeDefined();
     expect(JSON.parse(rulesJob!.payload)).toMatchObject({ documentId: document.id, userId, mode: "initial" });
+  });
+
+  it("enqueues an embedding job when an embedding model is configured", async () => {
+    const adapter: AiAdapter = {
+      generateStructured: vi.fn(async () => ({ data: {}, usage: { promptTokens: 0, completionTokens: 0 } }) as StructuredResult),
+      streamText: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
+      embed: vi.fn(async () => ({ vectors: [], dimension: 0 })),
+      recognizeImage: vi.fn(async () => ({ text: "" })),
+      listModels: vi.fn(async () => [] as ModelInfo[]),
+      testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1, message: "ok" }) as TestResult),
+    };
+    const app = await createTestApp({ env: { DOCUMENT_STORAGE_ROOT: root }, adapterFactories: { "openai-compatible": () => adapter, "anthropic": () => adapter } });
+    const uid = (await app.signIn()).userId;
+    await app.services.settingsService.set(uid, { "ai.openrouter.apiKey": "sk-or-v1-test", "ai.model.embedding": "openrouter://test-embed-model" });
+    const { document } = await app.services.documentsService.upload({ userId: uid, name: "notes.txt", mimeType: "text/plain", body: Readable.from(["hello embeddings"]) });
+    const runner = createJobRunner({ db: app.db, handlers: { extraction: app.services.extractionService.handler } });
+    await runner.runOnce();
+
+    const after = await app.services.documentsService.get({ userId: uid, documentId: document.id });
+    expect(after.embeddingStatus).toBe("pending");
+    const jobs = await app.services.jobsService.list({ userId: uid, status: "pending" });
+    const embeddingJob = jobs.find((j) => j.type === "embedding");
+    expect(embeddingJob).toBeDefined();
+    expect(JSON.parse(embeddingJob!.payload)).toMatchObject({ documentId: document.id, userId: uid });
+  });
+
+  it("does not enqueue an embedding job when no embedding model is configured", async () => {
+    const { document } = await t.services.documentsService.upload({ userId, name: "notes.txt", mimeType: "text/plain", body: Readable.from(["hello"]) });
+    const runner = createJobRunner({ db: t.db, handlers: { extraction: t.services.extractionService.handler } });
+    await runner.runOnce();
+
+    const after = await t.services.documentsService.get({ userId, documentId: document.id });
+    expect(after.embeddingStatus).toBe("done");
+    const jobs = await t.services.jobsService.list({ userId });
+    expect(jobs.filter((j) => j.type === "embedding")).toHaveLength(0);
   });
 
   it("sets rule_status done directly when there are no automatic items", async () => {

@@ -35,6 +35,7 @@ import { createSettingsService } from "./modules/settings/settings.usecases.js";
 import { createStorageService } from "./modules/storage/storage.usecases.js";
 import { registerRulesRoutes } from "./modules/rules/rules.routes.js";
 import { createRulesService } from "./modules/rules/rules.usecases.js";
+import { createSearchService } from "./modules/search/search.usecases.js";
 import { registerTagsRoutes } from "./modules/tags/tags.routes.js";
 import { createTagsService } from "./modules/tags/tags.usecases.js";
 import { errorHandler } from "./shared/http/error-handler.js";
@@ -142,7 +143,8 @@ export function createServer({
   const tagsService = createTagsService({ db });
   const rulesService = createRulesService({ db, aiService, documentsService });
   const extractionService: ExtractionService = createExtractionService({ db, documentsService, settingsService, registry, rulesService, aiService });
-  const jobRunner = createJobRunner({ db, handlers: { extraction: extractionService.handler, rules: rulesService.handler } });
+  const searchService = createSearchService({ db, aiService, settingsService });
+  const jobRunner = createJobRunner({ db, handlers: { extraction: extractionService.handler, rules: rulesService.handler, embedding: searchService.handler } });
 
   app.get("/api/health", (c) => c.json({ status: "ok" }));
   registerAuthRoutes({ app, auth, db });
@@ -158,7 +160,7 @@ export function createServer({
   registerTagsRoutes({ app, tagsService, getUserId });
   registerRulesRoutes({ app, rulesService, getUserId });
 
-  return { app, auth, settingsService, storageService, documentsService, jobsService, extractionService, jobRunner, ocrEngine, aiService, tagsService, rulesService, getUserId };
+  return { app, auth, settingsService, storageService, documentsService, jobsService, extractionService, jobRunner, ocrEngine, aiService, tagsService, rulesService, searchService, getUserId };
 }
 
 export type Server = ReturnType<typeof createServer>;

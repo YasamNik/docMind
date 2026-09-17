@@ -128,6 +128,8 @@ export function createExtractionService({
       const ocrResult = await extractor.extract({ bytes, mimeType: document.mimeType ?? "", filename: document.name }, ctx);
       const result = await applyVisionFallback({ userId, documentId, bytes, mimeType: document.mimeType ?? "", result: ocrResult });
       const hasAutoItems = await rulesService.hasAutomaticItems(userId);
+      const embeddingModel = await settingsService.get<string>(userId, "ai.model.embedding");
+      const hasEmbeddingModel = Boolean(embeddingModel);
       await db.transaction(async (tx) => {
         const txDb = asTxDb(tx);
         await documents.update({
@@ -138,12 +140,16 @@ export function createExtractionService({
             extractionStatus: "done",
             extractionError: result.note ?? null,
             ruleStatus: hasAutoItems ? "pending" : "done",
+            embeddingStatus: hasEmbeddingModel ? "pending" : "done",
             updatedAt: now(),
           },
           tx: txDb,
         });
         if (hasAutoItems) {
           await jobs.enqueue({ userId, type: "rules", payload: { documentId, userId, mode: "initial" }, tx: txDb });
+        }
+        if (hasEmbeddingModel) {
+          await jobs.enqueue({ userId, type: "embedding", payload: { documentId, userId }, tx: txDb });
         }
       });
     } catch (error) {
@@ -154,7 +160,16 @@ export function createExtractionService({
         patch: {
           extractionStatus: isFinalAttempt ? "failed" : "pending",
           extractionError: message,
-          ...(isFinalAttempt ? { ruleStatus: "failed" as const, ruleError: "Extraction failed" } : {}),
+          ...(isFinalAttempt
+            ? {
+                ruleStatus: "failed" as const,
+                ruleError: "Extraction failed",
+                embeddingStatus: "failed" as const,
+                embeddingError: "Extraction failed",
+                summaryStatus: "failed" as const,
+                summaryError: "Extraction failed",
+              }
+            : {}),
           updatedAt: now(),
         },
       });
