@@ -7,9 +7,17 @@ import { storageSettingDefinitions } from "./storage.settings.js";
 import { buildStorageKey, createStorageService } from "./storage.usecases.js";
 
 describe("storage service", () => {
-  it("builds safe keys", () => {
-    expect(buildStorageKey({ userId: "u1", documentId: "d1", filename: "My Report (final).pdf" })).toBe("u1/d1/My_Report_final_.pdf");
-    expect(buildStorageKey({ userId: "u1", documentId: "d1", filename: "../../x" })).toBe("u1/d1/x");
+  it("builds a safe key with the upload year and month from the given date, in UTC", () => {
+    const uploadedAt = new Date("2026-03-05T12:00:00.000Z");
+    expect(buildStorageKey({ userId: "u1", documentId: "d1", filename: "My Report (final).pdf", uploadedAt })).toBe(
+      "u1/2026/03/d1/My_Report_final_.pdf",
+    );
+    expect(buildStorageKey({ userId: "u1", documentId: "d1", filename: "../../x", uploadedAt })).toBe("u1/2026/03/d1/x");
+  });
+
+  it("pads a single-digit month", () => {
+    const uploadedAt = new Date("2026-01-09T23:30:00.000Z");
+    expect(buildStorageKey({ userId: "u1", documentId: "d1", filename: "a.txt", uploadedAt })).toBe("u1/2026/01/d1/a.txt");
   });
 
   it("resolves the active driver from settings", async () => {

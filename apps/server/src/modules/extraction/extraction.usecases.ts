@@ -71,7 +71,12 @@ export function createExtractionService({
       await documents.update({
         userId,
         documentId,
-        patch: { extractionStatus: isFinalAttempt ? "failed" : "pending", extractionError: message, updatedAt: now() },
+        patch: {
+          extractionStatus: isFinalAttempt ? "failed" : "pending",
+          extractionError: message,
+          ...(isFinalAttempt ? { ruleStatus: "failed" as const, ruleError: "Extraction failed" } : {}),
+          updatedAt: now(),
+        },
       });
       throw error;
     }

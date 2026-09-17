@@ -63,6 +63,8 @@ describe("extraction", () => {
     }
     doc = await t.services.documentsService.get({ userId, documentId: document.id });
     expect(doc.extractionStatus).toBe("failed");
+    expect(doc.ruleStatus).toBe("failed");
+    expect(doc.ruleError).toBe("Extraction failed");
     [job] = await t.services.jobsService.list({ userId });
     expect(job).toMatchObject({ status: "failed", attempts: 3 });
   });

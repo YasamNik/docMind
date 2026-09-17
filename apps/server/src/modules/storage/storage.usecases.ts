@@ -3,10 +3,22 @@ import { createError } from "../../shared/errors/errors.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
 import { storageDriverRegistry, type StorageDriverId } from "./storage.registry.js";
 
-export function buildStorageKey({ userId, documentId, filename }: { userId: string; documentId: string; filename: string }) {
+export function buildStorageKey({
+  userId,
+  documentId,
+  filename,
+  uploadedAt,
+}: {
+  userId: string;
+  documentId: string;
+  filename: string;
+  uploadedAt: Date;
+}) {
   const base = basename(filename.replace(/\\/g, "/"));
   const safe = base.replace(/[^\w.\-]+/g, "_").replace(/^\.+/, "").slice(0, 200) || "file";
-  return `${userId}/${documentId}/${safe}`;
+  const yyyy = uploadedAt.getUTCFullYear();
+  const mm = String(uploadedAt.getUTCMonth() + 1).padStart(2, "0");
+  return `${userId}/${yyyy}/${mm}/${documentId}/${safe}`;
 }
 
 export function createStorageService({ settingsService }: { settingsService: SettingsService }) {

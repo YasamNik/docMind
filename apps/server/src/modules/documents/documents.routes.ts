@@ -4,7 +4,7 @@ import type { Context, Hono } from "hono";
 import { stream } from "hono/streaming";
 import { createError } from "../../shared/errors/errors.js";
 import { parseJsonBody, parseOrValidationError } from "../../shared/http/validate.js";
-import { documentIdSchema, renameBodySchema, uploadQuerySchema } from "./documents.schemas.js";
+import { documentIdSchema, listDocumentsQuerySchema, renameBodySchema, uploadQuerySchema } from "./documents.schemas.js";
 import type { DocumentsService } from "./documents.usecases.js";
 
 export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
@@ -33,7 +33,8 @@ export function registerDocumentsRoutes({
   });
 
   app.get("/api/documents", async (c) => {
-    const documents = await documentsService.list({ userId: getUserId(c) });
+    const { categoryId, tagId, view } = parseOrValidationError(listDocumentsQuerySchema, c.req.query());
+    const documents = await documentsService.list({ userId: getUserId(c), categoryId, tagId, view });
     return c.json({ documents });
   });
 

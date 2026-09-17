@@ -1,7 +1,10 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import type { Database } from "../database/database.js";
+import { buildCategoryPaths, collectDescendantIds } from "../tags/tags.models.js";
+import { categoriesTable, documentTagsTable, tagsTable } from "../tags/tags.tables.js";
+import type { TagChip } from "../tags/tags.types.js";
 import { documentsTable } from "./documents.tables.js";
-import type { NewDocument } from "./documents.types.js";
+import type { Document, DocumentListRow, DocumentView, NewDocument } from "./documents.types.js";
 
 const listColumns = {
   id: documentsTable.id,
@@ -25,31 +28,114 @@ const listColumns = {
 };
 
 export function createDocumentsRepository({ db }: { db: Database }) {
+  async function loadCategoryPathMap(userId: string) {
+    const categories = await db.select().from(categoriesTable).where(eq(categoriesTable.userId, userId));
+    return buildCategoryPaths(categories);
+  }
+
+  async function loadTagsByDocument(documentIds: string[]): Promise<Map<string, TagChip[]>> {
+    const map = new Map<string, TagChip[]>();
+    if (documentIds.length === 0) return map;
+    const rows = await db
+      .select({
+        documentId: documentTagsTable.documentId,
+        id: tagsTable.id,
+        name: tagsTable.name,
+        color: tagsTable.color,
+        appliedByAuto: documentTagsTable.appliedByAuto,
+        appliedByManual: documentTagsTable.appliedByManual,
+      })
+      .from(documentTagsTable)
+      .innerJoin(tagsTable, eq(documentTagsTable.tagId, tagsTable.id))
+      .where(inArray(documentTagsTable.documentId, documentIds));
+    for (const r of rows) {
+      const chip: TagChip = { id: r.id, name: r.name, color: r.color, auto: r.appliedByAuto === 1, manual: r.appliedByManual === 1 };
+      const list = map.get(r.documentId) ?? [];
+      list.push(chip);
+      map.set(r.documentId, list);
+    }
+    return map;
+  }
+
   return {
     async insert(document: NewDocument, tx: Database = db) {
       await tx.insert(documentsTable).values(document);
     },
-    async listByUser(userId: string) {
-      return db
+
+    async listByUser({
+      userId,
+      categoryId,
+      tagId,
+      view = "all",
+    }: {
+      userId: string;
+      categoryId?: string;
+      tagId?: string;
+      view?: DocumentView;
+    }): Promise<DocumentListRow[]> {
+      const conditions = [eq(documentsTable.userId, userId)];
+      if (view === "inbox") conditions.push(inArray(documentsTable.ruleStatus, ["pending", "processing"]));
+      if (view === "needs_review") {
+        conditions.push(eq(documentsTable.ruleStatus, "done"));
+        conditions.push(isNull(documentsTable.categoryId));
+      }
+      if (categoryId) {
+        const categories = await db.select().from(categoriesTable).where(eq(categoriesTable.userId, userId));
+        const ids = [categoryId, ...collectDescendantIds(categories, categoryId)];
+        conditions.push(inArray(documentsTable.categoryId, ids));
+      }
+      if (tagId) {
+        const linked = await db.select({ documentId: documentTagsTable.documentId }).from(documentTagsTable).where(eq(documentTagsTable.tagId, tagId));
+        const ids = linked.map((r) => r.documentId);
+        conditions.push(inArray(documentsTable.id, ids.length > 0 ? ids : ["__none__"]));
+      }
+
+      const rows = await db
         .select(listColumns)
         .from(documentsTable)
-        .where(eq(documentsTable.userId, userId))
+        .where(and(...conditions))
         .orderBy(desc(documentsTable.createdAt), desc(documentsTable.id));
+
+      const [pathMap, tagsMap] = await Promise.all([loadCategoryPathMap(userId), loadTagsByDocument(rows.map((r) => r.id))]);
+      return rows.map((row) => ({
+        ...row,
+        categoryPath: row.categoryId ? (pathMap.get(row.categoryId) ?? null) : null,
+        tags: tagsMap.get(row.id) ?? [],
+      }));
     },
-    async findById({ userId, documentId }: { userId: string; documentId: string }) {
+
+    async findById({ userId, documentId }: { userId: string; documentId: string }): Promise<Document | null> {
       const [row] = await db
         .select()
         .from(documentsTable)
         .where(and(eq(documentsTable.userId, userId), eq(documentsTable.id, documentId)));
       return row ?? null;
     },
-    async findByHash({ userId, contentHash }: { userId: string; contentHash: string }) {
+
+    async findByIdWithExtras({
+      userId,
+      documentId,
+    }: {
+      userId: string;
+      documentId: string;
+    }): Promise<(Document & { categoryPath: string | null; tags: TagChip[] }) | null> {
+      const [row] = await db
+        .select()
+        .from(documentsTable)
+        .where(and(eq(documentsTable.userId, userId), eq(documentsTable.id, documentId)));
+      if (!row) return null;
+      const [pathMap, tagsMap] = await Promise.all([loadCategoryPathMap(userId), loadTagsByDocument([row.id])]);
+      return { ...row, categoryPath: row.categoryId ? (pathMap.get(row.categoryId) ?? null) : null, tags: tagsMap.get(row.id) ?? [] };
+    },
+
+    async findByHash({ userId, contentHash }: { userId: string; contentHash: string }): Promise<Document | null> {
       const [row] = await db
         .select()
         .from(documentsTable)
         .where(and(eq(documentsTable.userId, userId), eq(documentsTable.contentHash, contentHash)));
       return row ?? null;
     },
+
     async update({
       userId,
       documentId,
@@ -66,8 +152,11 @@ export function createDocumentsRepository({ db }: { db: Database }) {
         .set(patch)
         .where(and(eq(documentsTable.userId, userId), eq(documentsTable.id, documentId)));
     },
+
     async remove({ userId, documentId }: { userId: string; documentId: string }) {
       await db.delete(documentsTable).where(and(eq(documentsTable.userId, userId), eq(documentsTable.id, documentId)));
     },
   };
 }
+
+export type DocumentsRepository = ReturnType<typeof createDocumentsRepository>;

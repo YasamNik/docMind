@@ -76,4 +76,29 @@ describe("documents routes", () => {
     });
     expect(big.status).toBe(413);
   });
+
+  it("filters the list by categoryId, tagId, and view", async () => {
+    const created = await upload("a.txt", "hello");
+    const { document } = await created.json();
+    const category = (
+      await (
+        await app.request("/api/categories", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "Finance" }) })
+      ).json()
+    ).category;
+    await app.request(`/api/documents/${document.id}/category`, {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ categoryId: category.id }),
+    });
+
+    const byCategory = await (await app.request(`/api/documents?categoryId=${category.id}`, { headers: { cookie } })).json();
+    expect(byCategory.documents.map((d: { id: string }) => d.id)).toEqual([document.id]);
+    expect(byCategory.documents[0].categoryPath).toBe("Finance");
+
+    const inbox = await (await app.request("/api/documents?view=inbox", { headers: { cookie } })).json();
+    expect(inbox.documents.map((d: { id: string }) => d.id)).toEqual([document.id]);
+
+    const badView = await app.request("/api/documents?view=bogus", { headers: { cookie } });
+    expect(badView.status).toBe(400);
+  });
 });

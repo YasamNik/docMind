@@ -5,7 +5,7 @@ import type { Database } from "../database/database.js";
 import { buildStorageKey, type StorageService } from "../storage/storage.usecases.js";
 import { hashingCounter, newDocumentId, nowIso, sanitizeFilename } from "./documents.models.js";
 import { createDocumentsRepository } from "./documents.repository.js";
-import type { Document, DocumentListRow } from "./documents.types.js";
+import type { Document, DocumentListRow, DocumentView } from "./documents.types.js";
 
 function notFound(documentId: string) {
   return createError({ code: "documents.not_found", message: `Document "${documentId}" not found`, status: 404 });
@@ -30,6 +30,12 @@ export function createDocumentsService({
     return document;
   }
 
+  async function getEnrichedOrThrow(userId: string, documentId: string) {
+    const row = await repository.findByIdWithExtras({ userId, documentId });
+    if (!row) throw notFound(documentId);
+    return row;
+  }
+
   return {
     async upload({
       userId,
@@ -46,9 +52,10 @@ export function createDocumentsService({
     }) {
       const documentId = newDocumentId();
       const safeName = sanitizeFilename(name);
+      const uploadedAt = new Date();
       const driverId = await storageService.getActiveDriverId(userId);
       const driver = await storageService.getDriver(userId, driverId);
-      const key = buildStorageKey({ userId, documentId, filename: safeName });
+      const key = buildStorageKey({ userId, documentId, filename: safeName, uploadedAt });
 
       const counter = hashingCounter();
       const toStorage = new PassThrough();
@@ -69,7 +76,7 @@ export function createDocumentsService({
         return { document: existing, duplicateOf: existing.id };
       }
 
-      const timestamp = nowIso();
+      const timestamp = uploadedAt.toISOString();
       const document: Document = {
         id: documentId,
         userId,
@@ -98,12 +105,22 @@ export function createDocumentsService({
       return { document };
     },
 
-    list({ userId }: { userId: string }): Promise<DocumentListRow[]> {
-      return repository.listByUser(userId);
+    list({
+      userId,
+      categoryId,
+      tagId,
+      view,
+    }: {
+      userId: string;
+      categoryId?: string;
+      tagId?: string;
+      view?: DocumentView;
+    }): Promise<DocumentListRow[]> {
+      return repository.listByUser({ userId, categoryId, tagId, view });
     },
 
     get({ userId, documentId }: { userId: string; documentId: string }) {
-      return getOrThrow(userId, documentId);
+      return getEnrichedOrThrow(userId, documentId);
     },
 
     async rename({ userId, documentId, name }: { userId: string; documentId: string; name: string }) {
