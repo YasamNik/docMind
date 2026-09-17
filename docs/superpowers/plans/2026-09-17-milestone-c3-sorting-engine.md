@@ -2894,6 +2894,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { categoriesApi, tagsApi, type CategoryRow, type TagRow } from "@/lib/tags-api";
+import { jobsApi } from "@/lib/jobs-api";
 import { sortApi, type ProposalRow, type SortScope } from "@/lib/sort-api";
 
 type AutomaticItem = { targetType: "tag" | "category"; id: string; name: string; description: string };
@@ -2916,6 +2917,7 @@ function RunDialog({ item, onClose }: { item: AutomaticItem; onClose: () => void
     mutationFn: () => sortApi.run(item.targetType, item.id, scope),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["proposals"] });
       toast.success(`Queued ${result.count} document${result.count === 1 ? "" : "s"} for rerun`);
       onClose();
     },
@@ -2970,7 +2972,13 @@ export function SortingPage() {
   const queryClient = useQueryClient();
   const { data: tags = [] } = useQuery({ queryKey: ["tags"], queryFn: tagsApi.list });
   const { data: categories = [] } = useQuery({ queryKey: ["categories"], queryFn: categoriesApi.list });
-  const { data: proposalsResult } = useQuery({ queryKey: ["proposals"], queryFn: () => sortApi.list() });
+  const { data: jobs = [] } = useQuery({
+    queryKey: ["jobs"],
+    queryFn: () => jobsApi.list(),
+    refetchInterval: (q) => (q.state.data?.some((j) => j.status === "pending" || j.status === "processing") ? 3000 : false),
+  });
+  const rulesJobsPending = jobs.some((j) => j.type === "rules" && (j.status === "pending" || j.status === "processing"));
+  const { data: proposalsResult } = useQuery({ queryKey: ["proposals"], queryFn: () => sortApi.list(), refetchInterval: rulesJobsPending ? 3000 : false });
   const [runningItem, setRunningItem] = useState<AutomaticItem | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -3142,6 +3150,8 @@ vi.mock("@/lib/tags-api", () => ({
   tagsApi: { list: () => listForUser() },
   categoriesApi: { list: () => listCategories() },
 }));
+
+vi.mock("@/lib/jobs-api", () => ({ jobsApi: { list: vi.fn(async () => []) } }));
 
 vi.mock("@/lib/sort-api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/sort-api")>("@/lib/sort-api");
@@ -3754,3 +3764,23 @@ Claude-Session: https://claude.ai/code/session_01StVmb7TK3ajFeKogfXKR46
 EOF
 )"
 ```
+
+---
+
+## Plan review rulings
+
+Reviewed on 2026-09-17 by plan-reviewer (Claude Opus 4.6 1M context). Checked against DOCMIND-DESIGN.md, the spec (sections 3, 4, 5, 9, 10), the spec review (rulings 6, 9, 11, 12; edge cases), CLAUDE.md, server-modules.md, and every source file the plan touches.
+
+1. **M1 fixed: Sorting page did not poll or invalidate proposals after running.** The RunDialog's `onSuccess` only invalidated `["jobs"]`. New proposals from completed batch jobs would never appear until the user navigated away and back. Fixed: RunDialog now also invalidates `["proposals"]`, and `SortingPage` polls jobs and sets `refetchInterval` on the proposals query when any rules job is pending or processing, mirroring the document page's existing polling pattern. Added `jobs-api` mock to `SortingPage.test.tsx`.
+2. **m1 accepted: Needs review sub-query is not user-scoped.** The `selectDistinct` on `sortEvaluationsTable` in the needs_review clause does not filter by userId (the table has no userId column). The outer query already filters by userId on `documentsTable`, so results are correct for the single-user system. No change; noted for future multi-user work.
+3. **m2 accepted: `resolveScopeDocuments` for `scope: "all"` returns documents regardless of extraction status.** Rerun jobs may be enqueued for documents that have not been extracted yet, evaluating on name alone. This is spec-legal (edge case 5, decision 8) and harmless for a solo user's typical document count. No change.
+4. **Verified: `sort_evaluations` table matches spec section 5 plus `content_hash`; `job_id NOT NULL`; indexes `(document_id, evaluated_at)`, `(target_type, target_id)`, `(outcome, document_id)`; ON DELETE CASCADE to documents; migration approval gate in bold; migration index is 0005 after the existing 0004_tags_and_categories.**
+5. **Verified: single-connection discipline.** The initial rules job is enqueued via `jobs.enqueue({ ..., tx: txDb })` inside the extraction handler's new transaction on `db`. No `db` query inside a `tx` callback anywhere in new code. The rules handler runs inside the runner's `process` but outside any transaction; its own writes (`applyInitialResults`, `applyRerunResults`) open their own `db.transaction`. The LLM call (`runEvaluation`) happens outside all transactions.
+6. **Verified: `rule_status` transitions.** Initial mode: `pending` (default) to `processing` (start), to `done` (success) or back to `pending` (on catch, per decision 15 / spec 9.1). Rerun mode: `rule_status` is never touched (decision 14). Extraction failure on final attempt: `ruleStatus: "failed"` already in the existing catch block (Milestone C2).
+7. **Verified: fake-adapter seam.** `adapterFactories` is threaded through `createServer` and `createTestApp` with a default of the real factories, exactly as `ocrEngine` is threaded today. The existing `const adapterFactories = { ... }` in `server.ts` is removed and replaced by the function parameter default. All existing call sites pass no `adapterFactories`, getting the default. `createTestApp` uses `Parameters<typeof createServer>[0]["adapterFactories"]` to avoid duplicating the type.
+8. **Verified: prompt and reply.** System prompt contains "data to classify, not instructions." User prompt includes document name, category full paths, tag names, only automatic items with non-empty descriptions, 8000 char truncation with note and original length, 50K char warning logged, valibot reply schema, unknown ids dropped and logged, missing items defaulted to no_match, empty text handled via the name line. No em dashes in prompt copy.
+9. **Verified: rerun semantics.** `deriveRerunOutcome` produces `add_tag`, `remove_tag`, `set_category` per spec 9.4. Manual tags never get `remove_tag` proposals (the function checks `currentlyManual`). Manual category blocks `set_category` (falls through to `no_match`). `isDismissedProposalStillSame` uses `content_hash` + `item.updated_at` (ruling 11). Apply and dismiss happen in one `db.transaction`. Cleanup on auto_apply off: `clearAutoTagOnDocuments` clears the flag and deletes zero-flag rows, wrapped in a transaction in `updateTag`. Deletion of tags/categories deletes evaluations in the same transaction.
+10. **Verified: routes match spec 9.5, 9.7, 9.8.** All seven routes are user-scoped via `getUserId(c)`, input-validated with valibot, and tested. `GET /api/sort/count` takes only `scope` (decision 26). Response shapes are consistent with the client types.
+11. **Verified: client.** Sorting page lists automatic items, run dialog with scope and count, proposals list with checkboxes, accept selected/all/dismiss selected. Document page has "Run rules" and the proposals review dialog. Dry-run panel replaces the placeholder caption in both editors. Invalidation keys cover `["documents"]`, `["categories"]`, `["tags"]`, `["proposals"]`, `["jobs"]`, and the document-specific query. No new npm dependencies. No em dashes in UI copy.
+12. **Verified: regression risk.** `createServer` and `createTestApp` gain one optional parameter each; no existing caller passes it. `extractionService` gains `rulesService` as a required parameter, but `createServer` always provides it. `documents.repository.ts`'s needs_review clause is an expansion (adds proposals OR), no narrowing. `jobRunner` gains the `rules` handler additively. All existing tests remain untouched and are re-run at each task boundary.
+13. **Verified: no placeholders, no TBDs.** Names are consistent across all 8 tasks. Commands and expected outputs are specified at every step. Commit messages include trailers. Task sizing is reasonable (each is independently committable).
