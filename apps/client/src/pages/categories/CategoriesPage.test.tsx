@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
+import type { CategoryRow } from "@/lib/tags-api";
 import { CategoriesPage } from "./CategoriesPage";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -12,7 +13,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const listMock = vi.fn(async () => [
+const listMock = vi.fn(async (): Promise<CategoryRow[]> => [
   {
     id: "cat_1",
     name: "Finance",
@@ -45,6 +46,7 @@ const listMock = vi.fn(async () => [
 const createMock = vi.fn(async (input: unknown) => ({ id: "cat_3", documentCount: 0, sortOrder: 2, path: "Tax", createdAt: "", updatedAt: "", ...(input as object) }));
 const removeMock = vi.fn(async (_id: string) => undefined);
 const updateMock = vi.fn(async (id: string, patch: unknown) => ({ id, ...(patch as object) }));
+const reorderMock = vi.fn(async (a: { id: string; sortOrder: number }, b: { id: string; sortOrder: number }) => [a, b]);
 
 vi.mock("@/lib/documents-api", () => ({ documentsApi: { list: vi.fn(async () => [{ id: "doc_1", name: "invoice.pdf" }]) } }));
 vi.mock("@/lib/sort-api", () => ({ sortApi: { dryRun: vi.fn(async () => ({ matched: false, confidence: 0, reasoning: "", wouldApply: false })) } }));
@@ -55,6 +57,7 @@ vi.mock("@/lib/tags-api", () => ({
     create: (input: unknown) => createMock(input),
     update: (id: string, patch: unknown) => updateMock(id, patch),
     remove: (id: string) => removeMock(id),
+    reorder: (a: { id: string; sortOrder: number }, b: { id: string; sortOrder: number }) => reorderMock(a, b),
   },
 }));
 
@@ -86,13 +89,12 @@ describe("CategoriesPage", () => {
     await waitFor(() => expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ name: "Tax", parentId: "cat_1" })));
   });
 
-  it("moves a category down by swapping sortOrder with its next sibling", async () => {
+  it("moves a category down by swapping sortOrder with its next sibling in one request", async () => {
     renderPage();
     await screen.findByText("Finance");
     fireEvent.click(screen.getByLabelText("Move Finance down"));
     await waitFor(() => {
-      expect(updateMock).toHaveBeenCalledWith("cat_1", { sortOrder: 1 });
-      expect(updateMock).toHaveBeenCalledWith("cat_2", { sortOrder: 0 });
+      expect(reorderMock).toHaveBeenCalledWith({ id: "cat_1", sortOrder: 1 }, { id: "cat_2", sortOrder: 0 });
     });
   });
 
@@ -100,7 +102,7 @@ describe("CategoriesPage", () => {
     renderPage();
     await screen.findByText("Finance");
     fireEvent.click(screen.getByLabelText("Move Finance up"));
-    expect(updateMock).not.toHaveBeenCalled();
+    expect(reorderMock).not.toHaveBeenCalled();
   });
 
   it("deletes a category after confirming and refreshes the documents query", async () => {
@@ -129,6 +131,61 @@ describe("CategoriesPage", () => {
       }),
     );
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["documents"] });
+  });
+
+  it("excludes the category being edited and its descendants from the parent picker", async () => {
+    listMock.mockResolvedValueOnce([
+      {
+        id: "cat_1",
+        name: "Finance",
+        parentId: null,
+        color: null,
+        description: "",
+        confidenceThreshold: 0.7,
+        autoApply: true,
+        sortOrder: 0,
+        path: "Finance",
+        documentCount: 0,
+        createdAt: "",
+        updatedAt: "",
+      },
+      {
+        id: "cat_2",
+        name: "Tax",
+        parentId: "cat_1",
+        color: null,
+        description: "",
+        confidenceThreshold: 0.7,
+        autoApply: true,
+        sortOrder: 0,
+        path: "Finance / Tax",
+        documentCount: 0,
+        createdAt: "",
+        updatedAt: "",
+      },
+      {
+        id: "cat_3",
+        name: "Personal",
+        parentId: null,
+        color: null,
+        description: "",
+        confidenceThreshold: 0.7,
+        autoApply: true,
+        sortOrder: 1,
+        path: "Personal",
+        documentCount: 0,
+        createdAt: "",
+        updatedAt: "",
+      },
+    ]);
+    renderPage();
+    fireEvent.click((await screen.findAllByText("Edit"))[0]);
+    const dialog = within(screen.getByRole("dialog"));
+    const select = dialog.getByLabelText("Parent") as HTMLSelectElement;
+    const optionLabels = Array.from(select.options).map((o) => o.textContent);
+    expect(optionLabels).toContain("Personal");
+    expect(optionLabels).not.toContain("Finance");
+    expect(optionLabels).not.toContain("Finance / Tax");
   });
 
   it("shows the server's error message when creating a duplicate category fails", async () => {

@@ -101,4 +101,10 @@ describe("documents routes", () => {
     const badView = await app.request("/api/documents?view=bogus", { headers: { cookie } });
     expect(badView.status).toBe(400);
   });
+
+  it("reports inbox and needs_review counts", async () => {
+    await upload("a.txt", "hello");
+    const counts = await (await app.request("/api/documents/counts", { headers: { cookie } })).json();
+    expect(counts).toEqual({ inbox: 1, needsReview: 0 });
+  });
 });

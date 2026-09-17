@@ -8,11 +8,7 @@ afterEach(() => cleanup());
 
 vi.mock("@/lib/documents-api", () => ({
   documentsApi: {
-    list: vi.fn(async (filters?: { view?: string }) => {
-      if (filters?.view === "inbox") return [{ id: "doc_1" }];
-      if (filters?.view === "needs_review") return [{ id: "doc_2" }, { id: "doc_3" }];
-      return [];
-    }),
+    counts: vi.fn(async () => ({ inbox: 1, needsReview: 2 })),
   },
 }));
 

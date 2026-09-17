@@ -1,6 +1,6 @@
 import { buildModelUri } from "../ai/ai.models.js";
 import type { AiService } from "../ai/ai.usecases.js";
-import type { Database } from "../database/database.js";
+import { asTxDb, type Database } from "../database/database.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
 import type { Document } from "../documents/documents.types.js";
@@ -208,7 +208,7 @@ export function createRulesService({
       };
     });
     await db.transaction(async (tx) => {
-      const txDb = tx as unknown as Database;
+      const txDb = asTxDb(tx);
       await repository.insertEvaluations(evaluations, txDb);
       for (const r of results) {
         if (r.item.type !== "tag") continue;
@@ -243,7 +243,7 @@ export function createRulesService({
     const categoryPick = pickCategory(results.filter((r) => r.item.type === "category"));
     const now = nowIso();
     await db.transaction(async (tx) => {
-      const txDb = tx as unknown as Database;
+      const txDb = asTxDb(tx);
       const evaluations: NewSortEvaluation[] = [];
       for (const r of results) {
         const applied = isAppliedResult(r, categoryPick);
@@ -442,7 +442,7 @@ export function createRulesService({
     const dismissRows = await repository.findProposalsByIds({ userId, ids: dismiss });
     const now = nowIso();
     await db.transaction(async (tx) => {
-      const txDb = tx as unknown as Database;
+      const txDb = asTxDb(tx);
       for (const row of acceptRows) {
         if (row.targetType === "tag" && row.proposalKind === "add_tag") {
           await repository.setTagAutoApplied({ documentId: row.documentId, tagId: row.targetId, applied: true, tx: txDb });

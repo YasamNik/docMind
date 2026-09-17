@@ -140,6 +140,16 @@ describe("documents service filters and enrichment", () => {
     expect((await documents.list({ userId, view: "needs_review" })).map((d) => d.id)).toEqual([]);
   });
 
+  it("counts() reports inbox and needs_review sizes without returning full rows", async () => {
+    await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    const { document: done } = await documents.upload({ userId, name: "b.txt", mimeType: "text/plain", body: Readable.from(["b"]) });
+    const repository = createDocumentsRepository({ db });
+    await repository.update({ userId, documentId: done.id, patch: { ruleStatus: "done" } });
+
+    expect(await documents.counts({ userId })).toEqual({ inbox: 1, needsReview: 1 });
+    expect(await documents.counts({ userId: "someone-else" })).toEqual({ inbox: 0, needsReview: 0 });
+  });
+
   it("filters by categoryId including descendants, and by tagId", async () => {
     const tags = createTagsService({ db });
     const finance = await tags.createCategory({ userId, name: "Finance" });

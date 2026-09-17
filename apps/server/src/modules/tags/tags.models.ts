@@ -38,6 +38,9 @@ export function buildCategoryPaths(categories: CategoryNode[], separator = " / "
   return paths;
 }
 
+// Assumes the parentId links form a tree with no cycles (wouldCreateCycle enforces
+// this at write time). There is no visited-set guard here, so a cycle in the data
+// would make this loop forever instead of just returning a wrong answer.
 export function collectDescendantIds(categories: CategoryNode[], rootId: string): string[] {
   const childrenByParent = new Map<string, string[]>();
   for (const c of categories) {

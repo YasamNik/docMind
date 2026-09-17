@@ -90,6 +90,28 @@ describe("tags and categories routes", () => {
     expect((await app.request(`/api/categories/${tax.category.id}`, { method: "DELETE", headers: { cookie } })).status).toBe(204);
   });
 
+  it("reorders two categories in a single request", async () => {
+    const { app, signIn } = await createTestApp();
+    const { cookie } = await signIn();
+
+    const first = await (
+      await app.request("/api/categories", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "zzz" }) })
+    ).json();
+    const second = await (
+      await app.request("/api/categories", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "aaa" }) })
+    ).json();
+
+    const reordered = await app.request("/api/categories/reorder", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ a: { id: first.category.id, sortOrder: 1 }, b: { id: second.category.id, sortOrder: 0 } }),
+    });
+    expect(reordered.status).toBe(200);
+
+    const list = await (await app.request("/api/categories", { headers: { cookie } })).json();
+    expect(list.categories.map((c: { id: string }) => c.id)).toEqual([second.category.id, first.category.id]);
+  });
+
   it("sets and clears a document's category and tags", async () => {
     const { app, signIn, services } = await createTestApp();
     const { cookie, userId } = await signIn();

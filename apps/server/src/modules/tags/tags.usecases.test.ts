@@ -106,6 +106,28 @@ describe("tags service", () => {
     expect(list.map((c) => c.id)).toEqual([b.id, a.id]);
   });
 
+  it("reorders two categories in one call and rejects the whole swap if either id is unknown", async () => {
+    const a = await tags.createCategory({ userId, name: "zzz" });
+    const b = await tags.createCategory({ userId, name: "aaa" });
+    const [updatedA, updatedB] = await tags.reorderCategories({
+      userId,
+      a: { id: a.id, sortOrder: 1 },
+      b: { id: b.id, sortOrder: 0 },
+    });
+    expect(updatedA.sortOrder).toBe(1);
+    expect(updatedB.sortOrder).toBe(0);
+    const list = await tags.listCategories(userId);
+    expect(list.map((c) => c.id)).toEqual([b.id, a.id]);
+
+    await expectAppError(
+      () => tags.reorderCategories({ userId, a: { id: a.id, sortOrder: 0 }, b: { id: "cat_0000000000000000", sortOrder: 1 } }),
+      "categories.not_found",
+    );
+    // The rejected swap must not have applied the first half either.
+    const unchanged = await tags.listCategories(userId);
+    expect(unchanged.map((c) => c.id)).toEqual([b.id, a.id]);
+  });
+
   it("rejects a sibling category name that differs only by case, but allows the same name under a different parent", async () => {
     const finance = await tags.createCategory({ userId, name: "Finance" });
     await tags.createCategory({ userId, name: "Receipts", parentId: finance.id });

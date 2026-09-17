@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Database } from "../database/database.js";
 import { buildCategoryPaths, collectDescendantIds } from "../tags/tags.models.js";
 import { sortEvaluationsTable } from "../rules/rules.tables.js";
@@ -32,6 +32,23 @@ export function createDocumentsRepository({ db }: { db: Database }) {
   async function loadCategoryPathMap(userId: string) {
     const categories = await db.select().from(categoriesTable).where(eq(categoriesTable.userId, userId));
     return buildCategoryPaths(categories);
+  }
+
+  // Shared by listByUser and countByUser so the inbox and needs_review definitions
+  // cannot drift between the row fetch and the count-only path.
+  async function buildViewConditions(userId: string, view: DocumentView) {
+    const conditions = [eq(documentsTable.userId, userId)];
+    if (view === "inbox") conditions.push(inArray(documentsTable.ruleStatus, ["pending", "processing"]));
+    if (view === "needs_review") {
+      conditions.push(eq(documentsTable.ruleStatus, "done"));
+      const proposedRows = await db
+        .selectDistinct({ documentId: sortEvaluationsTable.documentId })
+        .from(sortEvaluationsTable)
+        .where(eq(sortEvaluationsTable.outcome, "proposed"));
+      const proposedIds = proposedRows.map((r) => r.documentId);
+      conditions.push(proposedIds.length > 0 ? or(isNull(documentsTable.categoryId), inArray(documentsTable.id, proposedIds))! : isNull(documentsTable.categoryId));
+    }
+    return conditions;
   }
 
   async function loadTagsByDocument(documentIds: string[]): Promise<Map<string, TagChip[]>> {
@@ -74,19 +91,11 @@ export function createDocumentsRepository({ db }: { db: Database }) {
       tagId?: string;
       view?: DocumentView;
     }): Promise<DocumentListRow[]> {
-      const conditions = [eq(documentsTable.userId, userId)];
-      if (view === "inbox") conditions.push(inArray(documentsTable.ruleStatus, ["pending", "processing"]));
-      if (view === "needs_review") {
-        conditions.push(eq(documentsTable.ruleStatus, "done"));
-        const proposedRows = await db
-          .selectDistinct({ documentId: sortEvaluationsTable.documentId })
-          .from(sortEvaluationsTable)
-          .where(eq(sortEvaluationsTable.outcome, "proposed"));
-        const proposedIds = proposedRows.map((r) => r.documentId);
-        conditions.push(proposedIds.length > 0 ? or(isNull(documentsTable.categoryId), inArray(documentsTable.id, proposedIds))! : isNull(documentsTable.categoryId));
-      }
+      const conditions = await buildViewConditions(userId, view);
+      // Fetched once and reused for both the categoryId filter (descendant ids) and the
+      // path map below, instead of querying all of the user's categories twice.
+      const categories = await db.select().from(categoriesTable).where(eq(categoriesTable.userId, userId));
       if (categoryId) {
-        const categories = await db.select().from(categoriesTable).where(eq(categoriesTable.userId, userId));
         const ids = [categoryId, ...collectDescendantIds(categories, categoryId)];
         conditions.push(inArray(documentsTable.categoryId, ids));
       }
@@ -102,12 +111,22 @@ export function createDocumentsRepository({ db }: { db: Database }) {
         .where(and(...conditions))
         .orderBy(desc(documentsTable.createdAt), desc(documentsTable.id));
 
-      const [pathMap, tagsMap] = await Promise.all([loadCategoryPathMap(userId), loadTagsByDocument(rows.map((r) => r.id))]);
+      const pathMap = buildCategoryPaths(categories);
+      const tagsMap = await loadTagsByDocument(rows.map((r) => r.id));
       return rows.map((row) => ({
         ...row,
         categoryPath: row.categoryId ? (pathMap.get(row.categoryId) ?? null) : null,
         tags: tagsMap.get(row.id) ?? [],
       }));
+    },
+
+    async countByUser({ userId, view }: { userId: string; view: DocumentView }): Promise<number> {
+      const conditions = await buildViewConditions(userId, view);
+      const [row] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(documentsTable)
+        .where(and(...conditions));
+      return row?.count ?? 0;
     },
 
     async findById({ userId, documentId }: { userId: string; documentId: string }): Promise<Document | null> {

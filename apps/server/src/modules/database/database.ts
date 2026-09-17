@@ -12,3 +12,10 @@ export async function createDatabase({ url }: { url: string }) {
 }
 
 export type Database = Awaited<ReturnType<typeof createDatabase>>["db"];
+
+// Drizzle's transaction callback types the tx object as a distinct transaction type,
+// but it is structurally the same as Database for our query usage. This helper centralizes
+// the cast so call sites do not repeat `tx as unknown as Database`.
+export function asTxDb(tx: unknown): Database {
+  return tx as Database;
+}

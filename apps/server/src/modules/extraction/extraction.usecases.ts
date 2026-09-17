@@ -2,7 +2,7 @@ import type { Readable } from "node:stream";
 import * as v from "valibot";
 import { createError } from "../../shared/errors/errors.js";
 import { parseOrValidationError } from "../../shared/http/validate.js";
-import type { Database } from "../database/database.js";
+import { asTxDb, type Database } from "../database/database.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
 import type { JobHandler } from "../jobs/jobs.runner.js";
@@ -66,7 +66,7 @@ export function createExtractionService({
       const result = await extractor.extract({ bytes, mimeType: document.mimeType ?? "", filename: document.name }, ctx);
       const hasAutoItems = await rulesService.hasAutomaticItems(userId);
       await db.transaction(async (tx) => {
-        const txDb = tx as unknown as Database;
+        const txDb = asTxDb(tx);
         await documents.update({
           userId,
           documentId,
@@ -144,9 +144,9 @@ export function createExtractionService({
         userId,
         documentId,
         patch: { extractionStatus: "pending", extractionError: null, updatedAt: new Date().toISOString() },
-        tx: tx as unknown as Database,
+        tx: asTxDb(tx),
       });
-      return jobs.enqueue({ userId, type: "extraction", payload: { documentId, userId }, tx: tx as unknown as Database });
+      return jobs.enqueue({ userId, type: "extraction", payload: { documentId, userId }, tx: asTxDb(tx) });
     });
   }
 

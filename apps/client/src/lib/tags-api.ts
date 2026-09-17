@@ -67,6 +67,9 @@ export const categoriesApi = {
   remove(id: string) {
     return api.del(`/api/categories/${id}`);
   },
+  async reorder(a: { id: string; sortOrder: number }, b: { id: string; sortOrder: number }) {
+    return (await api.json<{ categories: [CategoryRow, CategoryRow] }>("POST", "/api/categories/reorder", { a, b })).categories;
+  },
 };
 
 export const documentCategorizationApi = {

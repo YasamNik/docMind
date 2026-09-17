@@ -12,6 +12,28 @@ import { categoriesApi, type CategoryInput, type CategoryRow } from "@/lib/tags-
 
 const emptyForm: CategoryInput = { name: "", parentId: null, color: "", description: "", confidenceThreshold: 0.7, autoApply: true };
 
+// Same shape as the server's collectDescendantIds (tags.models.ts), kept local since
+// the client only needs it to filter the parent picker, not to enforce the invariant.
+function collectDescendantIds(categories: CategoryRow[], rootId: string): Set<string> {
+  const childrenByParent = new Map<string, string[]>();
+  for (const c of categories) {
+    if (!c.parentId) continue;
+    const list = childrenByParent.get(c.parentId) ?? [];
+    list.push(c.id);
+    childrenByParent.set(c.parentId, list);
+  }
+  const result = new Set<string>();
+  const stack = [rootId];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    for (const child of childrenByParent.get(current) ?? []) {
+      result.add(child);
+      stack.push(child);
+    }
+  }
+  return result;
+}
+
 function CategoryForm({
   initial,
   categories,
@@ -26,7 +48,11 @@ function CategoryForm({
   submitting: boolean;
 }) {
   const [form, setForm] = useState<CategoryInput>(initial);
-  const parentOptions = categories.filter((c) => c.id !== excludeId);
+  // A category cannot become its own parent, direct or indirect: that would create a
+  // cycle. The server rejects it too, but filtering here avoids a round trip that is
+  // guaranteed to fail.
+  const excludedIds = excludeId ? new Set([excludeId, ...collectDescendantIds(categories, excludeId)]) : new Set<string>();
+  const parentOptions = categories.filter((c) => !excludedIds.has(c.id));
   return (
     <div className="space-y-4">
       <div>
@@ -138,8 +164,7 @@ export function CategoriesPage() {
     onError: (e: Error) => toast.error(e.message),
   });
   const reorder = useMutation({
-    mutationFn: ([a, b]: [{ id: string; sortOrder: number }, { id: string; sortOrder: number }]) =>
-      Promise.all([categoriesApi.update(a.id, { sortOrder: a.sortOrder }), categoriesApi.update(b.id, { sortOrder: b.sortOrder })]),
+    mutationFn: ([a, b]: [{ id: string; sortOrder: number }, { id: string; sortOrder: number }]) => categoriesApi.reorder(a, b),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["categories"] }),
     onError: (e: Error) => toast.error(e.message),
   });

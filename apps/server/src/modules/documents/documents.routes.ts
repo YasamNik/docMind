@@ -38,6 +38,11 @@ export function registerDocumentsRoutes({
     return c.json({ documents });
   });
 
+  app.get("/api/documents/counts", async (c) => {
+    const counts = await documentsService.counts({ userId: getUserId(c) });
+    return c.json(counts);
+  });
+
   app.get("/api/documents/:id", async (c) => {
     const documentId = parseOrValidationError(documentIdSchema, c.req.param("id"));
     const document = await documentsService.get({ userId: getUserId(c), documentId });

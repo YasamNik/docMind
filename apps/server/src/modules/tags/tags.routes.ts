@@ -7,6 +7,7 @@ import {
   createCategoryBodySchema,
   createTagBodySchema,
   documentCategoryBodySchema,
+  reorderCategoriesBodySchema,
   tagIdSchema,
   updateCategoryBodySchema,
   updateTagBodySchema,
@@ -80,6 +81,12 @@ export function registerTagsRoutes({
     const categoryId = parseOrValidationError(categoryIdSchema, c.req.param("id"));
     await tagsService.deleteCategory({ userId: getUserId(c), categoryId });
     return c.body(null, 204);
+  });
+
+  app.post("/api/categories/reorder", async (c) => {
+    const { a, b } = await parseJsonBody(c, reorderCategoriesBodySchema);
+    const [first, second] = await tagsService.reorderCategories({ userId: getUserId(c), a, b });
+    return c.json({ categories: [first, second] });
   });
 
   app.put("/api/documents/:id/category", async (c) => {

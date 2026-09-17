@@ -102,13 +102,13 @@ function IconRail({ activeTab }: { activeTab: RailTab }) {
 }
 
 function FilesPanel({
-  inbox,
-  needsReview,
+  inboxCount,
+  needsReviewCount,
   categories,
   tags,
 }: {
-  inbox: { id: string }[];
-  needsReview: { id: string }[];
+  inboxCount: number;
+  needsReviewCount: number;
   categories: CategoryRow[];
   tags: TagRow[];
 }) {
@@ -122,8 +122,8 @@ function FilesPanel({
         <NavLink to="/documents" end className={navPillClass}>
           All documents
         </NavLink>
-        <CountRow to="/documents?view=inbox" label="Inbox" count={inbox.length} />
-        <CountRow to="/documents?view=needs_review" label="Needs review" count={needsReview.length} />
+        <CountRow to="/documents?view=inbox" label="Inbox" count={inboxCount} />
+        <CountRow to="/documents?view=needs_review" label="Needs review" count={needsReviewCount} />
       </nav>
 
       <div>
@@ -214,8 +214,7 @@ export function AppShell() {
     setActiveTab(tabForPath(location.pathname));
   }, [location.pathname]);
 
-  const { data: inbox = [] } = useQuery({ queryKey: ["documents", { view: "inbox" }], queryFn: () => documentsApi.list({ view: "inbox" }) });
-  const { data: needsReview = [] } = useQuery({ queryKey: ["documents", { view: "needs_review" }], queryFn: () => documentsApi.list({ view: "needs_review" }) });
+  const { data: counts = { inbox: 0, needsReview: 0 } } = useQuery({ queryKey: ["documents", "counts"], queryFn: () => documentsApi.counts() });
   const { data: categories = [] } = useQuery({ queryKey: ["categories"], queryFn: categoriesApi.list });
   const { data: tags = [] } = useQuery({ queryKey: ["tags"], queryFn: tagsApi.list });
 
@@ -223,7 +222,9 @@ export function AppShell() {
     <div className="flex min-h-screen">
       <IconRail activeTab={activeTab} />
       <aside className="flex w-[220px] shrink-0 flex-col gap-6 overflow-y-auto border-r border-border bg-card p-6">
-        {activeTab === "files" && <FilesPanel inbox={inbox} needsReview={needsReview} categories={categories} tags={tags} />}
+        {activeTab === "files" && (
+          <FilesPanel inboxCount={counts.inbox} needsReviewCount={counts.needsReview} categories={categories} tags={tags} />
+        )}
         {activeTab === "tags" && <TagsPanel tags={tags} categories={categories} />}
         {activeTab === "sorting" && <SortingPanel automaticCount={countAutomaticItems(tags, categories)} />}
         {activeTab === "settings" && <SettingsPanel />}

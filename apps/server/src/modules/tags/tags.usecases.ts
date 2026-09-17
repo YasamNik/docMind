@@ -1,6 +1,6 @@
 import { LibsqlError } from "@libsql/client";
 import { createError } from "../../shared/errors/errors.js";
-import type { Database } from "../database/database.js";
+import { asTxDb, type Database } from "../database/database.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import { createRulesRepository } from "../rules/rules.repository.js";
 import {
@@ -140,7 +140,7 @@ export function createTagsService({ db }: { db: Database }) {
       if (patch.autoApply !== undefined) dbPatch.autoApply = patch.autoApply ? 1 : 0;
       try {
         await db.transaction(async (tx) => {
-          const txDb = tx as unknown as Database;
+          const txDb = asTxDb(tx);
           await repository.updateTag({ userId, tagId, patch: dbPatch, tx: txDb });
           if (patch.autoApply === false && existing.autoApply === 1) {
             await repository.clearAutoTagOnDocuments({ tagId, tx: txDb });
@@ -157,7 +157,7 @@ export function createTagsService({ db }: { db: Database }) {
     async deleteTag({ userId, tagId }: { userId: string; tagId: string }) {
       await getTagOrThrow(userId, tagId);
       await db.transaction(async (tx) => {
-        const txDb = tx as unknown as Database;
+        const txDb = asTxDb(tx);
         await rulesRepository.deleteEvaluationsForTarget({ targetType: "tag", targetId: tagId, tx: txDb });
         await repository.deleteTag({ userId, tagId, tx: txDb });
       });
@@ -239,7 +239,7 @@ export function createTagsService({ db }: { db: Database }) {
         // transaction, the category would end up with autoApply off while its
         // auto-sourced documents kept a stale category link.
         await db.transaction(async (tx) => {
-          const txDb = tx as unknown as Database;
+          const txDb = asTxDb(tx);
           await repository.updateCategory({ userId, categoryId, patch: dbPatch, tx: txDb });
           if (patch.autoApply === false && existing.autoApply === 1) {
             await repository.clearAutoCategoryOnDocuments({ userId, categoryId, tx: txDb });
@@ -258,12 +258,42 @@ export function createTagsService({ db }: { db: Database }) {
     async deleteCategory({ userId, categoryId }: { userId: string; categoryId: string }) {
       const category = await getCategoryOrThrow(userId, categoryId);
       await db.transaction(async (tx) => {
-        const txDb = tx as unknown as Database;
+        const txDb = asTxDb(tx);
         await repository.reparentChildren({ userId, oldParentId: categoryId, newParentId: category.parentId, tx: txDb });
         await repository.clearCategoryOnDocuments({ userId, categoryId, tx: txDb });
         await rulesRepository.deleteEvaluationsForTarget({ targetType: "category", targetId: categoryId, tx: txDb });
         await repository.deleteCategory({ userId, categoryId, tx: txDb });
       });
+    },
+
+    async reorderCategories({
+      userId,
+      a,
+      b,
+    }: {
+      userId: string;
+      a: { id: string; sortOrder: number };
+      b: { id: string; sortOrder: number };
+    }): Promise<[CategoryWithMeta, CategoryWithMeta]> {
+      await getCategoryOrThrow(userId, a.id);
+      await getCategoryOrThrow(userId, b.id);
+      const updatedAt = nowIso();
+      // Both writes must commit as one unit: a swap is two categories trading sort
+      // positions, so applying only one of them would leave two categories sharing a
+      // sortOrder or the move only half done.
+      await db.transaction(async (tx) => {
+        const txDb = asTxDb(tx);
+        await repository.updateCategory({ userId, categoryId: a.id, patch: { sortOrder: a.sortOrder, updatedAt }, tx: txDb });
+        await repository.updateCategory({ userId, categoryId: b.id, patch: { sortOrder: b.sortOrder, updatedAt }, tx: txDb });
+      });
+      const [counts, categories] = await Promise.all([repository.countDocumentsByCategory(userId), repository.listCategoriesRaw(userId)]);
+      const paths = buildCategoryPaths(categories);
+      const updatedA = await getCategoryOrThrow(userId, a.id);
+      const updatedB = await getCategoryOrThrow(userId, b.id);
+      return [
+        presentCategory(updatedA, paths.get(a.id) ?? updatedA.name, counts.get(a.id) ?? 0),
+        presentCategory(updatedB, paths.get(b.id) ?? updatedB.name, counts.get(b.id) ?? 0),
+      ];
     },
 
     async setDocumentCategory({

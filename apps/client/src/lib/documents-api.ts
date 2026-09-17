@@ -30,6 +30,9 @@ export const documentsApi = {
     const qs = params.toString();
     return (await api.get<{ documents: DocumentRow[] }>(`/api/documents${qs ? `?${qs}` : ""}`)).documents;
   },
+  async counts() {
+    return api.get<{ inbox: number; needsReview: number }>("/api/documents/counts");
+  },
   async get(id: string) {
     return (await api.get<{ document: DocumentDetail }>(`/api/documents/${id}`)).document;
   },

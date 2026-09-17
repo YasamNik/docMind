@@ -1,7 +1,7 @@
 import { PassThrough, type Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createError } from "../../shared/errors/errors.js";
-import type { Database } from "../database/database.js";
+import { asTxDb, type Database } from "../database/database.js";
 import { buildStorageKey, type StorageService } from "../storage/storage.usecases.js";
 import { hashingCounter, newDocumentId, nowIso, sanitizeFilename } from "./documents.models.js";
 import { createDocumentsRepository } from "./documents.repository.js";
@@ -99,8 +99,8 @@ export function createDocumentsService({
         updatedAt: timestamp,
       };
       await db.transaction(async (tx) => {
-        await repository.insert(document, tx as unknown as Database);
-        if (onUploaded) await onUploaded({ userId, document, tx: tx as unknown as Database });
+        await repository.insert(document, asTxDb(tx));
+        if (onUploaded) await onUploaded({ userId, document, tx: asTxDb(tx) });
       });
       return { document: await getEnrichedOrThrow(userId, documentId) };
     },
@@ -121,6 +121,14 @@ export function createDocumentsService({
 
     get({ userId, documentId }: { userId: string; documentId: string }) {
       return getEnrichedOrThrow(userId, documentId);
+    },
+
+    async counts({ userId }: { userId: string }): Promise<{ inbox: number; needsReview: number }> {
+      const [inbox, needsReview] = await Promise.all([
+        repository.countByUser({ userId, view: "inbox" }),
+        repository.countByUser({ userId, view: "needs_review" }),
+      ]);
+      return { inbox, needsReview };
     },
 
     async rename({ userId, documentId, name }: { userId: string; documentId: string; name: string }) {

@@ -49,3 +49,13 @@ export const updateCategoryBodySchema = v.object({
 export const documentCategoryBodySchema = v.object({
   categoryId: v.nullable(categoryIdSchema),
 });
+
+const reorderEntrySchema = v.object({
+  id: categoryIdSchema,
+  sortOrder: v.pipe(v.number(), v.integer(), v.minValue(0)),
+});
+
+export const reorderCategoriesBodySchema = v.object({
+  a: reorderEntrySchema,
+  b: reorderEntrySchema,
+});

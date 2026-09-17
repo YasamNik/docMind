@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestApp } from "../../shared/test/app.test-utils.js";
+import { expectAppError } from "../../shared/test/errors.test-utils.js";
 import { createJobRunner } from "../jobs/jobs.runner.js";
 import { pdfWithText } from "./test-fixtures.js";
 
@@ -131,5 +132,10 @@ describe("extraction", () => {
     const third = await t.services.extractionService.requestExtraction({ userId, documentId: document.id });
     expect(third.id).not.toBe(first.id);
     expect(await t.services.jobsService.list({ userId })).toHaveLength(2);
+  });
+
+  it("rejects requestExtraction for a document that does not exist, without queuing a job", async () => {
+    await expectAppError(() => t.services.extractionService.requestExtraction({ userId, documentId: "doc_0000000000000000" }), "documents.not_found");
+    expect(await t.services.jobsService.list({ userId })).toHaveLength(0);
   });
 });

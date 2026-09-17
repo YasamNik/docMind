@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
-import type { Database } from "../database/database.js";
+import { asTxDb, type Database } from "../database/database.js";
 import { documentsTable } from "../documents/documents.tables.js";
 import { categoriesTable, documentTagsTable, tagsTable } from "./tags.tables.js";
 import type { Category, DocumentTag, NewCategory, NewTag, Tag, TagChip } from "./tags.types.js";
@@ -126,7 +126,7 @@ export function createTagsRepository({ db }: { db: Database }) {
       // try to insert, hitting the primary key with an uncaught constraint error.
       // Running both inside one db.transaction serializes that check-then-act.
       await db.transaction(async (tx) => {
-        const txDb = tx as unknown as Database;
+        const txDb = asTxDb(tx);
         const [existing] = await txDb
           .select()
           .from(documentTagsTable)
