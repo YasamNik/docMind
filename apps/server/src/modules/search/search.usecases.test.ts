@@ -9,6 +9,7 @@ function fakeEmbedAdapter(embed: AiAdapter["embed"]): AiAdapter {
   return {
     generateStructured: vi.fn(async () => ({ data: {}, usage: { promptTokens: 0, completionTokens: 0 } }) as StructuredResult),
     streamText: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
+    streamChat: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
     embed,
     recognizeImage: vi.fn(async () => ({ text: "" })),
     listModels: vi.fn(async () => [] as ModelInfo[]),

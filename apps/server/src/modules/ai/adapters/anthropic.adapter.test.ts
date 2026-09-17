@@ -15,6 +15,44 @@ const config: AdapterConfig = {
   providerId: "anthropic",
 };
 
+// Anthropic's streaming wire format is named SSE events, each carrying a JSON payload
+// that matches the event name. Builds the minimal valid sequence for a text reply made
+// of the given deltas: message_start establishes the message, content_block_start opens
+// the text block, one content_block_delta per delta, then the closing events.
+function anthropicTextStream(deltas: string[]): Response {
+  const events: Array<{ event: string; data: unknown }> = [
+    {
+      event: "message_start",
+      data: {
+        type: "message_start",
+        message: {
+          id: "msg_test",
+          type: "message",
+          role: "assistant",
+          model: "claude-sonnet-4-20250514",
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 25, output_tokens: 0 },
+        },
+      },
+    },
+    { event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+    ...deltas.map((text) => ({
+      event: "content_block_delta",
+      data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+    })),
+    { event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+    {
+      event: "message_delta",
+      data: { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: deltas.length } },
+    },
+    { event: "message_stop", data: { type: "message_stop" } },
+  ];
+  const body = events.map(({ event, data }) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join("");
+  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
 const mockFetch = vi.fn<typeof fetch>();
 
 beforeEach(() => {
@@ -84,6 +122,61 @@ describe("anthropic adapter", () => {
         type: "object" as const,
       } as Parameters<typeof jsonSchemaOutputFormat>[0]);
       expect(callBody.output_config.format.schema).toEqual(expectedFormat.schema);
+    });
+  });
+
+  describe("streamChat", () => {
+    it("extracts the system messages, sends the rest as the conversation, and yields the text deltas", async () => {
+      mockFetch.mockResolvedValueOnce(anthropicTextStream(["Hello", " world"]));
+      const adapter = createAnthropicAdapter(config);
+      const stream = await adapter.streamChat({
+        model: "claude-sonnet-4-20250514",
+        messages: [
+          { role: "system", content: "You are DocMind's chat assistant." },
+          { role: "user", content: "What is the invoice total?" },
+          { role: "assistant", content: "It is $128.50." },
+          { role: "system", content: "Context from your documents:\n\n[1] From \"invoice.pdf\": ..." },
+          { role: "user", content: "And the due date?" },
+        ],
+        maxTokens: 500,
+      });
+      const chunks: string[] = [];
+      for await (const chunk of stream) chunks.push(chunk);
+      expect(chunks.join("")).toBe("Hello world");
+
+      const [callUrl, callInit] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(callUrl).toBe("https://api.anthropic.com/v1/messages");
+      const callBody = JSON.parse(callInit.body as string) as {
+        model: string;
+        max_tokens: number;
+        system: string;
+        messages: Array<{ role: string; content: string }>;
+      };
+      expect(callBody.model).toBe("claude-sonnet-4-20250514");
+      expect(callBody.max_tokens).toBe(500);
+      expect(callBody.system).toBe(
+        "You are DocMind's chat assistant.\n\nContext from your documents:\n\n[1] From \"invoice.pdf\": ...",
+      );
+      expect(callBody.messages).toEqual([
+        { role: "user", content: "What is the invoice total?" },
+        { role: "assistant", content: "It is $128.50." },
+        { role: "user", content: "And the due date?" },
+      ]);
+    });
+
+    it("defaults max_tokens to 4096 when not given", async () => {
+      mockFetch.mockResolvedValueOnce(anthropicTextStream(["Hi"]));
+      const adapter = createAnthropicAdapter(config);
+      const stream = await adapter.streamChat({
+        model: "claude-sonnet-4-20250514",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      for await (const _chunk of stream) {
+        // drain the stream
+      }
+      const [, callInit] = mockFetch.mock.calls[0] as [string, RequestInit];
+      const callBody = JSON.parse(callInit.body as string) as { max_tokens: number };
+      expect(callBody.max_tokens).toBe(4096);
     });
   });
 

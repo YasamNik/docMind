@@ -9,6 +9,7 @@ function fakeAdapter(replyRef: { current: unknown }): AiAdapter {
   return {
     generateStructured: vi.fn(async () => ({ data: replyRef.current, usage: { promptTokens: 10, completionTokens: 10 } }) as StructuredResult),
     streamText: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
+    streamChat: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
     embed: vi.fn(async () => ({ vectors: [], dimension: 0 })),
     recognizeImage: vi.fn(async () => ({ text: "" })),
     listModels: vi.fn(async () => [] as ModelInfo[]),
@@ -144,6 +145,7 @@ describe("rules service, initial mode", () => {
         throw new Error("provider is down");
       }),
       streamText: vi.fn(),
+      streamChat: vi.fn(),
       embed: vi.fn(),
       recognizeImage: vi.fn(),
       listModels: vi.fn(async () => []),

@@ -14,6 +14,23 @@ const config: AdapterConfig = {
   isOpenRouter: true,
 };
 
+// Builds a chat.completions streaming response body: one SSE "data:" line per chunk,
+// terminated with the [DONE] sentinel the OpenAI wire format uses.
+function sseCompletionResponse(deltas: string[]): Response {
+  const lines = deltas.map((content, index) =>
+    `data: ${JSON.stringify({
+      id: "chatcmpl-test",
+      object: "chat.completion.chunk",
+      created: 0,
+      model: "test-model",
+      choices: [{ index: 0, delta: { content }, finish_reason: index === deltas.length - 1 ? "stop" : null }],
+    })}\n\n`,
+  );
+  lines.push("data: [DONE]\n\n");
+  const body = lines.join("");
+  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
 // We mock the global fetch to intercept SDK calls
 const mockFetch = vi.fn<typeof fetch>();
 
@@ -94,6 +111,44 @@ describe("openai-compatible adapter", () => {
         type: "json_schema",
         json_schema: { name: "sort_result", strict: true },
       });
+    });
+  });
+
+  describe("streamChat", () => {
+    it("yields the concatenated delta text from a multi-turn conversation", async () => {
+      mockFetch.mockResolvedValueOnce(sseCompletionResponse(["Hel", "lo", " world"]));
+      const adapter = createOpenAiCompatibleAdapter(config);
+      const stream = await adapter.streamChat({
+        model: "google/gemini-2.0-flash-001",
+        messages: [
+          { role: "system", content: "You are DocMind's chat assistant." },
+          { role: "user", content: "What is the invoice total?" },
+          { role: "assistant", content: "It is $128.50." },
+          { role: "user", content: "And the due date?" },
+        ],
+        maxTokens: 500,
+      });
+      const chunks: string[] = [];
+      for await (const chunk of stream) chunks.push(chunk);
+      expect(chunks.join("")).toBe("Hello world");
+
+      const [callUrl, callInit] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(callUrl).toBe("https://openrouter.ai/api/v1/chat/completions");
+      const callBody = JSON.parse(callInit.body as string) as {
+        model: string;
+        stream: boolean;
+        max_tokens: number;
+        messages: Array<{ role: string; content: string }>;
+      };
+      expect(callBody.model).toBe("google/gemini-2.0-flash-001");
+      expect(callBody.stream).toBe(true);
+      expect(callBody.max_tokens).toBe(500);
+      expect(callBody.messages).toEqual([
+        { role: "system", content: "You are DocMind's chat assistant." },
+        { role: "user", content: "What is the invoice total?" },
+        { role: "assistant", content: "It is $128.50." },
+        { role: "user", content: "And the due date?" },
+      ]);
     });
   });
 

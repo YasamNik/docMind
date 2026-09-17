@@ -21,6 +21,9 @@ function fakeAdapter(overrides: Partial<AiAdapter> = {}): AiAdapter {
     streamText: vi.fn(async () => ({
       async *[Symbol.asyncIterator]() { yield "hello"; },
     })),
+    streamChat: vi.fn(async () => ({
+      async *[Symbol.asyncIterator]() { yield "hello"; },
+    })),
     embed: vi.fn(async () => ({ vectors: [[0.1, 0.2]], dimension: 2 })),
     recognizeImage: vi.fn(async () => ({ text: "extracted text" })),
     listModels: vi.fn(async () => [
@@ -147,6 +150,35 @@ describe("ai service", () => {
           mimeType: "image/png",
           prompt: "Extract all text from this document image.",
         }),
+      "ai.slot_not_configured",
+    );
+  });
+
+  it("resolves the chat slot and delegates to streamChat", async () => {
+    const { settingsService, aiService, adapter } = await setup();
+    await settingsService.set(userId, {
+      "ai.openrouter.apiKey": "sk-or-v1-test",
+      "ai.model.chat": "openrouter://google/gemini-2.0-flash-001",
+    });
+    const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+      { role: "system", content: "You are DocMind's chat assistant." },
+      { role: "user", content: "What is in the invoice?" },
+    ];
+    const stream = await aiService.streamChat({ userId, messages, maxTokens: 500 });
+    const chunks: string[] = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    expect(chunks.join("")).toBe("hello");
+    expect(adapter.streamChat).toHaveBeenCalledWith({
+      model: "google/gemini-2.0-flash-001",
+      messages,
+      maxTokens: 500,
+    });
+  });
+
+  it("throws ai.slot_not_configured for chat when no slot and no key", async () => {
+    const { aiService } = await setup();
+    await expectAppError(
+      () => aiService.streamChat({ userId, messages: [{ role: "user", content: "hi" }] }),
       "ai.slot_not_configured",
     );
   });

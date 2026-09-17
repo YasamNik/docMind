@@ -38,6 +38,8 @@ export type EmbedResult = {
   dimension: number;
 };
 
+export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+
 export type AiAdapter = {
   generateStructured(args: {
     model: string;
@@ -50,6 +52,13 @@ export type AiAdapter = {
     model: string;
     system: string;
     input: string;
+  }): Promise<AsyncIterable<string>>;
+  // Multi-turn variant of streamText: takes a full messages array instead of a single
+  // system and input string, for conversations that carry history (see the chat module).
+  streamChat(args: {
+    model: string;
+    messages: ChatMessage[];
+    maxTokens?: number;
   }): Promise<AsyncIterable<string>>;
   embed(args: { model: string; texts: string[] }): Promise<EmbedResult>;
   recognizeImage(args: {

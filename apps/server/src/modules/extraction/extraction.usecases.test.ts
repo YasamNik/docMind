@@ -14,6 +14,7 @@ function fakeVisionAdapter(recognizeImage: AiAdapter["recognizeImage"]): AiAdapt
   return {
     generateStructured: vi.fn(async () => ({ data: {}, usage: { promptTokens: 0, completionTokens: 0 } }) as StructuredResult),
     streamText: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
+    streamChat: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
     embed: vi.fn(async () => ({ vectors: [], dimension: 0 })),
     recognizeImage,
     listModels: vi.fn(async () => [] as ModelInfo[]),
@@ -130,6 +131,7 @@ describe("extraction", () => {
     const adapter: AiAdapter = {
       generateStructured: vi.fn(async () => ({ data: {}, usage: { promptTokens: 0, completionTokens: 0 } }) as StructuredResult),
       streamText: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
+      streamChat: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
       embed: vi.fn(async () => ({ vectors: [], dimension: 0 })),
       recognizeImage: vi.fn(async () => ({ text: "" })),
       listModels: vi.fn(async () => [] as ModelInfo[]),
@@ -165,6 +167,7 @@ describe("extraction", () => {
     const adapter: AiAdapter = {
       generateStructured: vi.fn(async () => ({ data: {}, usage: { promptTokens: 0, completionTokens: 0 } }) as StructuredResult),
       streamText: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
+      streamChat: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
       embed: vi.fn(async () => ({ vectors: [], dimension: 0 })),
       recognizeImage: vi.fn(async () => ({ text: "" })),
       listModels: vi.fn(async () => [] as ModelInfo[]),

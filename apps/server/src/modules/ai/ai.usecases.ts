@@ -8,6 +8,7 @@ import { parseModelUri, buildModelUri } from "./ai.models.js";
 import type {
   AiAdapter,
   AiProviderDefinition,
+  ChatMessage,
   EmbedResult,
   ModelInfo,
   ModelSlot,
@@ -188,6 +189,30 @@ export function createAiService({
       const start = Date.now();
       const stream = await adapter.streamText({ model, system, input });
       logger.info({ task, model: buildModelUri(provider.id, model), latencyMs: Date.now() - start }, "text stream started");
+      return stream;
+    },
+
+    async streamChat({
+      userId,
+      messages,
+      maxTokens,
+    }: {
+      userId: string;
+      messages: ChatMessage[];
+      maxTokens?: number;
+    }): Promise<AsyncIterable<string>> {
+      const { model, provider, apiKey, baseUrl } = await resolveSlot(userId, "chat");
+      if (!provider.capabilities.text) {
+        throw createError({
+          code: "ai.capability_missing",
+          message: `Provider "${provider.label}" does not support text generation.`,
+          status: 400,
+        });
+      }
+      const adapter = buildAdapter(provider, apiKey, baseUrl);
+      const start = Date.now();
+      const stream = await adapter.streamChat({ model, messages, maxTokens });
+      logger.info({ task: "chat", model: buildModelUri(provider.id, model), latencyMs: Date.now() - start }, "chat stream started");
       return stream;
     },
 

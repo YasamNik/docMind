@@ -3,9 +3,24 @@ import OpenAI from "openai";
 import { toJsonSchema } from "@valibot/to-json-schema";
 import { createError } from "../../../shared/errors/errors.js";
 import { sanitizeProviderError } from "../ai.models.js";
-import type { AiAdapter, ModelInfo, StructuredResult, EmbedResult, TestResult } from "../ai.types.js";
+import type { AiAdapter, ChatMessage, ModelInfo, StructuredResult, EmbedResult, TestResult } from "../ai.types.js";
 import type { AdapterConfig } from "./adapter.types.js";
-import type { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions.js";
+import type { ChatCompletionCreateParamsNonStreaming, ChatCompletionMessageParam } from "openai/resources/chat/completions.js";
+
+// ChatMessage carries a single role union across system, user, and assistant, while the
+// SDK's ChatCompletionMessageParam is a discriminated union with a distinct interface per
+// role. A plain cast would hide a real mismatch if the SDK ever adds required per-role
+// fields, so map explicitly instead.
+function toChatCompletionMessage(message: ChatMessage): ChatCompletionMessageParam {
+  switch (message.role) {
+    case "system":
+      return { role: "system", content: message.content };
+    case "assistant":
+      return { role: "assistant", content: message.content };
+    case "user":
+      return { role: "user", content: message.content };
+  }
+}
 
 // The regex-based sanitizeProviderError only recognizes sk-, sk-or-, and sk-ant-
 // prefixed keys. This adapter also backs Mistral, DeepSeek, LM Studio, and Custom,
@@ -110,6 +125,28 @@ export function createOpenAiCompatibleAdapter(config: AdapterConfig): AiAdapter 
             { role: "user", content: input },
           ],
           stream: true,
+        });
+
+        return {
+          async *[Symbol.asyncIterator]() {
+            for await (const chunk of stream) {
+              const delta = chunk.choices[0]?.delta?.content;
+              if (delta) yield delta;
+            }
+          },
+        };
+      } catch (err) {
+        wrapError(err, config.apiKey);
+      }
+    },
+
+    async streamChat({ model, messages, maxTokens }): Promise<AsyncIterable<string>> {
+      try {
+        const stream = await client.chat.completions.create({
+          model,
+          messages: messages.map(toChatCompletionMessage),
+          stream: true,
+          max_tokens: maxTokens,
         });
 
         return {

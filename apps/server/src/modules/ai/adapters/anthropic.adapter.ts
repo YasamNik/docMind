@@ -4,8 +4,10 @@ import { jsonSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/json-schema";
 import { toJsonSchema } from "@valibot/to-json-schema";
 import { createError } from "../../../shared/errors/errors.js";
 import { sanitizeProviderError } from "../ai.models.js";
-import type { AiAdapter, ModelInfo, StructuredResult, EmbedResult, TestResult } from "../ai.types.js";
+import type { AiAdapter, ChatMessage, ModelInfo, StructuredResult, EmbedResult, TestResult } from "../ai.types.js";
 import type { AdapterConfig } from "./adapter.types.js";
+
+const DEFAULT_MAX_TOKENS = 4096;
 
 // The regex-based sanitizeProviderError only recognizes sk-, sk-or-, and sk-ant-
 // prefixed keys. Redact the exact configured key first as a format-independent
@@ -89,6 +91,39 @@ export function createAnthropicAdapter(config: AdapterConfig): AiAdapter {
           max_tokens: 4096,
           system,
           messages: [{ role: "user", content: input }],
+        });
+
+        return {
+          async *[Symbol.asyncIterator]() {
+            for await (const event of stream) {
+              if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+                yield event.delta.text;
+              }
+            }
+          },
+        };
+      } catch (err) {
+        wrapError(err, config.apiKey);
+      }
+    },
+
+    async streamChat({ model, messages, maxTokens }): Promise<AsyncIterable<string>> {
+      try {
+        // Anthropic takes the system prompt as a separate top-level field, not as a
+        // message with role "system". Pull every system-role entry out of the array
+        // (assembleChatContext in the chat module can add more than one, for example
+        // the base prompt plus a later context block) and join them, keeping the
+        // conversational turns as the messages list.
+        const systemParts = messages.filter((m: ChatMessage) => m.role === "system").map((m) => m.content);
+        const conversation = messages.filter(
+          (m): m is { role: "user" | "assistant"; content: string } => m.role !== "system",
+        );
+
+        const stream = client.messages.stream({
+          model,
+          max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
+          ...(systemParts.length > 0 ? { system: systemParts.join("\n\n") } : {}),
+          messages: conversation,
         });
 
         return {
