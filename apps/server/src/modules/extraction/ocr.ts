@@ -2,8 +2,10 @@ import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createWorker as createTesseractWorker, type Worker } from "tesseract.js";
 
+export type OcrResult = { text: string; confidence: number };
+
 export type OcrEngine = {
-  recognize(bytes: Uint8Array, opts: { languages: string; dataDir: string }): Promise<string>;
+  recognize(bytes: Uint8Array, opts: { languages: string; dataDir: string }): Promise<OcrResult>;
   terminate(): Promise<void>;
 };
 
@@ -35,7 +37,7 @@ export function createTesseractEngine(deps?: { createWorker?: typeof createTesse
     async recognize(bytes, { languages, dataDir }) {
       const worker = await workerFor(languages, dataDir);
       const result = await worker.recognize(Buffer.from(bytes));
-      return result.data.text;
+      return { text: result.data.text, confidence: result.data.confidence };
     },
     async terminate() {
       const entries = [...workers.values()];

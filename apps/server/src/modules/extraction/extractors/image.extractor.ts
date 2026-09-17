@@ -9,9 +9,9 @@ export function createImageExtractor(engine: OcrEngine): Extractor {
     id: "image",
     mimeTypes: ["image/*"],
     async extract({ bytes }, ctx) {
-      const raw = await engine.recognize(bytes, { languages: ctx.ocrLanguages, dataDir: ctx.dataDir });
+      const { text: raw, confidence } = await engine.recognize(bytes, { languages: ctx.ocrLanguages, dataDir: ctx.dataDir });
       const text = normalizeText(raw);
-      return text.length > 0 ? { text } : { text: "", note: NO_TEXT_IN_IMAGE_NOTE };
+      return text.length > 0 ? { text, confidence } : { text: "", note: NO_TEXT_IN_IMAGE_NOTE, confidence };
     },
   };
 }

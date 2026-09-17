@@ -1,5 +1,5 @@
 export type ExtractInput = { bytes: Uint8Array; mimeType: string; filename: string };
-export type ExtractResult = { text: string; note?: string };
+export type ExtractResult = { text: string; note?: string; confidence?: number };
 export type ExtractorContext = { ocrLanguages: string; dataDir: string };
 export type Extractor = {
   id: string;

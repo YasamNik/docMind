@@ -4,7 +4,7 @@ import { createServer } from "../../server.js";
 import { createTestDatabase } from "./database.test-utils.js";
 
 const fakeOcrEngine: OcrEngine = {
-  recognize: async () => "OCR TEXT",
+  recognize: async () => ({ text: "OCR TEXT", confidence: 95 }),
   terminate: async () => {},
 };
 
