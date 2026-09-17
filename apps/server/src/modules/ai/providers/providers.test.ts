@@ -29,10 +29,24 @@ describe("ai provider registry", () => {
         structured: expect.any(Boolean),
         embeddings: expect.any(Boolean),
         listModels: expect.any(Boolean),
+        vision: expect.any(Boolean),
       });
       expect(def.guide.title).toBeTruthy();
       expect(def.guide.steps.length).toBeGreaterThan(0);
     }
+  });
+
+  it("every provider declares vision capability", () => {
+    for (const id of aiProviderIds) {
+      const def = aiProviderRegistry[id]!;
+      expect(def.capabilities.vision).toBe(true);
+    }
+  });
+
+  it("suggests vision-capable models for openrouter, openai, and anthropic", () => {
+    expect(aiProviderRegistry.openrouter!.suggestedModels.vision).toBe("google/gemini-2.5-flash");
+    expect(aiProviderRegistry.openai!.suggestedModels.vision).toBe("gpt-4o-mini");
+    expect(aiProviderRegistry.anthropic!.suggestedModels.vision).toBe("claude-sonnet-4-20250514");
   });
 
   it("only ollama and lmstudio do not require a key", () => {

@@ -8,10 +8,11 @@ export const anthropicProvider: AiProviderDefinition = {
   adapter: "anthropic",
   defaultBaseUrl: "https://api.anthropic.com",
   requiresKey: true,
-  capabilities: { text: true, structured: true, embeddings: false, listModels: true },
+  capabilities: { text: true, structured: true, embeddings: false, listModels: true, vision: true },
   suggestedModels: {
     rules: "claude-haiku-3-5-20241022",
     chat: "claude-sonnet-4-20250514",
+    vision: "claude-sonnet-4-20250514",
   },
   guide: {
     title: "Set up Anthropic",

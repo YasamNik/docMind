@@ -1,7 +1,7 @@
 import { createError } from "../../shared/errors/errors.js";
 import type { ModelSlot } from "./ai.types.js";
 
-export const MODEL_SLOTS: ModelSlot[] = ["rules", "chat", "embedding"];
+export const MODEL_SLOTS: ModelSlot[] = ["rules", "chat", "embedding", "vision"];
 
 const URI_RE = /^([a-z0-9_-]+):\/\/(.+)$/;
 

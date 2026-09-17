@@ -8,7 +8,7 @@ export const ollamaProvider: AiProviderDefinition = {
   adapter: "openai-compatible",
   defaultBaseUrl: "http://localhost:11434/v1",
   requiresKey: false,
-  capabilities: { text: true, structured: true, embeddings: true, listModels: true },
+  capabilities: { text: true, structured: true, embeddings: true, listModels: true, vision: true },
   suggestedModels: {
     rules: "llama3.1:8b",
     chat: "llama3.1:8b",

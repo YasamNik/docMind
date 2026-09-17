@@ -29,6 +29,7 @@ describe("ai routes", () => {
       rules: expect.objectContaining({ value: "", source: expect.any(String) }),
       chat: expect.objectContaining({ value: "", source: expect.any(String) }),
       embedding: expect.objectContaining({ value: "", source: expect.any(String) }),
+      vision: expect.objectContaining({ value: "", source: expect.any(String) }),
     });
   });
 
@@ -139,5 +140,39 @@ describe("ai routes", () => {
       body: JSON.stringify({ updates: { "ai.model.rules": "" } }),
     });
     expect(res.status).toBe(200);
+  });
+
+  it("PUT /api/settings accepts a vision slot write when the key is set", async () => {
+    const { app, signIn, services } = await createTestApp();
+    const { cookie, userId } = await signIn();
+    await services.settingsService.set(userId, { "ai.openrouter.apiKey": "sk-or-v1-testkey1234" });
+    const res = await app.request("/api/settings", {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ updates: { "ai.model.vision": "openrouter://google/gemini-2.5-flash" } }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("PUT /api/settings accepts the OCR confidence threshold within range", async () => {
+    const { app, signIn } = await createTestApp();
+    const { cookie } = await signIn();
+    const res = await app.request("/api/settings", {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ updates: { "ai.vision.ocrConfidenceThreshold": 75 } }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("PUT /api/settings rejects an OCR confidence threshold outside 0-100", async () => {
+    const { app, signIn } = await createTestApp();
+    const { cookie } = await signIn();
+    const res = await app.request("/api/settings", {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ updates: { "ai.vision.ocrConfidenceThreshold": 150 } }),
+    });
+    expect(res.status).toBe(400);
   });
 });

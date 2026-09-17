@@ -116,6 +116,13 @@ export function createServer({
                 status: 400,
               });
             }
+            if (slot === "vision" && !provider.capabilities.vision) {
+              throw createError({
+                code: "ai.capability_missing",
+                message: `Provider "${provider.label}" does not support image inputs, which is required for the vision slot.`,
+                status: 400,
+              });
+            }
           }
         }
       },

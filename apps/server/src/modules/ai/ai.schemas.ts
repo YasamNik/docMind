@@ -1,7 +1,7 @@
 import * as v from "valibot";
 import type { ModelSlot } from "./ai.types.js";
 
-export const modelSlotSchema = v.picklist(["rules", "chat", "embedding"] satisfies ModelSlot[]);
+export const modelSlotSchema = v.picklist(["rules", "chat", "embedding", "vision"] satisfies ModelSlot[]);
 
 export const modelUriSchema = v.pipe(
   v.string(),

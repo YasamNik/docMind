@@ -9,9 +9,10 @@ export type AiProviderCapabilities = {
   structured: boolean;
   embeddings: boolean;
   listModels: boolean;
+  vision: boolean;
 };
 
-export type ModelSlot = "rules" | "chat" | "embedding";
+export type ModelSlot = "rules" | "chat" | "embedding" | "vision";
 
 export type ModelInfo = {
   id: string;
@@ -62,7 +63,7 @@ export type AiProviderDefinition = {
   defaultBaseUrl: string;
   requiresKey: boolean;
   capabilities: AiProviderCapabilities;
-  suggestedModels: { rules?: string; chat?: string; embedding?: string };
+  suggestedModels: { rules?: string; chat?: string; embedding?: string; vision?: string };
   guide: SetupGuide;
   settings: SettingDefinition[];
 };

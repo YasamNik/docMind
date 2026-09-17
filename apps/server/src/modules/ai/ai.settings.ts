@@ -26,10 +26,28 @@ export const aiSlotSettingDefinitions = [
     default: "",
     doc: "Model for text embeddings. Format: provider://model",
   }),
+  defineSetting({
+    key: "ai.model.vision",
+    schema: v.union([modelUriSchema, v.literal("")]),
+    env: "AI_MODEL_VISION",
+    default: "",
+    doc: "Model for vision-based text extraction from images. Used as a fallback when OCR confidence is low. Format: provider://model",
+  }),
+];
+
+export const aiVisionSettingDefinitions = [
+  defineSetting({
+    key: "ai.vision.ocrConfidenceThreshold",
+    schema: v.pipe(v.number(), v.minValue(0), v.maxValue(100)),
+    env: "AI_VISION_OCR_CONFIDENCE_THRESHOLD",
+    default: 60,
+    doc: "When Tesseract OCR confidence falls below this value (0-100), the vision model is called as a fallback. Only applies to image documents.",
+  }),
 ];
 
 // Mirrors the storageSettingDefinitions pattern: import the registry and flatMap its settings.
 export const aiSettingDefinitions: SettingDefinition[] = [
   ...aiSlotSettingDefinitions,
+  ...aiVisionSettingDefinitions,
   ...Object.values(aiProviderRegistry).flatMap((d) => d.settings),
 ];

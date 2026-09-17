@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { buildModelUri, parseModelUri, sanitizeProviderError } from "./ai.models.js";
+import { buildModelUri, MODEL_SLOTS, parseModelUri, sanitizeProviderError } from "./ai.models.js";
 
 describe("ai models", () => {
+  describe("MODEL_SLOTS", () => {
+    it("lists all four model slots including vision", () => {
+      expect(MODEL_SLOTS).toEqual(["rules", "chat", "embedding", "vision"]);
+    });
+  });
+
   describe("parseModelUri", () => {
     it("splits provider://model", () => {
       expect(parseModelUri("openrouter://google/gemini-2.0-flash-001")).toEqual({

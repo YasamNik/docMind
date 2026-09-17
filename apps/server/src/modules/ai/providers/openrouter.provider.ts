@@ -8,7 +8,7 @@ export const openrouterProvider: AiProviderDefinition = {
   adapter: "openai-compatible",
   defaultBaseUrl: "https://openrouter.ai/api/v1",
   requiresKey: true,
-  capabilities: { text: true, structured: true, embeddings: true, listModels: true },
+  capabilities: { text: true, structured: true, embeddings: true, listModels: true, vision: true },
   suggestedModels: {
     rules: "google/gemini-3.8-flash",
     chat: "anthropic/claude-sonnet-5",
@@ -16,6 +16,7 @@ export const openrouterProvider: AiProviderDefinition = {
     // endpoint, not the general models list. This id is verified against that catalog and
     // should be wired to the dedicated endpoint when embeddings are built.
     embedding: "openai/text-embedding-3-small",
+    vision: "google/gemini-2.5-flash",
   },
   guide: {
     title: "Set up OpenRouter",

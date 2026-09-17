@@ -79,4 +79,14 @@ describe("ModelSlotRow", () => {
     renderRow({ value: "", source: "default" });
     expect(await screen.findByText("Add an API key to list models.")).toBeInTheDocument();
   });
+
+  it("shows the vision slot label", () => {
+    modelsMock.mockResolvedValueOnce({ models: [] });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ModelSlotRow slot="vision" slotInfo={{ value: "", source: "default" }} providers={providers} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText("Vision (OCR fallback)")).toBeInTheDocument();
+  });
 });
