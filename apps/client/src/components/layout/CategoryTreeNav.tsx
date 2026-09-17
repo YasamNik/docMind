@@ -46,11 +46,27 @@ function CategoryNode({
     <div>
       <NavLink
         to={`/documents?categoryId=${category.id}`}
-        className="flex items-center justify-between gap-2 rounded px-3 py-1.5 text-sm hover:bg-muted"
+        className={({ isActive }) =>
+          `flex items-center justify-between gap-2 rounded-full px-3 py-1.5 text-sm ${
+            isActive ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-foreground/5"
+          }`
+        }
         style={{ paddingLeft: `${12 + depth * 12}px` }}
       >
-        <span className="truncate">{category.name}</span>
-        {count > 0 && <span className="text-xs text-muted-foreground">{count}</span>}
+        {({ isActive }) => (
+          <>
+            <span className="flex min-w-0 items-center gap-2">
+              <span
+                className={`h-[7px] w-[7px] shrink-0 rounded-full ${category.color ? "" : "bg-org-neutral-400"}`}
+                style={category.color ? { backgroundColor: category.color } : undefined}
+              />
+              <span className="truncate">{category.name}</span>
+            </span>
+            {count > 0 && (
+              <span className={`text-xs ${isActive ? "text-primary-foreground/80" : "text-muted-foreground"}`}>{count}</span>
+            )}
+          </>
+        )}
       </NavLink>
       {children.map((child) => (
         <CategoryNode key={child.id} category={child} categories={categories} depth={depth + 1} counts={counts} />
