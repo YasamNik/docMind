@@ -68,6 +68,21 @@ describe("database", () => {
     expect(triggers.map((t) => t.name).sort()).toEqual(["document_chunks_fts_ad", "document_chunks_fts_ai"]);
   });
 
+  it("creates the chat_sessions and chat_messages tables", async () => {
+    const { db } = await createTestDatabase();
+    const tables = await db.all<{ name: string }>(
+      sql`select name from sqlite_master where type = 'table' and name in ('chat_sessions', 'chat_messages')`,
+    );
+    expect(tables.map((t) => t.name).sort()).toEqual(["chat_messages", "chat_sessions"]);
+  });
+
+  it("cascades deletes from chat_sessions to chat_messages", async () => {
+    const { db } = await createTestDatabase();
+    const fkList = await db.all<{ table: string; on_delete: string }>(sql`pragma foreign_key_list(chat_messages)`);
+    const sessionFk = fkList.find((fk) => fk.table === "chat_sessions");
+    expect(sessionFk?.on_delete).toBe("CASCADE");
+  });
+
   it("holds a file database to a single pooled connection", async () => {
     // An in-memory database is always a single connection regardless of client config, so
     // this has to use a real file to exercise the pool. Without forcing `concurrency: 1`,
