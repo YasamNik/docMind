@@ -195,7 +195,8 @@ export function createTagsService({ db }: { db: Database }) {
         if (isUniqueConstraintError(error)) throw categoryDuplicateName();
         throw error;
       }
-      return presentCategory(await getCategoryOrThrow(userId, id), category.name, 0);
+      const paths = buildCategoryPaths(await repository.listCategoriesRaw(userId));
+      return presentCategory(await getCategoryOrThrow(userId, id), paths.get(id) ?? category.name, 0);
     },
 
     async updateCategory({ userId, categoryId, patch }: { userId: string; categoryId: string; patch: CategoryPatch }): Promise<CategoryWithMeta> {

@@ -31,6 +31,8 @@ import { createSettingsRegistry } from "./modules/settings/settings.registry.js"
 import { registerSettingsRoutes } from "./modules/settings/settings.routes.js";
 import { createSettingsService } from "./modules/settings/settings.usecases.js";
 import { createStorageService } from "./modules/storage/storage.usecases.js";
+import { registerTagsRoutes } from "./modules/tags/tags.routes.js";
+import { createTagsService } from "./modules/tags/tags.usecases.js";
 import { errorHandler } from "./shared/http/error-handler.js";
 import { createError } from "./shared/errors/errors.js";
 
@@ -117,6 +119,7 @@ export function createServer({ config, db, ocrEngine = createTesseractEngine() }
     "anthropic": createAnthropicAdapter,
   };
   const aiService = createAiService({ settingsService, registry: aiProviderRegistry, adapterFactories });
+  const tagsService = createTagsService({ db });
 
   app.get("/api/health", (c) => c.json({ status: "ok" }));
   registerAuthRoutes({ app, auth, db });
@@ -129,8 +132,9 @@ export function createServer({ config, db, ocrEngine = createTesseractEngine() }
   registerExtractionRoutes({ app, extractionService, getUserId });
   registerJobsRoutes({ app, jobsService, getUserId });
   registerAiRoutes({ app, aiService, settingsService, getUserId });
+  registerTagsRoutes({ app, tagsService, getUserId });
 
-  return { app, auth, settingsService, storageService, documentsService, jobsService, extractionService, jobRunner, ocrEngine, aiService, getUserId };
+  return { app, auth, settingsService, storageService, documentsService, jobsService, extractionService, jobRunner, ocrEngine, aiService, tagsService, getUserId };
 }
 
 export type Server = ReturnType<typeof createServer>;
