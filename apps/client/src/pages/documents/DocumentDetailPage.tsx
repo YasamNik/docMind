@@ -15,15 +15,19 @@ import { categoriesApi, documentCategorizationApi, tagsApi } from "@/lib/tags-ap
 
 function Preview({ id, mimeType }: { id: string; mimeType: string | null }) {
   const url = documentsApi.fileUrl(id);
-  if (mimeType === "application/pdf") return <iframe title="Preview" src={url} className="w-full h-[70vh] border rounded" />;
-  if (mimeType?.startsWith("image/")) return <img src={url} alt="Preview" className="max-h-[70vh] rounded border" />;
+  if (mimeType === "application/pdf")
+    return <iframe title="Preview" src={url} className="w-full h-[70vh] rounded-[28px] border border-border" />;
+  if (mimeType?.startsWith("image/"))
+    return <img src={url} alt="Preview" className="max-h-[70vh] rounded-[28px] border border-border" />;
   return (
-    <p className="text-sm text-muted-foreground">
-      No inline preview for this type.{" "}
-      <a className="underline" href={documentsApi.fileUrl(id, true)}>
-        Download
-      </a>
-    </p>
+    <div className="flex items-center justify-center rounded-[28px] bg-org-neutral-200 p-10 text-center">
+      <p className="text-sm text-muted-foreground">
+        No inline preview for this type.{" "}
+        <a className="underline" href={documentsApi.fileUrl(id, true)}>
+          Download
+        </a>
+      </p>
+    </div>
   );
 }
 
@@ -44,7 +48,7 @@ function CategoryPicker({ document, id, queryClient }: { document: DocumentDetai
   return (
     <div className="flex items-center gap-2">
       <select
-        className="rounded border bg-transparent p-2 text-sm"
+        className="rounded-full border border-input bg-secondary px-3 py-1.5 text-sm"
         value={document.categoryId ?? ""}
         onChange={(e) => setCategory.mutate(e.target.value || null)}
       >
@@ -55,7 +59,7 @@ function CategoryPicker({ document, id, queryClient }: { document: DocumentDetai
           </option>
         ))}
       </select>
-      {document.categorySource === "auto" && <Badge variant="outline">Auto</Badge>}
+      {document.categorySource === "auto" && <Badge variant="neutral">Auto</Badge>}
     </div>
   );
 }
@@ -90,16 +94,20 @@ function TagPicker({ document, id, queryClient }: { document: DocumentDetail; id
   return (
     <div className="flex flex-wrap items-center gap-2">
       {document.tags.map((t) => (
-        <Badge key={t.id} variant="secondary" className="flex items-center gap-1">
+        <Badge key={t.id} variant={t.auto ? "accent2" : "accent"} className="flex items-center gap-1">
           {t.name}
-          {t.auto && <span className="text-xs text-muted-foreground">(auto)</span>}
+          {t.auto && <span className="text-[10px] opacity-70">(auto)</span>}
           <button type="button" aria-label={`Remove ${t.name}`} className="ml-1" onClick={() => removeTag.mutate(t.id)}>
             x
           </button>
         </Badge>
       ))}
       {available.length > 0 && (
-        <select className="rounded border bg-transparent p-1 text-xs" value="" onChange={(e) => e.target.value && addTag.mutate(e.target.value)}>
+        <select
+          className="rounded-full border border-input bg-secondary px-3 py-1 text-xs"
+          value=""
+          onChange={(e) => e.target.value && addTag.mutate(e.target.value)}
+        >
           <option value="">Add a tag</option>
           {available.map((t) => (
             <option key={t.id} value={t.id}>
@@ -238,16 +246,24 @@ export function DocumentDetailPage() {
 
   if (!document) return null;
 
+  const extractionBadgeVariant = document.extractionStatus === "failed" ? "destructive" : document.extractionStatus === "done" ? "accent2" : "neutral";
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold break-all">{document.name}</h1>
-          <p className="text-sm text-muted-foreground">
+          {document.categoryPath && (
+            <p className="text-[10px] uppercase tracking-widest text-primary font-semibold">
+              {document.categoryPath}
+              {document.categorySource === "auto" ? " · auto-filed" : ""}
+            </p>
+          )}
+          <h1 className="font-heading text-2xl break-all mt-1">{document.name}</h1>
+          <p className="text-sm text-muted-foreground mt-1">
             {document.mimeType ?? "unknown type"} · {document.sizeBytes == null ? "" : formatBytes(document.sizeBytes)} · added {formatDate(document.createdAt)}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="outline" render={<a href={documentsApi.fileUrl(id, true)} />}>
             Download
           </Button>
@@ -260,7 +276,7 @@ export function DocumentDetailPage() {
           >
             Rename
           </Button>
-          <Button variant="outline" onClick={() => runRules.mutate()} disabled={runRules.isPending}>
+          <Button variant="secondary" onClick={() => runRules.mutate()} disabled={runRules.isPending}>
             Run rules
           </Button>
           <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
@@ -269,7 +285,7 @@ export function DocumentDetailPage() {
         </div>
       </div>
 
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-3">
         <CategoryPicker document={document} id={id} queryClient={queryClient} />
         <TagPicker document={document} id={id} queryClient={queryClient} />
         <ProposalsReview documentId={id} queryClient={queryClient} />
@@ -281,7 +297,7 @@ export function DocumentDetailPage() {
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <CardTitle className="text-base flex items-center gap-2">
             Text
-            <Badge variant={document.extractionStatus === "failed" ? "destructive" : "secondary"}>{document.extractionStatus}</Badge>
+            <Badge variant={extractionBadgeVariant}>{document.extractionStatus}</Badge>
           </CardTitle>
           <Button size="sm" variant="outline" onClick={() => reextract.mutate()} disabled={reextract.isPending}>
             Re-extract
