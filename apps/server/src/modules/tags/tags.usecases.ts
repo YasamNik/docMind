@@ -269,7 +269,7 @@ export function createTagsService({ db }: { db: Database }) {
         documentId,
         patch: { categoryId, categorySource: categoryId === null ? null : "manual", updatedAt: nowIso() },
       });
-      return documentsRepository.findById({ userId, documentId });
+      return documentsRepository.findByIdWithExtras({ userId, documentId });
     },
 
     async setDocumentTag({ userId, documentId, tagId }: { userId: string; documentId: string; tagId: string }): Promise<TagChip[]> {

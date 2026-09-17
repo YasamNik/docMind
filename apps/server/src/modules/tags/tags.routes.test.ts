@@ -111,6 +111,8 @@ describe("tags and categories routes", () => {
     const setCategoryBody = await setCategory.json();
     expect(setCategoryBody.document).toMatchObject({ categoryId: category.id, categorySource: "manual" });
     expect(Object.keys(setCategoryBody.document)).not.toContain("extractedText");
+    expect(setCategoryBody.document.categoryPath).toBe("Finance");
+    expect(setCategoryBody.document.tags).toEqual([]);
 
     const addTag = await app.request(`/api/documents/${document.id}/tags/${tag.id}`, { method: "POST", headers: { cookie } });
     expect((await addTag.json()).tags).toEqual([{ id: tag.id, name: "Rent", color: null, auto: false, manual: true }]);

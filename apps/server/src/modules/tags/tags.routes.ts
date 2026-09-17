@@ -1,7 +1,7 @@
 import type { Context, Hono } from "hono";
 import { parseJsonBody, parseOrValidationError } from "../../shared/http/validate.js";
 import { documentIdSchema } from "../documents/documents.schemas.js";
-import type { DocumentListRow } from "../documents/documents.types.js";
+import type { Document, DocumentListRow } from "../documents/documents.types.js";
 import {
   categoryIdSchema,
   createCategoryBodySchema,
@@ -11,13 +11,18 @@ import {
   updateCategoryBodySchema,
   updateTagBodySchema,
 } from "./tags.schemas.js";
+import type { TagChip } from "./tags.types.js";
 import type { TagsService } from "./tags.usecases.js";
 
-// setDocumentCategory returns the full document row, extractedText included. Routes
-// must never hand that back to the client, so strip it here before responding.
-function omitExtractedText(document: { extractedText: string | null } & Record<string, unknown>): DocumentListRow {
+type EnrichedDocument = Document & { categoryPath: string | null; tags: TagChip[] };
+
+// setDocumentCategory returns the full enriched document row, extractedText included.
+// Routes must never hand that back to the client, so strip it here before responding.
+// No cast: if the enriched shape ever stops matching DocumentListRow, this fails to
+// compile instead of silently returning undefined fields.
+function omitExtractedText(document: EnrichedDocument): DocumentListRow {
   const { extractedText: _extractedText, ...rest } = document;
-  return rest as DocumentListRow;
+  return rest;
 }
 
 export function registerTagsRoutes({
