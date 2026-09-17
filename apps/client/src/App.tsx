@@ -4,10 +4,12 @@ import { Toaster } from "@/components/ui/sonner";
 import { AppShell } from "@/components/layout/AppShell";
 import { authClient } from "@/lib/auth-client";
 import { SignInPage } from "@/pages/auth/SignInPage";
+import { CategoriesPage } from "@/pages/categories/CategoriesPage";
 import { DocumentsPage } from "@/pages/documents/DocumentsPage";
 import { DocumentDetailPage } from "@/pages/documents/DocumentDetailPage";
 import { JobsPage } from "@/pages/jobs/JobsPage";
 import { SettingsPage } from "@/pages/settings/SettingsPage";
+import { TagsPage } from "@/pages/tags/TagsPage";
 
 const queryClient = new QueryClient();
 
@@ -38,6 +40,8 @@ export default function App() {
             <Route index element={<Navigate to="/documents" replace />} />
             <Route path="/documents" element={<DocumentsPage />} />
             <Route path="/documents/:id" element={<DocumentDetailPage />} />
+            <Route path="/categories" element={<CategoriesPage />} />
+            <Route path="/tags" element={<TagsPage />} />
             <Route path="/rules" element={<Placeholder title="Rules" />} />
             <Route path="/jobs" element={<JobsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
