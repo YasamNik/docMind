@@ -94,6 +94,31 @@ describe("extraction", () => {
     spy.mockRestore();
   });
 
+  it("enqueues an initial rules job when at least one automatic item exists", async () => {
+    await t.services.tagsService.createTag({ userId, name: "Rent", description: "Monthly rent payments" });
+    const { document } = await t.services.documentsService.upload({ userId, name: "notes.txt", mimeType: "text/plain", body: Readable.from(["rent due"]) });
+    const runner = createJobRunner({ db: t.db, handlers: { extraction: t.services.extractionService.handler } });
+    await runner.runOnce();
+
+    const after = await t.services.documentsService.get({ userId, documentId: document.id });
+    expect(after.ruleStatus).toBe("pending");
+    const jobs = await t.services.jobsService.list({ userId, status: "pending" });
+    const rulesJob = jobs.find((j) => j.type === "rules");
+    expect(rulesJob).toBeDefined();
+    expect(JSON.parse(rulesJob!.payload)).toMatchObject({ documentId: document.id, userId, mode: "initial" });
+  });
+
+  it("sets rule_status done directly when there are no automatic items", async () => {
+    const { document } = await t.services.documentsService.upload({ userId, name: "notes.txt", mimeType: "text/plain", body: Readable.from(["hello"]) });
+    const runner = createJobRunner({ db: t.db, handlers: { extraction: t.services.extractionService.handler } });
+    await runner.runOnce();
+
+    const after = await t.services.documentsService.get({ userId, documentId: document.id });
+    expect(after.ruleStatus).toBe("done");
+    const jobs = await t.services.jobsService.list({ userId });
+    expect(jobs.filter((j) => j.type === "rules")).toHaveLength(0);
+  });
+
   it("does not create a duplicate job while one is already active", async () => {
     const { document } = await t.services.documentsService.upload({ userId, name: "notes.txt", mimeType: "text/plain", body: Readable.from(["x"]) });
     const first = await t.services.extractionService.requestExtraction({ userId, documentId: document.id });

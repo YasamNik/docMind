@@ -130,11 +130,11 @@ export function createServer({
       await jobsService.enqueue({ userId, type: "extraction", payload: { documentId: document.id, userId }, tx });
     },
   });
-  const extractionService: ExtractionService = createExtractionService({ db, documentsService, settingsService, registry });
-  const jobRunner = createJobRunner({ db, handlers: { extraction: extractionService.handler } });
   const aiService = createAiService({ settingsService, registry: aiProviderRegistry, adapterFactories });
   const tagsService = createTagsService({ db });
   const rulesService = createRulesService({ db, aiService });
+  const extractionService: ExtractionService = createExtractionService({ db, documentsService, settingsService, registry, rulesService });
+  const jobRunner = createJobRunner({ db, handlers: { extraction: extractionService.handler, rules: rulesService.handler } });
 
   app.get("/api/health", (c) => c.json({ status: "ok" }));
   registerAuthRoutes({ app, auth, db });

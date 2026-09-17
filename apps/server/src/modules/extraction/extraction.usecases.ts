@@ -9,6 +9,7 @@ import type { JobHandler } from "../jobs/jobs.runner.js";
 import type { Job } from "../jobs/jobs.types.js";
 import { createJobsService } from "../jobs/jobs.usecases.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
+import type { RulesService } from "../rules/rules.usecases.js";
 import type { ExtractorRegistry } from "./extraction.registry.js";
 import { extractionPayloadSchema } from "./extraction.schemas.js";
 
@@ -24,11 +25,13 @@ export function createExtractionService({
   documentsService,
   settingsService,
   registry,
+  rulesService,
 }: {
   db: Database;
   documentsService: DocumentsService;
   settingsService: SettingsService;
   registry: ExtractorRegistry;
+  rulesService: Pick<RulesService, "hasAutomaticItems">;
 }) {
   const documents = createDocumentsRepository({ db });
   const jobs = createJobsService({ db });
@@ -61,10 +64,24 @@ export function createExtractionService({
         dataDir: (await settingsService.get<string>(userId, "extraction.dataDir")) ?? "./data",
       };
       const result = await extractor.extract({ bytes, mimeType: document.mimeType ?? "", filename: document.name }, ctx);
-      await documents.update({
-        userId,
-        documentId,
-        patch: { extractedText: result.text, extractionStatus: "done", extractionError: result.note ?? null, updatedAt: now() },
+      const hasAutoItems = await rulesService.hasAutomaticItems(userId);
+      await db.transaction(async (tx) => {
+        const txDb = tx as unknown as Database;
+        await documents.update({
+          userId,
+          documentId,
+          patch: {
+            extractedText: result.text,
+            extractionStatus: "done",
+            extractionError: result.note ?? null,
+            ruleStatus: hasAutoItems ? "pending" : "done",
+            updatedAt: now(),
+          },
+          tx: txDb,
+        });
+        if (hasAutoItems) {
+          await jobs.enqueue({ userId, type: "rules", payload: { documentId, userId, mode: "initial" }, tx: txDb });
+        }
       });
     } catch (error) {
       const message = ((error as Error).message ?? String(error)).slice(0, 2000);
