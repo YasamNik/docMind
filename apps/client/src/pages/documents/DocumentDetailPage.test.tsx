@@ -1,0 +1,80 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DocumentDetailPage } from "./DocumentDetailPage";
+
+afterEach(() => cleanup());
+
+const documentDetail = {
+  id: "doc_1",
+  name: "invoice.pdf",
+  mimeType: "application/pdf",
+  sizeBytes: 100,
+  extractionStatus: "done" as const,
+  extractionError: null,
+  extractedText: "some text",
+  categoryId: null,
+  categoryPath: null,
+  categorySource: null,
+  tags: [{ id: "tag_1", name: "Rent", color: null, auto: false, manual: true }],
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+};
+
+const getMock = vi.fn(async () => documentDetail);
+const setCategoryMock = vi.fn(async (_id: string, categoryId: string | null) => ({ ...documentDetail, categoryId }));
+const addTagMock = vi.fn(async (_id: string, _tagId: string) => [...documentDetail.tags, { id: "tag_2", name: "Bills", color: null, auto: false, manual: true }]);
+const removeTagMock = vi.fn(async (_id: string, _tagId: string) => []);
+
+vi.mock("@/lib/documents-api", () => ({
+  documentsApi: {
+    get: () => getMock(),
+    fileUrl: (id: string) => `/api/documents/${id}/file`,
+    rename: vi.fn(),
+    remove: vi.fn(),
+    reextract: vi.fn(),
+  },
+}));
+
+vi.mock("@/lib/tags-api", () => ({
+  categoriesApi: { list: vi.fn(async () => [{ id: "cat_1", name: "Finance", path: "Finance" }]) },
+  tagsApi: { list: vi.fn(async () => [{ id: "tag_1", name: "Rent" }, { id: "tag_2", name: "Bills" }]) },
+  documentCategorizationApi: {
+    setCategory: (id: string, categoryId: string | null) => setCategoryMock(id, categoryId),
+    addTag: (id: string, tagId: string) => addTagMock(id, tagId),
+    removeTag: (id: string, tagId: string) => removeTagMock(id, tagId),
+  },
+}));
+
+function renderPage() {
+  return render(
+    <MemoryRouter initialEntries={["/documents/doc_1"]}>
+      <QueryClientProvider client={new QueryClient()}>
+        <Routes>
+          <Route path="/documents/:id" element={<DocumentDetailPage />} />
+        </Routes>
+      </QueryClientProvider>
+    </MemoryRouter>,
+  );
+}
+
+describe("DocumentDetailPage pickers", () => {
+  it("shows the current tag and lets the category be changed", async () => {
+    renderPage();
+    expect(await screen.findByText("Rent")).toBeInTheDocument();
+    const select = await screen.findByDisplayValue("No category");
+    fireEvent.change(select, { target: { value: "cat_1" } });
+    await waitFor(() => expect(setCategoryMock).toHaveBeenCalledWith("doc_1", "cat_1"));
+  });
+
+  it("adds and removes a tag", async () => {
+    renderPage();
+    const addSelect = await screen.findByDisplayValue("Add a tag");
+    fireEvent.change(addSelect, { target: { value: "tag_2" } });
+    await waitFor(() => expect(addTagMock).toHaveBeenCalledWith("doc_1", "tag_2"));
+
+    fireEvent.click(screen.getByLabelText("Remove Rent"));
+    await waitFor(() => expect(removeTagMock).toHaveBeenCalledWith("doc_1", "tag_1"));
+  });
+});

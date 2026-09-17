@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "@/components/ui/input";
 import { documentsApi, type DocumentDetail } from "@/lib/documents-api";
 import { formatBytes, formatDate } from "@/lib/format";
+import { categoriesApi, documentCategorizationApi, tagsApi } from "@/lib/tags-api";
 
 function Preview({ id, mimeType }: { id: string; mimeType: string | null }) {
   const url = documentsApi.fileUrl(id);
@@ -21,6 +22,83 @@ function Preview({ id, mimeType }: { id: string; mimeType: string | null }) {
         Download
       </a>
     </p>
+  );
+}
+
+function CategoryPicker({ document, id, queryClient }: { document: DocumentDetail; id: string; queryClient: ReturnType<typeof useQueryClient> }) {
+  const { data: categories = [] } = useQuery({ queryKey: ["categories"], queryFn: categoriesApi.list });
+  const setCategory = useMutation({
+    mutationFn: (categoryId: string | null) => documentCategorizationApi.setCategory(id, categoryId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["documents", id] });
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
+      toast.success("Category updated");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  return (
+    <div className="flex items-center gap-2">
+      <select
+        className="rounded border bg-transparent p-2 text-sm"
+        value={document.categoryId ?? ""}
+        onChange={(e) => setCategory.mutate(e.target.value || null)}
+      >
+        <option value="">No category</option>
+        {categories.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.path}
+          </option>
+        ))}
+      </select>
+      {document.categorySource === "auto" && <Badge variant="outline">Auto</Badge>}
+    </div>
+  );
+}
+
+function TagPicker({ document, id, queryClient }: { document: DocumentDetail; id: string; queryClient: ReturnType<typeof useQueryClient> }) {
+  const { data: allTags = [] } = useQuery({ queryKey: ["tags"], queryFn: tagsApi.list });
+  const addTag = useMutation({
+    mutationFn: (tagId: string) => documentCategorizationApi.addTag(id, tagId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["documents", id] });
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const removeTag = useMutation({
+    mutationFn: (tagId: string) => documentCategorizationApi.removeTag(id, tagId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["documents", id] });
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const attachedIds = new Set(document.tags.map((t) => t.id));
+  const available = allTags.filter((t) => !attachedIds.has(t.id));
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {document.tags.map((t) => (
+        <Badge key={t.id} variant="secondary" className="flex items-center gap-1">
+          {t.name}
+          {t.auto && <span className="text-xs text-muted-foreground">(auto)</span>}
+          <button type="button" aria-label={`Remove ${t.name}`} className="ml-1" onClick={() => removeTag.mutate(t.id)}>
+            x
+          </button>
+        </Badge>
+      ))}
+      {available.length > 0 && (
+        <select className="rounded border bg-transparent p-1 text-xs" value="" onChange={(e) => e.target.value && addTag.mutate(e.target.value)}>
+          <option value="">Add a tag</option>
+          {available.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+      )}
+    </div>
   );
 }
 
@@ -93,6 +171,11 @@ export function DocumentDetailPage() {
             Delete
           </Button>
         </div>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <CategoryPicker document={document} id={id} queryClient={queryClient} />
+        <TagPicker document={document} id={id} queryClient={queryClient} />
       </div>
 
       <Preview id={id} mimeType={document.mimeType} />

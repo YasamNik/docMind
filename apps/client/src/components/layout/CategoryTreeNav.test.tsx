@@ -40,6 +40,8 @@ describe("CategoryTreeNav", () => {
     // Finance shows 3 (its own 2 plus Tax's 1); Tax shows 1 (leaf, direct only).
     expect(screen.getByText("3")).toBeInTheDocument();
     expect(screen.getByText("1")).toBeInTheDocument();
+    expect(screen.getByText("Finance").closest("a")).toHaveAttribute("href", "/documents?categoryId=cat_1");
+    expect(screen.getByText("Tax").closest("a")).toHaveAttribute("href", "/documents?categoryId=cat_2");
   });
 
   it("shows a placeholder when there are no categories", () => {

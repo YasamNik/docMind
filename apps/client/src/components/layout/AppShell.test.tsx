@@ -48,5 +48,8 @@ describe("AppShell", () => {
     expect(await screen.findByText("Finance")).toBeInTheDocument();
     expect(await screen.findByText("Rent")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
+    expect(screen.getByText("Inbox").closest("a")).toHaveAttribute("href", "/documents?view=inbox");
+    expect(screen.getByText("Needs review").closest("a")).toHaveAttribute("href", "/documents?view=needs_review");
+    expect(screen.getByText("Rent").closest("a")).toHaveAttribute("href", "/documents?tagId=tag_1");
   });
 });
