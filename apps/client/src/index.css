@@ -163,3 +163,7 @@
 ::selection {
     background: color-mix(in srgb, #c67139 30%, transparent);
 }
+
+.lucide {
+    stroke-width: 2.75;
+}
