@@ -9,6 +9,8 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "@/components/ui/input";
 import { documentsApi, type DocumentDetail } from "@/lib/documents-api";
 import { formatBytes, formatDate } from "@/lib/format";
+import { jobsApi } from "@/lib/jobs-api";
+import { sortApi, type ProposalRow } from "@/lib/sort-api";
 import { categoriesApi, documentCategorizationApi, tagsApi } from "@/lib/tags-api";
 
 function Preview({ id, mimeType }: { id: string; mimeType: string | null }) {
@@ -110,6 +112,81 @@ function TagPicker({ document, id, queryClient }: { document: DocumentDetail; id
   );
 }
 
+function ProposalsReview({ documentId, queryClient }: { documentId: string; queryClient: ReturnType<typeof useQueryClient> }) {
+  const { data: jobs = [] } = useQuery({
+    queryKey: ["jobs"],
+    queryFn: () => jobsApi.list(),
+    refetchInterval: (q) => (q.state.data?.some((j) => j.status === "pending" || j.status === "processing") ? 3000 : false),
+  });
+  const rulesJobPending = jobs.some((j) => j.type === "rules" && j.payload.documentId === documentId && (j.status === "pending" || j.status === "processing"));
+  const { data: proposals = [] } = useQuery<ProposalRow[]>({
+    queryKey: ["proposals", documentId],
+    queryFn: () => sortApi.listForDocument(documentId),
+    refetchInterval: rulesJobPending ? 3000 : false,
+  });
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const apply = useMutation({
+    mutationFn: ({ accept, dismiss }: { accept: string[]; dismiss: string[] }) => sortApi.apply(accept, dismiss),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["proposals", documentId] });
+      queryClient.invalidateQueries({ queryKey: ["documents", documentId] });
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
+      setSelected(new Set());
+      toast.success("Updated");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  if (proposals.length === 0) return null;
+
+  function toggle(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  return (
+    <>
+      <Button variant="outline" onClick={() => setOpen(true)}>
+        Review proposals ({proposals.length})
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Proposed changes</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 max-h-[50vh] overflow-auto">
+            {proposals.map((p) => {
+              const label = p.kind === "add_tag" ? `Add tag ${p.itemName}` : p.kind === "remove_tag" ? `Remove tag ${p.itemName}` : `Set category to ${p.itemName}`;
+              return (
+                <label key={p.id} className="flex items-start gap-2 text-sm border-b pb-2 last:border-b-0">
+                  <input type="checkbox" checked={selected.has(p.id)} onChange={() => toggle(p.id)} className="mt-1" />
+                  <span>
+                    {label}
+                    <span className="block text-xs text-muted-foreground">{p.reasoning}</span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => apply.mutate({ accept: [], dismiss: proposals.map((p) => p.id) })} disabled={apply.isPending}>
+              Dismiss all
+            </Button>
+            <Button onClick={() => apply.mutate({ accept: [...selected], dismiss: [] })} disabled={selected.size === 0 || apply.isPending}>
+              Accept selected
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 export function DocumentDetailPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
@@ -150,6 +227,14 @@ export function DocumentDetailPage() {
     },
     onError: (e: Error) => toast.error(e.message),
   });
+  const runRules = useMutation({
+    mutationFn: () => sortApi.requestSort(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      toast.success("Sorting queued");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   if (!document) return null;
 
@@ -175,6 +260,9 @@ export function DocumentDetailPage() {
           >
             Rename
           </Button>
+          <Button variant="outline" onClick={() => runRules.mutate()} disabled={runRules.isPending}>
+            Run rules
+          </Button>
           <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
             Delete
           </Button>
@@ -184,6 +272,7 @@ export function DocumentDetailPage() {
       <div className="flex flex-col gap-2">
         <CategoryPicker document={document} id={id} queryClient={queryClient} />
         <TagPicker document={document} id={id} queryClient={queryClient} />
+        <ProposalsReview documentId={id} queryClient={queryClient} />
       </div>
 
       <Preview id={id} mimeType={document.mimeType} />

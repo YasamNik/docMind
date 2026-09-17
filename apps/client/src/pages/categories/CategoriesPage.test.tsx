@@ -46,6 +46,9 @@ const createMock = vi.fn(async (input: unknown) => ({ id: "cat_3", documentCount
 const removeMock = vi.fn(async (_id: string) => undefined);
 const updateMock = vi.fn(async (id: string, patch: unknown) => ({ id, ...(patch as object) }));
 
+vi.mock("@/lib/documents-api", () => ({ documentsApi: { list: vi.fn(async () => [{ id: "doc_1", name: "invoice.pdf" }]) } }));
+vi.mock("@/lib/sort-api", () => ({ sortApi: { dryRun: vi.fn(async () => ({ matched: false, confidence: 0, reasoning: "", wouldApply: false })) } }));
+
 vi.mock("@/lib/tags-api", () => ({
   categoriesApi: {
     list: () => listMock(),

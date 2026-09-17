@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DryRunPanel } from "@/components/sorting/DryRunPanel";
 import { categoriesApi, type CategoryInput, type CategoryRow } from "@/lib/tags-api";
 
 const emptyForm: CategoryInput = { name: "", parentId: null, color: "", description: "", confidenceThreshold: 0.7, autoApply: true };
@@ -90,7 +91,7 @@ function CategoryForm({
       <Button disabled={submitting || !form.name.trim()} onClick={() => onSubmit(form)}>
         Save
       </Button>
-      <p className="text-xs text-muted-foreground">Test on a document is available once the sorting engine ships.</p>
+      <DryRunPanel targetType="category" name={form.name} description={form.description ?? ""} threshold={form.confidenceThreshold ?? 0.7} />
     </div>
   );
 }

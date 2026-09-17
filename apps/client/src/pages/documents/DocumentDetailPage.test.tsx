@@ -37,6 +37,23 @@ vi.mock("@/lib/documents-api", () => ({
   },
 }));
 
+const jobsListMock = vi.fn(async () => [] as { id: string; type: string; status: string; payload: { documentId?: string }; attempts: number; error: string | null; createdAt: string }[]);
+const proposalsMock = vi.fn(async () => [] as { id: string; documentId: string; documentName: string; targetType: string; targetId: string; itemName: string; kind: string; confidence: number; reasoning: string }[]);
+const requestSortMock = vi.fn(async () => ({ id: "job_1", status: "pending" }));
+const applyProposalsMock = vi.fn(async (_accept: string[], _dismiss: string[]) => ({ appliedCount: 1, dismissedCount: 0 }));
+
+vi.mock("@/lib/jobs-api", () => ({ jobsApi: { list: () => jobsListMock() } }));
+
+vi.mock("@/lib/sort-api", () => ({
+  sortApi: {
+    listForDocument: () => proposalsMock(),
+    requestSort: () => requestSortMock(),
+    apply: (accept: string[], dismiss: string[]) => applyProposalsMock(accept, dismiss),
+  },
+}));
+
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
 vi.mock("@/lib/tags-api", () => ({
   categoriesApi: { list: vi.fn(async () => [{ id: "cat_1", name: "Finance", path: "Finance" }]) },
   tagsApi: { list: vi.fn(async () => [{ id: "tag_1", name: "Rent" }, { id: "tag_2", name: "Bills" }]) },
@@ -103,5 +120,30 @@ describe("DocumentDetailPage pickers", () => {
     await waitFor(() => expect(removeTagMock).toHaveBeenCalled());
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["categories"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["tags"] });
+  });
+});
+
+describe("DocumentDetailPage rules", () => {
+  it("queues a rerun with the Run rules button", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByText("Run rules"));
+    await waitFor(() => expect(requestSortMock).toHaveBeenCalled());
+  });
+
+  it("shows a review button with the proposal count and applies a selected one", async () => {
+    proposalsMock.mockResolvedValueOnce([
+      { id: "eval_1", documentId: "doc_1", documentName: "invoice.pdf", targetType: "tag", targetId: "tag_2", itemName: "Bills", kind: "add_tag", confidence: 0.8, reasoning: "Mentions bills." },
+    ]);
+    renderPage();
+    fireEvent.click(await screen.findByText("Review proposals (1)"));
+    fireEvent.click(screen.getByLabelText((_, el) => el?.tagName.toLowerCase() === "input" && el?.getAttribute("type") === "checkbox"));
+    fireEvent.click(screen.getByText("Accept selected"));
+    await waitFor(() => expect(applyProposalsMock).toHaveBeenCalledWith(["eval_1"], []));
+  });
+
+  it("shows nothing extra when there are no proposals", async () => {
+    renderPage();
+    await screen.findByText("Rent");
+    expect(screen.queryByText(/Review proposals/)).not.toBeInTheDocument();
   });
 });
