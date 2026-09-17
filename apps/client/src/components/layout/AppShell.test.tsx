@@ -51,5 +51,6 @@ describe("AppShell", () => {
     expect(screen.getByText("Inbox").closest("a")).toHaveAttribute("href", "/documents?view=inbox");
     expect(screen.getByText("Needs review").closest("a")).toHaveAttribute("href", "/documents?view=needs_review");
     expect(screen.getByText("Rent").closest("a")).toHaveAttribute("href", "/documents?tagId=tag_1");
+    expect(screen.getByText("Sorting").closest("a")).toHaveAttribute("href", "/sorting");
   });
 });

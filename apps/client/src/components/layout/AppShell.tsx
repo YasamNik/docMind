@@ -8,7 +8,7 @@ import { categoriesApi, tagsApi } from "@/lib/tags-api";
 import { CategoryTreeNav } from "./CategoryTreeNav";
 
 const bottomLinks = [
-  { to: "/rules", label: "Rules" },
+  { to: "/sorting", label: "Sorting" },
   { to: "/jobs", label: "Jobs" },
   { to: "/settings", label: "Settings" },
 ];

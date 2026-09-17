@@ -9,6 +9,7 @@ import { DocumentsPage } from "@/pages/documents/DocumentsPage";
 import { DocumentDetailPage } from "@/pages/documents/DocumentDetailPage";
 import { JobsPage } from "@/pages/jobs/JobsPage";
 import { SettingsPage } from "@/pages/settings/SettingsPage";
+import { SortingPage } from "@/pages/sorting/SortingPage";
 import { TagsPage } from "@/pages/tags/TagsPage";
 
 const queryClient = new QueryClient();
@@ -18,10 +19,6 @@ function RequireSession({ children }: { children: React.ReactNode }) {
   if (isPending) return null;
   if (!data) return <Navigate to="/sign-in" replace />;
   return <>{children}</>;
-}
-
-function Placeholder({ title }: { title: string }) {
-  return <h1 className="text-xl font-semibold">{title} arrives in a later milestone</h1>;
 }
 
 export default function App() {
@@ -42,7 +39,7 @@ export default function App() {
             <Route path="/documents/:id" element={<DocumentDetailPage />} />
             <Route path="/categories" element={<CategoriesPage />} />
             <Route path="/tags" element={<TagsPage />} />
-            <Route path="/rules" element={<Placeholder title="Rules" />} />
+            <Route path="/sorting" element={<SortingPage />} />
             <Route path="/jobs" element={<JobsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>
