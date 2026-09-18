@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { Briefcase, Inbox, LogOut, MessageCircle, Search, Settings, Sparkles, Tags as TagsIcon } from "lucide-react";
+import { Briefcase, Inbox, LogOut, MessageCircle, Moon, Search, Settings, Sparkles, Sun, Tags as TagsIcon } from "lucide-react";
+import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
@@ -69,6 +70,25 @@ function CountRow({ to, label, count, color }: { to: string; label: string; coun
   );
 }
 
+function ThemeToggle() {
+  const { resolvedTheme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) return <span className="h-5 w-5" />;
+  const isDark = resolvedTheme === "dark";
+  return (
+    <button
+      type="button"
+      title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+      className="rounded-xl p-2 text-org-neutral-600 hover:text-foreground"
+      onClick={() => setTheme(isDark ? "light" : "dark")}
+    >
+      {isDark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+      <span className="sr-only">Toggle theme</span>
+    </button>
+  );
+}
+
 function IconRail({ activeTab }: { activeTab: RailTab }) {
   return (
     <aside className="flex w-[60px] shrink-0 flex-col items-center gap-1 bg-card py-4">
@@ -88,15 +108,18 @@ function IconRail({ activeTab }: { activeTab: RailTab }) {
           </NavLink>
         ))}
       </nav>
-      <button
-        type="button"
-        title="Sign out"
-        className="mt-auto rounded-xl p-2 text-org-neutral-600 hover:text-foreground"
-        onClick={() => authClient.signOut().then(() => window.location.assign("/sign-in"))}
-      >
-        <LogOut className="h-5 w-5" />
-        <span className="sr-only">Sign out</span>
-      </button>
+      <div className="mt-auto flex flex-col items-center gap-1">
+        <ThemeToggle />
+        <button
+          type="button"
+          title="Sign out"
+          className="rounded-xl p-2 text-org-neutral-600 hover:text-foreground"
+          onClick={() => authClient.signOut().then(() => window.location.assign("/sign-in"))}
+        >
+          <LogOut className="h-5 w-5" />
+          <span className="sr-only">Sign out</span>
+        </button>
+      </div>
     </aside>
   );
 }
