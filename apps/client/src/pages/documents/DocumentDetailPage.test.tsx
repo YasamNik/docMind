@@ -250,8 +250,8 @@ describe("DocumentDetailPage extracted fields", () => {
         {
           id: "f_1",
           documentId: "doc_1",
-          key: "documentType",
-          value: "invoice",
+          key: "status",
+          value: "paid",
           valueNumber: null,
           valueDate: null,
           currency: null,
@@ -289,7 +289,7 @@ describe("DocumentDetailPage extracted fields", () => {
       ],
     }));
     renderPage();
-    expect(await screen.findByText("Invoice")).toBeInTheDocument();
+    expect(await screen.findByText("Paid")).toBeInTheDocument();
     expect(screen.getByText("120.50")).toBeInTheDocument();
     expect(screen.getByText("USD")).toBeInTheDocument();
     expect(screen.getByText("Acme")).toBeInTheDocument();

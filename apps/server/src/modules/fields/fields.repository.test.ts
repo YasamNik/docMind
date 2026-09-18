@@ -94,12 +94,12 @@ describe("fields repository", () => {
     await seedDocument(db, "doc-1");
     await seedDocument(db, "doc-2");
     const repo = createFieldsRepository({ db });
-    await repo.replaceForDocument({ userId: USER, documentId: "doc-1", fields: [{ key: "documentType", value: "invoice", valueNumber: null, valueDate: null, currency: null, confidence: null }] });
-    await repo.replaceForDocument({ userId: USER, documentId: "doc-2", fields: [{ key: "documentType", value: "receipt", valueNumber: null, valueDate: null, currency: null, confidence: null }] });
+    await repo.replaceForDocument({ userId: USER, documentId: "doc-1", fields: [{ key: "counterparty", value: "Acme", valueNumber: null, valueDate: null, currency: null, confidence: null }] });
+    await repo.replaceForDocument({ userId: USER, documentId: "doc-2", fields: [{ key: "counterparty", value: "Globex", valueNumber: null, valueDate: null, currency: null, confidence: null }] });
 
     const map = await repo.listByDocumentIds({ userId: USER, documentIds: ["doc-1", "doc-2"] });
-    expect(map.get("doc-1")?.[0]?.value).toBe("invoice");
-    expect(map.get("doc-2")?.[0]?.value).toBe("receipt");
+    expect(map.get("doc-1")?.[0]?.value).toBe("Acme");
+    expect(map.get("doc-2")?.[0]?.value).toBe("Globex");
   });
 
   it("lists distinct values for a key and leaves trashed documents out", async () => {
@@ -108,11 +108,11 @@ describe("fields repository", () => {
     await seedDocument(db, "doc-2");
     await seedDocument(db, "doc-3", { deletedAt: new Date().toISOString() });
     const repo = createFieldsRepository({ db });
-    for (const [id, value] of [["doc-1", "invoice"], ["doc-2", "invoice"], ["doc-3", "medical"]] as const) {
-      await repo.replaceForDocument({ userId: USER, documentId: id, fields: [{ key: "documentType", value, valueNumber: null, valueDate: null, currency: null, confidence: null }] });
+    for (const [id, value] of [["doc-1", "Acme"], ["doc-2", "Acme"], ["doc-3", "Globex"]] as const) {
+      await repo.replaceForDocument({ userId: USER, documentId: id, fields: [{ key: "counterparty", value, valueNumber: null, valueDate: null, currency: null, confidence: null }] });
     }
-    const values = await repo.listDistinctValues({ userId: USER, key: "documentType" });
-    expect(values).toEqual(["invoice"]);
+    const values = await repo.listDistinctValues({ userId: USER, key: "counterparty" });
+    expect(values).toEqual(["Acme"]);
   });
 
   it("reports which documents already have fields", async () => {
@@ -120,7 +120,7 @@ describe("fields repository", () => {
     await seedDocument(db, "doc-1");
     await seedDocument(db, "doc-2");
     const repo = createFieldsRepository({ db });
-    await repo.replaceForDocument({ userId: USER, documentId: "doc-1", fields: [{ key: "documentType", value: "invoice", valueNumber: null, valueDate: null, currency: null, confidence: null }] });
+    await repo.replaceForDocument({ userId: USER, documentId: "doc-1", fields: [{ key: "counterparty", value: "Acme", valueNumber: null, valueDate: null, currency: null, confidence: null }] });
     const withFields = await repo.listDocumentIdsWithFields({ userId: USER });
     expect(withFields.has("doc-1")).toBe(true);
     expect(withFields.has("doc-2")).toBe(false);

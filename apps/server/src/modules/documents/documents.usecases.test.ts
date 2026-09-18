@@ -202,14 +202,14 @@ describe("documents service filters and enrichment", () => {
     await createFieldsRepository({ db }).replaceForDocument({
       userId,
       documentId: document.id,
-      fields: [{ key: "documentType", value: "invoice", valueNumber: null, valueDate: null, currency: null, confidence: null }],
+      fields: [{ key: "counterparty", value: "Acme", valueNumber: null, valueDate: null, currency: null, confidence: null }],
     });
 
     const detail = await documents.get({ userId, documentId: document.id });
-    expect(detail.fields).toEqual([expect.objectContaining({ key: "documentType", value: "invoice" })]);
+    expect(detail.fields).toEqual([expect.objectContaining({ key: "counterparty", value: "Acme" })]);
 
     const [listed] = await documents.list({ userId });
-    expect(listed?.fields).toEqual([expect.objectContaining({ key: "documentType", value: "invoice" })]);
+    expect(listed?.fields).toEqual([expect.objectContaining({ key: "counterparty", value: "Acme" })]);
   });
 
   it("upload() returns the enriched row with categoryPath and tags", async () => {

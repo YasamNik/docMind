@@ -1,25 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { FIELDS_PROMPT_SECTION, normalizeFieldRow, normalizeFieldRows } from "./fields.models.js";
-import { DOCUMENT_TYPES, FIELD_KEYS, FIELD_STATUSES } from "./fields.types.js";
+import { FIELD_KEYS, FIELD_STATUSES } from "./fields.types.js";
 
 describe("normalizeFieldRow", () => {
-  it("keeps a valid documentType", () => {
-    expect(normalizeFieldRow({ key: "documentType", value: "invoice", confidence: 0.9 })).toEqual({
-      key: "documentType",
-      value: "invoice",
+  it("keeps a valid free text value", () => {
+    expect(normalizeFieldRow({ key: "counterparty", value: "Acme Ltd", confidence: 0.9 })).toEqual({
+      key: "counterparty",
+      value: "Acme Ltd",
       valueNumber: null,
       valueDate: null,
       currency: null,
       confidence: 0.9,
     });
-  });
-
-  it("lowercases and trims a documentType before checking the enum", () => {
-    expect(normalizeFieldRow({ key: "documentType", value: " Invoice " })?.value).toBe("invoice");
-  });
-
-  it("drops a documentType outside the enum", () => {
-    expect(normalizeFieldRow({ key: "documentType", value: "spaceship" })).toBeNull();
   });
 
   it("drops an unknown key", () => {
@@ -124,11 +116,11 @@ describe("normalizeFieldRow", () => {
 describe("normalizeFieldRows", () => {
   it("keeps the good rows and reports the dropped ones", () => {
     const result = normalizeFieldRows([
-      { key: "documentType", value: "receipt" },
+      { key: "personName", value: "Jane Doe" },
       { key: "nonsense", value: "x" },
       { key: "counterparty", value: "Acme Ltd" },
     ]);
-    expect(result.fields.map((f) => f.key)).toEqual(["documentType", "counterparty"]);
+    expect(result.fields.map((f) => f.key)).toEqual(["personName", "counterparty"]);
     expect(result.dropped).toEqual([{ key: "nonsense", reason: "unknown key" }]);
   });
 
@@ -152,8 +144,8 @@ describe("FIELDS_PROMPT_SECTION", () => {
     for (const key of FIELD_KEYS) expect(FIELDS_PROMPT_SECTION).toContain(key);
   });
 
-  it("names every document type", () => {
-    for (const type of DOCUMENT_TYPES) expect(FIELDS_PROMPT_SECTION).toContain(type);
+  it("holds thirteen keys now that documentType has left the vocabulary", () => {
+    expect(FIELD_KEYS).toHaveLength(13);
   });
 
   it("names every status", () => {

@@ -1,7 +1,6 @@
 import {
   AMOUNT_KEYS,
   DATE_KEYS,
-  DOCUMENT_TYPES,
   FIELD_KEYS,
   FIELD_STATUSES,
   type FieldKey,
@@ -20,7 +19,6 @@ export const FIELDS_PROMPT_SECTION = `Also extract the following facts, as a "fi
 document actually states it. Omit anything you would have to guess at. Most documents
 will fill only a few of these, which is expected.
 
-- documentType: one of ${DOCUMENT_TYPES.join(", ")}.
 - counterparty: the organisation or person who is not the owner of this collection: the
   vendor, merchant, airline, landlord, clinic, insurer, or employer. On a document the
   owner received that is the sender or issuer. On one the owner wrote it is the
@@ -99,12 +97,6 @@ export function normalizeFieldRow(row: {
     currency: null,
     confidence,
   };
-
-  if (key === "documentType") {
-    const lowered = trimmed.toLowerCase();
-    if (!(DOCUMENT_TYPES as readonly string[]).includes(lowered)) return null;
-    return { ...base, value: lowered };
-  }
 
   if (key === "status") {
     const lowered = trimmed.toLowerCase();

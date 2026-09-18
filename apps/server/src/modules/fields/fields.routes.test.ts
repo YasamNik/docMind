@@ -28,15 +28,15 @@ describe("fields routes", () => {
     await createFieldsRepository({ db: t.db }).replaceForDocument({
       userId,
       documentId,
-      fields: [{ key: "documentType", value: "invoice", valueNumber: null, valueDate: null, currency: null, confidence: 0.9 }],
+      fields: [{ key: "counterparty", value: "Acme", valueNumber: null, valueDate: null, currency: null, confidence: 0.9 }],
     });
 
     const res = await t.app.request(`/api/documents/${documentId}/fields`, { headers: { cookie } });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { fields: { key: string; value: string }[] };
     expect(body.fields).toHaveLength(1);
-    expect(body.fields[0]!.key).toBe("documentType");
-    expect(body.fields[0]!.value).toBe("invoice");
+    expect(body.fields[0]!.key).toBe("counterparty");
+    expect(body.fields[0]!.value).toBe("Acme");
   });
 
   it("refuses to return another user's fields", async () => {
@@ -62,13 +62,13 @@ describe("fields routes", () => {
     await createFieldsRepository({ db: t.db }).replaceForDocument({
       userId,
       documentId,
-      fields: [{ key: "documentType", value: "invoice", valueNumber: null, valueDate: null, currency: null, confidence: null }],
+      fields: [{ key: "counterparty", value: "Acme", valueNumber: null, valueDate: null, currency: null, confidence: null }],
     });
 
-    const res = await t.app.request("/api/fields/values?key=documentType", { headers: { cookie } });
+    const res = await t.app.request("/api/fields/values?key=counterparty", { headers: { cookie } });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { values: string[] };
-    expect(body.values).toEqual(["invoice"]);
+    expect(body.values).toEqual(["Acme"]);
   });
 
   it("rejects an unknown key on the values endpoint", async () => {

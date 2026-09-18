@@ -45,7 +45,7 @@ async function setupBackfillTest() {
   await createFieldsRepository({ db: t.db }).replaceForDocument({
     userId,
     documentId: withFieldsId,
-    fields: [{ key: "documentType", value: "invoice", valueNumber: null, valueDate: null, currency: null, confidence: null }],
+    fields: [{ key: "counterparty", value: "Acme", valueNumber: null, valueDate: null, currency: null, confidence: null }],
   });
 
   const { document: pendingDoc } = await t.services.documentsService.upload({
@@ -134,7 +134,7 @@ describe("summary service, summarize job", () => {
       suggestedTitle: "Acme invoice",
       documentDate: "2026-01-05",
       fields: [
-        { key: "documentType", value: "invoice", confidence: 0.95 },
+        { key: "counterparty", value: "Acme", confidence: 0.95 },
         { key: "amountTotal", value: "120.50", currency: "USD", confidence: 0.9 },
       ],
     };
@@ -143,7 +143,7 @@ describe("summary service, summarize job", () => {
     expect(await runner.runOnce()).toBe(1);
 
     const rows = await createFieldsRepository({ db: t.db }).listByDocument({ userId, documentId });
-    expect(rows.map((r) => r.key).sort()).toEqual(["amountTotal", "documentType"]);
+    expect(rows.map((r) => r.key).sort()).toEqual(["amountTotal", "counterparty"]);
     expect(rows.find((r) => r.key === "amountTotal")?.valueNumber).toBe(120.5);
     expect(rows.find((r) => r.key === "amountTotal")?.currency).toBe("USD");
   });
@@ -155,7 +155,7 @@ describe("summary service, summarize job", () => {
       suggestedTitle: "Bill",
       documentDate: null,
       fields: [
-        { key: "documentType", value: "not-a-real-type" },
+        { key: "amountTotal", value: "not a number" },
         { key: "counterparty", value: "Acme Ltd" },
       ],
     };
