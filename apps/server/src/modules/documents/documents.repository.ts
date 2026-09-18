@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm"
 import type { Database } from "../database/database.js";
 import { buildCategoryPaths, collectDescendantIds } from "../tags/tags.models.js";
 import { sortEvaluationsTable } from "../rules/rules.tables.js";
-import { categoriesTable, documentTagsTable, tagsTable } from "../tags/tags.tables.js";
+import { categoriesTable, documentTagsTable, documentTypesTable, tagsTable } from "../tags/tags.tables.js";
 import type { TagChip } from "../tags/tags.types.js";
 // Queried directly rather than through createFieldsRepository, the same way tags are
 // queried directly through their tables here rather than through the tags service.
@@ -45,6 +45,15 @@ export function createDocumentsRepository({ db }: { db: Database }) {
   async function loadCategoryPathMap(userId: string) {
     const categories = await db.select().from(categoriesTable).where(eq(categoriesTable.userId, userId));
     return buildCategoryPaths(categories);
+  }
+
+  // Types have no hierarchy, so this is a plain id to name map rather than a path builder.
+  async function loadDocumentTypeNameMap(userId: string): Promise<Map<string, string>> {
+    const types = await db
+      .select({ id: documentTypesTable.id, name: documentTypesTable.name })
+      .from(documentTypesTable)
+      .where(eq(documentTypesTable.userId, userId));
+    return new Map(types.map((t) => [t.id, t.name]));
   }
 
   // Shared by listByUser and countByUser so the inbox and needs_review definitions
@@ -113,11 +122,13 @@ export function createDocumentsRepository({ db }: { db: Database }) {
     async listByUser({
       userId,
       categoryId,
+      documentTypeId,
       tagId,
       view = "all",
     }: {
       userId: string;
       categoryId?: string;
+      documentTypeId?: string;
       tagId?: string;
       view?: DocumentView;
     }): Promise<DocumentListRow[]> {
@@ -128,6 +139,9 @@ export function createDocumentsRepository({ db }: { db: Database }) {
       if (categoryId) {
         const ids = [categoryId, ...collectDescendantIds(categories, categoryId)];
         conditions.push(inArray(documentsTable.categoryId, ids));
+      }
+      if (documentTypeId) {
+        conditions.push(eq(documentsTable.documentTypeId, documentTypeId));
       }
       if (tagId) {
         const linked = await db.select({ documentId: documentTagsTable.documentId }).from(documentTagsTable).where(eq(documentTagsTable.tagId, tagId));
@@ -142,11 +156,13 @@ export function createDocumentsRepository({ db }: { db: Database }) {
         .orderBy(desc(documentsTable.createdAt), desc(documentsTable.id));
 
       const pathMap = buildCategoryPaths(categories);
+      const typeNameMap = await loadDocumentTypeNameMap(userId);
       const documentIds = rows.map((r) => r.id);
       const [tagsMap, fieldsMap] = await Promise.all([loadTagsByDocument(documentIds), loadFieldsByDocument(documentIds)]);
       return rows.map((row) => ({
         ...row,
         categoryPath: row.categoryId ? (pathMap.get(row.categoryId) ?? null) : null,
+        documentTypeName: row.documentTypeId ? (typeNameMap.get(row.documentTypeId) ?? null) : null,
         tags: tagsMap.get(row.id) ?? [],
         fields: fieldsMap.get(row.id) ?? [],
       }));
@@ -175,20 +191,22 @@ export function createDocumentsRepository({ db }: { db: Database }) {
     }: {
       userId: string;
       documentId: string;
-    }): Promise<(Document & { categoryPath: string | null; tags: TagChip[]; fields: ExtractedField[] }) | null> {
+    }): Promise<(Document & { categoryPath: string | null; documentTypeName: string | null; tags: TagChip[]; fields: ExtractedField[] }) | null> {
       const [row] = await db
         .select()
         .from(documentsTable)
         .where(and(eq(documentsTable.userId, userId), eq(documentsTable.id, documentId)));
       if (!row) return null;
-      const [pathMap, tagsMap, fieldsMap] = await Promise.all([
+      const [pathMap, typeNameMap, tagsMap, fieldsMap] = await Promise.all([
         loadCategoryPathMap(userId),
+        loadDocumentTypeNameMap(userId),
         loadTagsByDocument([row.id]),
         loadFieldsByDocument([row.id]),
       ]);
       return {
         ...row,
         categoryPath: row.categoryId ? (pathMap.get(row.categoryId) ?? null) : null,
+        documentTypeName: row.documentTypeId ? (typeNameMap.get(row.documentTypeId) ?? null) : null,
         tags: tagsMap.get(row.id) ?? [],
         fields: fieldsMap.get(row.id) ?? [],
       };
