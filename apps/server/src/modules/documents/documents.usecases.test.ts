@@ -2,6 +2,7 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestDatabase } from "../../shared/test/database.test-utils.js";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
@@ -150,6 +151,23 @@ describe("documents service filters and enrichment", () => {
 
     expect(await documents.counts({ userId })).toEqual({ inbox: 1, needsReview: 1, trash: 0 });
     expect(await documents.counts({ userId: "someone-else" })).toEqual({ inbox: 0, needsReview: 0, trash: 0 });
+  });
+
+  it("lists only the documents held on the active storage", async () => {
+    const { document: elsewhere } = await documents.upload({ userId, name: "elsewhere.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    const { document: here } = await documents.upload({ userId, name: "here.txt", mimeType: "text/plain", body: Readable.from(["b"]) });
+    await db.run(sql`update documents set storage_driver = 's3' where id = ${elsewhere.id}`);
+
+    const listed = await documents.list({ userId });
+
+    expect(listed.map((d) => d.id)).toEqual([here.id]);
+  });
+
+  it("counts only the documents held on the active storage", async () => {
+    const { document } = await documents.upload({ userId, name: "gone.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    await db.run(sql`update documents set storage_driver = 's3', triage_status = 'pending' where id = ${document.id}`);
+
+    expect((await documents.counts({ userId })).inbox).toBe(0);
   });
 
   it("filters by categoryId including descendants, and by tagId", async () => {

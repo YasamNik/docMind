@@ -113,11 +113,13 @@ export function createDocumentsRepository({ db }: { db: Database }) {
       categoryId,
       tagId,
       view = "all",
+      storageDriver,
     }: {
       userId: string;
       categoryId?: string;
       tagId?: string;
       view?: DocumentView;
+      storageDriver?: string;
     }): Promise<DocumentListRow[]> {
       const conditions = await buildViewConditions(userId, view);
       // Fetched once and reused for both the categoryId filter (descendant ids) and the
@@ -132,6 +134,11 @@ export function createDocumentsRepository({ db }: { db: Database }) {
         const ids = linked.map((r) => r.documentId);
         conditions.push(inArray(documentsTable.id, ids.length > 0 ? ids : ["__none__"]));
       }
+      // Applied here rather than inside buildViewConditions: that helper is shared with
+      // the rule rerun (rules.usecases.ts), the summary backfill (summary.usecases.ts)
+      // and reembedAll (search.usecases.ts), and those must keep seeing every document
+      // whatever storage holds it.
+      if (storageDriver) conditions.push(eq(documentsTable.storageDriver, storageDriver));
 
       const rows = await db
         .select(listColumns)
@@ -150,8 +157,11 @@ export function createDocumentsRepository({ db }: { db: Database }) {
       }));
     },
 
-    async countByUser({ userId, view }: { userId: string; view: DocumentView }): Promise<number> {
+    async countByUser({ userId, view, storageDriver }: { userId: string; view: DocumentView; storageDriver?: string }): Promise<number> {
       const conditions = await buildViewConditions(userId, view);
+      // See listByUser: the jobs that share buildViewConditions must keep counting or
+      // listing every document, whatever storage holds it.
+      if (storageDriver) conditions.push(eq(documentsTable.storageDriver, storageDriver));
       const [row] = await db
         .select({ count: sql<number>`count(*)` })
         .from(documentsTable)

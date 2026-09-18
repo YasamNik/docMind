@@ -157,6 +157,14 @@ describe("search service, reembedAll", () => {
     expect(embeddingJobs.map((j) => JSON.parse(j.payload).documentId)).toEqual([done]);
     expect(embeddingJobs.map((j) => JSON.parse(j.payload).documentId)).not.toContain(pendingDoc.id);
   });
+
+  it("re-embeds documents whatever storage holds them", async () => {
+    const { t, userId } = await setupWithEmbedding();
+    const documentId = await uploadWithText(t, userId, "elsewhere.txt", "Fresh apple pie recipe.");
+    await t.db.run(sql`update documents set storage_driver = 's3' where id = ${documentId}`);
+
+    expect((await t.services.searchService.reembedAll({ userId })).count).toBe(1);
+  });
 });
 
 // Distances chosen to match what a real embedding model produces on a small corpus: the

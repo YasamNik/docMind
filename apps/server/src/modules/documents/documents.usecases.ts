@@ -112,7 +112,7 @@ export function createDocumentsService({
       return { document: await getEnrichedOrThrow(userId, documentId) };
     },
 
-    list({
+    async list({
       userId,
       categoryId,
       tagId,
@@ -123,7 +123,11 @@ export function createDocumentsService({
       tagId?: string;
       view?: DocumentView;
     }): Promise<DocumentListRow[]> {
-      return repository.listByUser({ userId, categoryId, tagId, view });
+      // The library is scoped to the storage the user is looking at. Background jobs
+      // call the repository directly with no storageDriver, so they keep seeing
+      // everything regardless of which storage is active.
+      const storageDriver = await storageService.getActiveDriverId(userId);
+      return repository.listByUser({ userId, categoryId, tagId, view, storageDriver });
     },
 
     get({ userId, documentId }: { userId: string; documentId: string }) {
@@ -131,10 +135,13 @@ export function createDocumentsService({
     },
 
     async counts({ userId }: { userId: string }): Promise<{ inbox: number; needsReview: number; trash: number }> {
+      // The sidebar badges are counts of the library the user is looking at, so they
+      // follow the same active-storage scope as list().
+      const storageDriver = await storageService.getActiveDriverId(userId);
       const [inbox, needsReview, trash] = await Promise.all([
-        repository.countByUser({ userId, view: "inbox" }),
-        repository.countByUser({ userId, view: "needs_review" }),
-        repository.countByUser({ userId, view: "trash" }),
+        repository.countByUser({ userId, view: "inbox", storageDriver }),
+        repository.countByUser({ userId, view: "needs_review", storageDriver }),
+        repository.countByUser({ userId, view: "trash", storageDriver }),
       ]);
       return { inbox, needsReview, trash };
     },
