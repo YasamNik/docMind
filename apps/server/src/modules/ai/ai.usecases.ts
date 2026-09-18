@@ -298,6 +298,21 @@ export function createAiService({
       logger.info({ providerId, latencyMs: Date.now() - start }, "connection test complete");
       return result;
     },
+
+    async testSlot(userId: string, slot: string): Promise<TestResult> {
+      try {
+        const { providerId, model } = await resolveSlot(userId, slot as ModelSlot);
+        const { provider, apiKey, baseUrl } = await getCredentials(userId, providerId);
+        const adapter = buildAdapter(provider, apiKey, baseUrl);
+        const start = Date.now();
+        const result = await adapter.testConnection();
+        logger.info({ slot, providerId, model, latencyMs: Date.now() - start }, "slot test complete");
+        return { ...result, message: result.ok ? `${model}: ${result.latencyMs}ms` : result.message };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, latencyMs: 0, message };
+      }
+    },
   };
 }
 

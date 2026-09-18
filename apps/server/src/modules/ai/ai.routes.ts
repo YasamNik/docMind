@@ -94,4 +94,11 @@ export function registerAiRoutes({
     const result = await aiService.listModels(userId, id);
     return c.json(result);
   });
+
+  app.post("/api/ai/slots/:slot/test", async (c) => {
+    const slot = c.req.param("slot");
+    const userId = getUserId(c);
+    const result = await aiService.testSlot(userId, slot);
+    return c.json(result);
+  });
 }

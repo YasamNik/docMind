@@ -40,4 +40,7 @@ export const aiApi = {
   async models(id: string) {
     return api.get<{ models: ModelInfo[]; error?: string }>(`/api/ai/providers/${id}/models`);
   },
+  async testSlot(slot: string) {
+    return api.json<TestResult>("POST", `/api/ai/slots/${slot}/test`, {});
+  },
 };

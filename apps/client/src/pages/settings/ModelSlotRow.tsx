@@ -63,6 +63,15 @@ export function ModelSlotRow({
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const testSlot = useMutation({
+    mutationFn: () => aiApi.testSlot(slot),
+    onSuccess: (result) => {
+      if (result.ok) toast.success(result.message);
+      else toast.error(result.message);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const clear = useMutation({
     mutationFn: async () => {
       await settingsApi.update({ [`ai.model.${slot}`]: "" });
@@ -114,7 +123,12 @@ export function ModelSlotRow({
       <div className="flex gap-2">
         <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>Save</Button>
         {currentUri && (
-          <Button size="sm" variant="outline" onClick={() => clear.mutate()} disabled={clear.isPending}>Clear</Button>
+          <>
+            <Button size="sm" variant="secondary" onClick={() => testSlot.mutate()} disabled={testSlot.isPending}>
+              {testSlot.isPending ? "Testing..." : "Test"}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => clear.mutate()} disabled={clear.isPending}>Clear</Button>
+          </>
         )}
       </div>
     </div>
