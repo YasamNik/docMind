@@ -49,5 +49,13 @@ export function runDriverContractTests(name: string, makeDriver: () => Promise<S
       expect(size).toBe(8 * 1024 * 1024);
       await driver.delete({ key });
     });
+
+    it("describes a stored key without touching the network", async () => {
+      const driver = await makeDriver();
+      await driver.put({ key: "a/b/c.txt", body: Readable.from(["hello"]) });
+      const location = driver.describeLocation({ key: "a/b/c.txt" });
+      expect(location.label.length).toBeGreaterThan(0);
+      expect(location.label).toContain("c.txt");
+    });
   });
 }

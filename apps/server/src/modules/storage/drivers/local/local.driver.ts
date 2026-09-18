@@ -63,6 +63,9 @@ export function createLocalDriver({ root }: { root: string }): StorageDriver {
         return { ok: false, message: `Cannot write to ${resolve(root)}: ${(error as Error).message}` };
       }
     },
+    describeLocation({ key }) {
+      return { label: resolveInsideRoot(root, key) };
+    },
   };
 }
 

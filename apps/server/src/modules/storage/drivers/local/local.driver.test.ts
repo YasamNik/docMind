@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { expectAppError } from "../../../../shared/test/errors.test-utils.js";
@@ -29,5 +29,12 @@ describe("local driver safety", () => {
   it("rejects absolute keys", async () => {
     const driver = await makeDriver();
     await expectAppError(() => driver.exists({ key: "/etc/passwd" }), "storage.invalid_key");
+  });
+
+  it("describes where a key lives as an absolute path", () => {
+    const driver = createLocalDriver({ root: "./documents" });
+    const location = driver.describeLocation({ key: "user_1/2026/09/doc_1/scan.pdf" });
+    expect(location.label).toBe(resolve("./documents", "user_1/2026/09/doc_1/scan.pdf"));
+    expect(location.url).toBeUndefined();
   });
 });
