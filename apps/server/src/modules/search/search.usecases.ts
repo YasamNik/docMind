@@ -241,6 +241,7 @@ export function createSearchService({
         chunkIndex: chosen.chunkIndex,
         score: entry.score,
         source: entry.source,
+        storageDriver: document.storageDriver,
       });
     });
 
@@ -255,6 +256,7 @@ export function createSearchService({
         chunkIndex: 0,
         score: 0.8,
         source: "keyword",
+        storageDriver: doc.storageDriver,
       });
     }
 

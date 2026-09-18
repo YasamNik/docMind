@@ -10,6 +10,7 @@ export type SearchResult = {
   chunkIndex: number;
   score: number;
   source: "vector" | "keyword" | "hybrid";
+  storageDriver: string;
 };
 
 export type EmbeddingJobPayload = {

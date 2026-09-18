@@ -136,6 +136,7 @@ export function createChatService({
         documentName: r.documentName,
         chunkText: r.chunkText,
         chunkIndex: r.chunkIndex,
+        storageDriver: r.storageDriver,
       }));
 
       const priorMessages = await repository.listMessages(sessionId);

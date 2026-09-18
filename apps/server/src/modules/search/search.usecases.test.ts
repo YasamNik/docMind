@@ -122,12 +122,23 @@ describe("search service, hybrid search", () => {
     await repository.insertChunks([{ documentId: document.id, chunkIndex: 0, chunkText: "Banana bread recipe.", tokenCount: 4, startChar: 0, endChar: 21 }]);
 
     const results = await t.services.searchService.search({ userId, query: "banana" });
-    expect(results).toEqual([{ documentId: document.id, documentName: "banana.txt", chunkText: "Banana bread recipe.", chunkIndex: 0, score: expect.any(Number), source: "keyword" }]);
+    expect(results).toEqual([{ documentId: document.id, documentName: "banana.txt", chunkText: "Banana bread recipe.", chunkIndex: 0, score: expect.any(Number), source: "keyword", storageDriver: "local" }]);
   });
 
   it("returns an empty list for a blank query", async () => {
     const { t, userId } = await setupWithEmbedding();
     expect(await t.services.searchService.search({ userId, query: "   " })).toEqual([]);
+  });
+
+  it("says which storage holds each result, whatever the active storage is", async () => {
+    const { t, userId, runner } = await setupWithEmbedding();
+    const documentId = await uploadWithText(t, userId, "apple.txt", "Fresh apple pie recipe.");
+    await t.db.run(sql`update documents set storage_driver = 's3' where id = ${documentId}`);
+    await enqueueAndRun(t, runner, userId, documentId);
+
+    const results = await t.services.searchService.search({ userId, query: "apple" });
+
+    expect(results[0]?.storageDriver).toBe("s3");
   });
 });
 
