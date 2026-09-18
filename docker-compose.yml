@@ -1,0 +1,19 @@
+services:
+  docmind:
+    build: .
+    ports:
+      - "${PORT:-4000}:4000"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=file:/app/data/docmind.sqlite
+      - DOCUMENT_STORAGE_ROOT=/app/data/documents
+      - DATA_DIR=/app/data
+      - SERVER_BASE_URL=${SERVER_BASE_URL:-http://localhost:4000}
+      - CLIENT_BASE_URL=${CLIENT_BASE_URL:-http://localhost:4000}
+    volumes:
+      - docmind-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  docmind-data:

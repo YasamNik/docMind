@@ -1,5 +1,10 @@
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
+import { serveStatic } from "@hono/node-server/serve-static";
 import type { Config } from "./modules/config/config.js";
 import type { Database } from "./modules/database/database.js";
 import { requireUser, sessionMiddleware } from "./modules/auth/auth.middleware.js";
@@ -172,6 +177,17 @@ export function createServer({
   registerSearchRoutes({ app, searchService, getUserId });
   registerSummaryRoutes({ app, summaryService, getUserId });
   registerChatRoutes({ app, chatService, getUserId });
+
+  const here = dirname(fileURLToPath(import.meta.url));
+  const clientDist = resolve(here, "../../client/dist");
+  if (existsSync(resolve(clientDist, "index.html"))) {
+    app.use("*", serveStatic({ root: resolve(here, "../../client/dist") }));
+    app.get("*", async (c) => {
+      if (c.req.path.startsWith("/api/")) return c.notFound();
+      const html = await readFile(resolve(clientDist, "index.html"), "utf-8");
+      return c.html(html);
+    });
+  }
 
   return {
     app,
