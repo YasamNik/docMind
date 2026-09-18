@@ -19,13 +19,14 @@ import type { NewDocument } from "./documents.types.js";
 let root: string;
 let documents: ReturnType<typeof createDocumentsService>;
 let storageService: ReturnType<typeof createStorageService>;
+let settingsService: ReturnType<typeof createSettingsService>;
 let db: Awaited<ReturnType<typeof createTestDatabase>>["db"];
 const userId = "user-1";
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "docmind-docs-"));
   ({ db } = await createTestDatabase());
-  const settingsService = createSettingsService({
+  settingsService = createSettingsService({
     db,
     registry: createSettingsRegistry(storageSettingDefinitions),
     config: { settingsEncryptionKey: "22".repeat(32), env: { DOCUMENT_STORAGE_ROOT: root } },
@@ -168,6 +169,24 @@ describe("documents service filters and enrichment", () => {
     await db.run(sql`update documents set storage_driver = 's3', triage_status = 'pending' where id = ${document.id}`);
 
     expect((await documents.counts({ userId })).inbox).toBe(0);
+  });
+
+  it("refuses to open a file held on another storage, and says where it is", async () => {
+    const { document } = await documents.upload({ userId, name: "elsewhere.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    // The s3 driver needs its settings filled to be built at all, even to describe
+    // where a file is offline. Values here are never sent anywhere.
+    await settingsService.set(userId, {
+      "storage.s3.bucket": "test-bucket",
+      "storage.s3.region": "us-east-1",
+      "storage.s3.accessKeyId": "test-key",
+      "storage.s3.secretAccessKey": "test-secret",
+    });
+    await db.run(sql`update documents set storage_driver = 's3' where id = ${document.id}`);
+
+    await expectAppError(() => documents.openFile({ userId, documentId: document.id }), "documents.storage_inactive");
+
+    // The metadata is knowledge and stays reachable.
+    expect((await documents.get({ userId, documentId: document.id })).id).toBe(document.id);
   });
 
   it("filters by categoryId including descendants, and by tagId", async () => {

@@ -36,6 +36,21 @@ export function createDocumentsService({
     return row;
   }
 
+  // The bytes need their storage, the metadata does not. A document on an inactive
+  // storage stays fully readable as a record and refuses only the file itself, with
+  // the original's location in the message so the user can go and get it.
+  async function requireActiveStorage(userId: string, document: Document) {
+    const active = await storageService.getActiveDriverId(userId);
+    if (document.storageDriver === active) return;
+    const driver = await storageService.getDriver(userId, document.storageDriver);
+    const location = driver.describeLocation({ key: document.storageKey });
+    throw createError({
+      code: "documents.storage_inactive",
+      message: `This file is stored on ${document.storageDriver}, which is not the active storage. The original is at ${location.label}.`,
+      status: 409,
+    });
+  }
+
   return {
     async upload({
       userId,
@@ -170,6 +185,7 @@ export function createDocumentsService({
     async purge({ userId, documentId }: { userId: string; documentId: string }) {
       const document = await repository.findById({ userId, documentId });
       if (!document) throw notFound(documentId);
+      await requireActiveStorage(userId, document);
       const driver = await storageService.getDriver(userId, document.storageDriver);
       await driver.delete({ key: document.storageKey });
       await repository.remove({ userId, documentId });
@@ -177,6 +193,7 @@ export function createDocumentsService({
 
     async openFile({ userId, documentId }: { userId: string; documentId: string }) {
       const document = await getOrThrow(userId, documentId);
+      await requireActiveStorage(userId, document);
       const driver = await storageService.getDriver(userId, document.storageDriver);
       const stream = await driver.get({ key: document.storageKey });
       return { document, stream };
