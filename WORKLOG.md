@@ -3,7 +3,90 @@
 Newest entry first. The `end-session` skill appends one entry per session. Each entry has
 four parts: Done, Decisions, Comments (the user's words, not a paraphrase), Open / Next.
 
-Active branch: `main`
+Active branch: `feat/design-pass`
+
+## 2026-09-17: C3 merged, design pass, Phase 2 built, vision fallback
+
+### Done
+- Milestone C3 (sorting engine) merged into `main` by fast-forward (10 commits,
+  sort_evaluations table, initial and rerun mode, proposals, dry run, Sorting page,
+  document review dialog, dry-run panel, tunnel fixes).
+- Organic design pass on `feat/design-pass` (9 tasks): theme tokens (Caprasimo + Figtree,
+  cream/terracotta/sage), UI primitives, sidebar, all pages, polish, two-level icon rail
+  nav with context panel.
+- Category/tag filters moved from sidebar to table column header dropdowns with active
+  filter badges.
+- Forgot/reset password (console-logged reset link, ForgotPasswordPage, ResetPasswordPage).
+- C2 follow-ups (9 items): asTxDb helper, counts endpoint, atomic reorder, parent picker
+  excludes descendants, extraction existence check, collectDescendantIds comment.
+- Sorting activity live panel (progress bar, status badges, batch tracking).
+- Connection pool fix: `concurrency: 1` on libsql client.
+- Phase 2 spec, review, and all implementation plans (D1, D2, D3).
+- D1 (embeddings and search): document_chunks table with FTS5 and triggers, migration
+  0006, internal settings flag, chunking models, search repository (FTS5 + vector),
+  embedding pipeline with batch embed, extraction wiring, search routes, client search
+  page with debounce and highlighting, Embed all documents button.
+- D3 (auto summary): summary module (types, schemas, prompt, usecases, routes),
+  extraction wiring, client summary display with accept-title badge.
+- D2 (chat with citations): chat tables and migration 0007, conversation models,
+  streamChat adapter on both OpenAI-compatible and Anthropic, chat repository and
+  usecases with RAG and SSE streaming, chat routes, client chat page with sessions,
+  streaming, and citation links.
+- Vision LLM OCR fallback (4 tasks): OCR confidence from Tesseract, vision model slot
+  with configurable threshold, recognizeImage adapter method, extraction pipeline wiring
+  with graceful degradation.
+- Date filters (Added and Doc Date columns) with Today/7d/30d/MTD/YTD/90d/custom range.
+  AI-extracted document date from the summary LLM call, migration 0008.
+- Per-slot Test button on model settings.
+- Sortable table columns, truncated cells with tooltips, friendly MIME labels.
+- Search tuning: FTS5 prefix matching, vector distance threshold, normalized RRF scores,
+  filename matching, keyword-only scoring with FTS5 rank.
+- Agent setup: architect (opus), debug-agent (opus), plan-reviewer (sonnet),
+  code-reviewer (sonnet), coder (sonnet), bug-fix-record (haiku).
+- Permissions added to `.claude/settings.json`: git merge/stash/checkout, db:generate,
+  kill, nohup.
+- Rules: tunnel management, schema change safety.
+- Test counts at session end: 382+ server tests, 142+ client tests.
+
+### Decisions
+- Categories and tags removed from sidebar, replaced by interactive column header filter
+  dropdowns on the documents table. The user said the sidebar would not scale.
+- Two-level navigation: thin icon rail on the far left, context panel changes by tab.
+  Replaces the single sidebar from the mockups.
+- Vision LLM fallback uses a 4th model slot ("vision"), not the rules slot, so cost can
+  be controlled independently.
+- Document date extracted by the same summary LLM call (no extra API call).
+- Search uses FTS5 rank directly for keyword-only mode (not RRF with one list).
+  Vector distance threshold 0.55, prefix matching on FTS5 tokens, filename matching
+  as a supplementary source.
+- better-auth trusted origins: wildcard `https://*.trycloudflare.com` and
+  `http://localhost:*` so both tunnel and localhost auth always work.
+- Agent models: opus for architect and debug, sonnet for coder/reviewer/plan-reviewer.
+
+### Comments
+- "i waould like to make it work on exisitng docs"
+- "I think we should not have categories and tags in the left panel, because there maybe quite a few, I thought we may have instead an interactive filters in the table itself"
+- "Id'like to have the top level tabs Vertical at the very left, and Left Panel with menu items depends on the tab selected"
+- "im wondering are you working on the design or not?"
+- "you have to be busy working utilizing agents, and you as a main llm should ask me what to do next if there is no any task running"
+- "I found there are categories and tags there. and I even created one for category and tag. now the question how to test that it work"
+- "I think it has to be linked with all the documentations and settings and should be assistant within the platform app, and in future it will have a gateway via telegram"
+- "i think when user set up model there should be a test button to test individually each model if it responsible"
+- "add filter for the date Added. we also need to add one more date field, the date extracted (if possible) from document or email itself"
+- "into predefined date filters add ytd and mtd"
+- "why you so crazy slow, why why why why?"
+- "add sorting for dates, categories, and tags"
+- "don't like that long text in table, should be truncated and show on hover, make all columns width adjustable as well"
+
+### Open / Next
+- Merge `feat/design-pass` into `main` (50 commits ahead).
+- D4 (inbox triage) not started.
+- Docker setup (item #11, last Must Have for Phase 1).
+- Search tuning: may need further threshold adjustments with more documents.
+- `.claude/settings.json` is modified (permissions update), needs committing or the
+  user can decide.
+- The design-pass branch also carries the C3 merge base; once merged to main,
+  `feat/milestone-c3` can be deleted.
 
 ## 2026-09-17: Milestone C2 built overnight
 
