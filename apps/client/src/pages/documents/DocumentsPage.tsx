@@ -200,6 +200,7 @@ export function DocumentsPage() {
   const docDateFilter = readDateFilter(searchParams, "docDate");
   const [sortKey, setSortKey] = useState<SortKey>("createdAt");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const filtered = rawDocuments
     .filter((d) => !isUncategorized || d.categoryId === null)
     .filter((d) => matchesDateFilter(d.createdAt, addedFilter))
@@ -217,6 +218,16 @@ export function DocumentsPage() {
 
   const { data: categories = [] } = useQuery({ queryKey: ["categories"], queryFn: categoriesApi.list });
   const { data: tags = [] } = useQuery({ queryKey: ["tags"], queryFn: tagsApi.list });
+
+  const selectedIds = [...selected];
+  const invalidateAndClear = () => { queryClient.invalidateQueries({ queryKey: ["documents"] }); setSelected(new Set()); };
+  const bulkDelete = useMutation({ mutationFn: () => documentsApi.bulkDelete(selectedIds), onSuccess: (r) => { invalidateAndClear(); toast.success(`Moved ${r.count} to trash`); }, onError: (e: Error) => toast.error(e.message) });
+  const bulkTag = useMutation({ mutationFn: ({ tagId, action }: { tagId: string; action: "add" | "remove" }) => documentsApi.bulkTag(selectedIds, tagId, action), onSuccess: () => { invalidateAndClear(); toast.success("Tags updated"); }, onError: (e: Error) => toast.error(e.message) });
+  const bulkCategory = useMutation({ mutationFn: (categoryId: string | null) => documentsApi.bulkCategory(selectedIds, categoryId), onSuccess: () => { invalidateAndClear(); toast.success("Category updated"); }, onError: (e: Error) => toast.error(e.message) });
+  const bulkSort = useMutation({ mutationFn: () => documentsApi.bulkSort(selectedIds), onSuccess: () => { invalidateAndClear(); toast.success("Sorting queued"); }, onError: (e: Error) => toast.error(e.message) });
+
+  function toggleSelect(id: string) { setSelected((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
+  function toggleAll() { if (selected.size === documents.length) setSelected(new Set()); else setSelected(new Set(documents.map((d) => d.id))); }
 
   function setFilterParam(key: "categoryId" | "tagId", value: string) {
     const next = new URLSearchParams(searchParams);
@@ -255,6 +266,31 @@ export function DocumentsPage() {
         )}
       </div>
       <UploadDropzone onUploaded={() => queryClient.invalidateQueries({ queryKey: ["documents"] })} />
+      {selected.size > 0 && filters.view !== "trash" && (
+        <div className="flex items-center gap-2 rounded-full bg-primary/10 px-4 py-2 text-sm">
+          <span className="font-medium">{selected.size} selected</span>
+          <select
+            className="rounded-full border border-input bg-secondary px-2 py-1 text-xs"
+            defaultValue=""
+            onChange={(e) => { if (e.target.value) bulkTag.mutate({ tagId: e.target.value, action: "add" }); e.target.value = ""; }}
+          >
+            <option value="" disabled>Add tag...</option>
+            {tags.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+          <select
+            className="rounded-full border border-input bg-secondary px-2 py-1 text-xs"
+            defaultValue=""
+            onChange={(e) => { bulkCategory.mutate(e.target.value || null); e.target.value = ""; }}
+          >
+            <option value="" disabled>Set category...</option>
+            <option value="">No category</option>
+            {categories.map((c) => <option key={c.id} value={c.id}>{c.path}</option>)}
+          </select>
+          <Button size="sm" variant="outline" onClick={() => bulkSort.mutate()} disabled={bulkSort.isPending}>Re-evaluate</Button>
+          <Button size="sm" variant="destructive" onClick={() => bulkDelete.mutate()} disabled={bulkDelete.isPending}>Delete</Button>
+          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>
+        </div>
+      )}
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading</p>
       ) : documents.length === 0 ? (
@@ -263,6 +299,9 @@ export function DocumentsPage() {
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-8">
+                <input type="checkbox" checked={documents.length > 0 && selected.size === documents.length} onChange={toggleAll} />
+              </TableHead>
               <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("name")}>Name{sortIndicator("name")}</TableHead>
               <TableHead>
                 <div className="flex flex-wrap items-center gap-1.5 normal-case tracking-normal">
@@ -338,6 +377,9 @@ export function DocumentsPage() {
           <TableBody>
             {documents.map((d) => (
               <TableRow key={d.id}>
+                <TableCell className="w-8">
+                  <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleSelect(d.id)} />
+                </TableCell>
                 <TableCell className="max-w-[260px]">
                   <Link to={`/documents/${d.id}`} className="block truncate underline-offset-2 hover:underline" title={d.name}>
                     {d.name}

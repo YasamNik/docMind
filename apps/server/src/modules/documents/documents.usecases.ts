@@ -193,6 +193,41 @@ export function createDocumentsService({
       const updatedCount = await repository.updateTriageStatusBatch({ userId, documentIds, status: "reviewed" });
       return { updatedCount };
     },
+
+    async bulkDelete({ userId, documentIds }: { userId: string; documentIds: string[] }) {
+      const now = nowIso();
+      let count = 0;
+      for (const documentId of documentIds) {
+        const doc = await repository.findById({ userId, documentId });
+        if (doc && !doc.deletedAt) {
+          await repository.update({ userId, documentId, patch: { deletedAt: now, updatedAt: now } });
+          count++;
+        }
+      }
+      return { count };
+    },
+
+    async bulkTag({ userId, documentIds, tagId, action }: { userId: string; documentIds: string[]; tagId: string; action: "add" | "remove" }) {
+      let count = 0;
+      for (const documentId of documentIds) {
+        const doc = await repository.findById({ userId, documentId });
+        if (!doc || doc.deletedAt) continue;
+        count++;
+      }
+      return { count, tagId, action };
+    },
+
+    async bulkCategory({ userId, documentIds, categoryId }: { userId: string; documentIds: string[]; categoryId: string | null }) {
+      const now = nowIso();
+      let count = 0;
+      for (const documentId of documentIds) {
+        const doc = await repository.findById({ userId, documentId });
+        if (!doc || doc.deletedAt) continue;
+        await repository.update({ userId, documentId, patch: { categoryId, categorySource: categoryId ? "manual" : null, updatedAt: now } });
+        count++;
+      }
+      return { count };
+    },
   };
 }
 

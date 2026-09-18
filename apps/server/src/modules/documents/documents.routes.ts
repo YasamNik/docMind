@@ -4,18 +4,24 @@ import type { Context, Hono } from "hono";
 import { stream } from "hono/streaming";
 import { createError } from "../../shared/errors/errors.js";
 import { parseJsonBody, parseOrValidationError } from "../../shared/http/validate.js";
-import { documentIdSchema, listDocumentsQuerySchema, renameBodySchema, triageActionSchema, triageBatchSchema, uploadQuerySchema } from "./documents.schemas.js";
+import { bulkCategorySchema, bulkDeleteSchema, bulkSortSchema, bulkTagSchema, documentIdSchema, listDocumentsQuerySchema, renameBodySchema, triageActionSchema, triageBatchSchema, uploadQuerySchema } from "./documents.schemas.js";
 import type { DocumentsService } from "./documents.usecases.js";
+import type { TagsService } from "../tags/tags.usecases.js";
+import type { RulesService } from "../rules/rules.usecases.js";
 
 export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
 export function registerDocumentsRoutes({
   app,
   documentsService,
+  tagsService,
+  rulesService,
   getUserId,
 }: {
   app: Hono;
   documentsService: DocumentsService;
+  tagsService?: TagsService;
+  rulesService?: RulesService;
   getUserId: (c: Context) => string;
 }) {
   app.post("/api/documents", async (c) => {
@@ -97,5 +103,43 @@ export function registerDocumentsRoutes({
     const { documentIds } = await parseJsonBody(c, triageBatchSchema);
     const result = await documentsService.acceptTriageBatch({ userId: getUserId(c), documentIds });
     return c.json(result);
+  });
+
+  app.post("/api/documents/bulk/delete", async (c) => {
+    const { documentIds } = await parseJsonBody(c, bulkDeleteSchema);
+    const result = await documentsService.bulkDelete({ userId: getUserId(c), documentIds });
+    return c.json(result);
+  });
+
+  app.post("/api/documents/bulk/tag", async (c) => {
+    if (!tagsService) return c.json({ error: "Tags service not available" }, 500);
+    const { documentIds, tagId, action } = await parseJsonBody(c, bulkTagSchema);
+    const userId = getUserId(c);
+    let count = 0;
+    for (const documentId of documentIds) {
+      if (action === "add") await tagsService.setDocumentTag({ userId, documentId, tagId });
+      else await tagsService.clearDocumentTag({ userId, documentId, tagId });
+      count++;
+    }
+    return c.json({ count });
+  });
+
+  app.post("/api/documents/bulk/category", async (c) => {
+    if (!tagsService) return c.json({ error: "Tags service not available" }, 500);
+    const { documentIds, categoryId } = await parseJsonBody(c, bulkCategorySchema);
+    const result = await documentsService.bulkCategory({ userId: getUserId(c), documentIds, categoryId });
+    return c.json(result);
+  });
+
+  app.post("/api/documents/bulk/sort", async (c) => {
+    if (!rulesService) return c.json({ error: "Rules service not available" }, 500);
+    const { documentIds } = await parseJsonBody(c, bulkSortSchema);
+    const userId = getUserId(c);
+    const jobIds: string[] = [];
+    for (const documentId of documentIds) {
+      const job = await rulesService.requestSort({ userId, documentId });
+      jobIds.push(job.id);
+    }
+    return c.json({ count: documentIds.length, jobIds });
   });
 }

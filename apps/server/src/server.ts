@@ -168,7 +168,7 @@ export function createServer({
   const getUserId = (c: Context) => requireUser(c).id;
 
   registerSettingsRoutes({ app, settingsService, getUserId });
-  registerDocumentsRoutes({ app, documentsService, getUserId });
+  registerDocumentsRoutes({ app, documentsService, tagsService, rulesService, getUserId });
   registerExtractionRoutes({ app, extractionService, getUserId });
   registerJobsRoutes({ app, jobsService, getUserId });
   registerAiRoutes({ app, aiService, settingsService, getUserId });

@@ -71,6 +71,18 @@ export const documentsApi = {
   fileUrl(id: string, download = false) {
     return `/api/documents/${id}/file${download ? "?download=1" : ""}`;
   },
+  async bulkDelete(documentIds: string[]) {
+    return api.json<{ count: number }>("POST", "/api/documents/bulk/delete", { documentIds });
+  },
+  async bulkTag(documentIds: string[], tagId: string, action: "add" | "remove") {
+    return api.json<{ count: number }>("POST", "/api/documents/bulk/tag", { documentIds, tagId, action });
+  },
+  async bulkCategory(documentIds: string[], categoryId: string | null) {
+    return api.json<{ count: number }>("POST", "/api/documents/bulk/category", { documentIds, categoryId });
+  },
+  async bulkSort(documentIds: string[]) {
+    return api.json<{ count: number; jobIds: string[] }>("POST", "/api/documents/bulk/sort", { documentIds });
+  },
   async restore(id: string) {
     return (await api.json<{ document: DocumentDetail }>("POST", `/api/documents/${id}/restore`, {})).document;
   },
