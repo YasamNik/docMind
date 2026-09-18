@@ -78,7 +78,7 @@ Two new columns on `documents`, mirroring the existing category pair:
 | Column | Type | Notes |
 |--------|------|-------|
 | `document_type_id` | text, nullable | the chosen type |
-| `document_type_source` | text, nullable | `rule` or `manual`, as `category_source` is |
+| `document_type_source` | text, nullable | `auto` or `manual`, the same two values `category_source` takes |
 
 No foreign key, matching how `category_id` is declared today. Deleting a type therefore
 clears it from its documents in the same transaction, exactly as `deleteCategory`
@@ -158,7 +158,7 @@ The same guarded step then performs the data migration:
 1. Seed the presets.
 2. Read every `document_fields` row with `key = 'documentType'`.
 3. Map its value to the seeded type and write `documents.document_type_id` with
-   `document_type_source = 'rule'`.
+   `document_type_source = 'auto'`.
 4. Delete those `document_fields` rows.
 
 Mapping from the retired enum: `utility` maps to Bill, `other` maps to no type, every
