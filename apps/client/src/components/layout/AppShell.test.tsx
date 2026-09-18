@@ -37,16 +37,16 @@ function renderShell() {
 }
 
 describe("AppShell", () => {
-  it("shows Inbox and Needs review counts, the category tree, and the tag list", async () => {
+  it("shows Inbox and Needs review counts and Manage links, without category or tag lists", async () => {
     renderShell();
     expect(await screen.findByText("Inbox")).toBeInTheDocument();
     expect(screen.getByText("Needs review")).toBeInTheDocument();
-    expect(await screen.findByText("Finance")).toBeInTheDocument();
-    expect(await screen.findByText("Rent")).toBeInTheDocument();
-    expect(screen.getByText("3")).toBeInTheDocument();
     expect(screen.getByText("Inbox").closest("a")).toHaveAttribute("href", "/documents?view=inbox");
     expect(screen.getByText("Needs review").closest("a")).toHaveAttribute("href", "/documents?view=needs_review");
-    expect(screen.getByText("Rent").closest("a")).toHaveAttribute("href", "/documents?tagId=tag_1");
+    expect(screen.getByText("Manage categories").closest("a")).toHaveAttribute("href", "/categories");
+    expect(screen.getByText("Manage tags").closest("a")).toHaveAttribute("href", "/tags");
     expect(screen.getByText("Sorting").closest("a")).toHaveAttribute("href", "/sorting");
+    expect(screen.queryByText("Finance")).not.toBeInTheDocument();
+    expect(screen.queryByText("Rent")).not.toBeInTheDocument();
   });
 });
