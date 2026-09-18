@@ -39,6 +39,7 @@ import { allSettingDefinitions } from "./modules/settings/settings.definitions.j
 import { createSettingsRegistry } from "./modules/settings/settings.registry.js";
 import { registerSettingsRoutes } from "./modules/settings/settings.routes.js";
 import { createSettingsService } from "./modules/settings/settings.usecases.js";
+import { registerStorageRoutes } from "./modules/storage/storage.routes.js";
 import { createStorageService } from "./modules/storage/storage.usecases.js";
 import { registerRulesRoutes } from "./modules/rules/rules.routes.js";
 import { createRulesService } from "./modules/rules/rules.usecases.js";
@@ -143,7 +144,7 @@ export function createServer({
       },
     },
   });
-  const storageService = createStorageService({ settingsService });
+  const storageService = createStorageService({ settingsService, db });
   const registry = createExtractorRegistry([textExtractor, pdfExtractor, docxExtractor, xlsxExtractor, pptxExtractor, createImageExtractor(ocrEngine)]);
   const jobsService = createJobsService({ db });
   const documentsService = createDocumentsService({
@@ -183,6 +184,7 @@ export function createServer({
   registerSummaryRoutes({ app, summaryService, getUserId });
   registerFieldsRoutes({ app, fieldsRepository, summaryService, getUserId });
   registerChatRoutes({ app, chatService, getUserId });
+  registerStorageRoutes({ app, storageService, getUserId });
 
   const exportService = createExportService({ db, storageService });
   registerExportRoutes({ app, exportService, getUserId });

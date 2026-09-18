@@ -31,7 +31,7 @@ beforeEach(async () => {
     registry: createSettingsRegistry(storageSettingDefinitions),
     config: { settingsEncryptionKey: "22".repeat(32), env: { DOCUMENT_STORAGE_ROOT: root } },
   });
-  storageService = createStorageService({ settingsService });
+  storageService = createStorageService({ settingsService, db });
   documents = createDocumentsService({ db, storageService });
 });
 afterEach(() => rm(root, { recursive: true, force: true }));
