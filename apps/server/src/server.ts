@@ -48,6 +48,8 @@ import { registerSummaryRoutes } from "./modules/summary/summary.routes.js";
 import { createSummaryService } from "./modules/summary/summary.usecases.js";
 import { registerTagsRoutes } from "./modules/tags/tags.routes.js";
 import { createTagsService } from "./modules/tags/tags.usecases.js";
+import { registerExportRoutes } from "./modules/export/export.routes.js";
+import { createExportService } from "./modules/export/export.usecases.js";
 import { errorHandler } from "./shared/http/error-handler.js";
 import { createError } from "./shared/errors/errors.js";
 
@@ -177,6 +179,9 @@ export function createServer({
   registerSearchRoutes({ app, searchService, getUserId });
   registerSummaryRoutes({ app, summaryService, getUserId });
   registerChatRoutes({ app, chatService, getUserId });
+
+  const exportService = createExportService({ db, storageService });
+  registerExportRoutes({ app, exportService, getUserId });
 
   const here = dirname(fileURLToPath(import.meta.url));
   const clientDist = resolve(here, "../../client/dist");
