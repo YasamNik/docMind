@@ -31,6 +31,6 @@ describe("storage service", () => {
     expect(await storage.getActiveDriverId("u1")).toBe("local");
     const driver = await storage.getActiveDriver("u1");
     expect(driver.id).toBe("local");
-    await expectAppError(() => storage.getDriver("u1", "s3"), "storage.unknown_driver");
+    await expectAppError(() => storage.getDriver("u1", "nope"), "storage.unknown_driver");
   });
 });
