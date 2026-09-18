@@ -99,6 +99,34 @@ describe("database", () => {
     expect(sessionFk?.on_delete).toBe("CASCADE");
   });
 
+  it("creates the document_fields table with its indexes", async () => {
+    const { db } = await createTestDatabase();
+    const tables = await db.all<{ name: string }>(
+      sql`select name from sqlite_master where type = 'table' and name = 'document_fields'`,
+    );
+    expect(tables.length).toBe(1);
+    const columns = await db.all<{ name: string }>(sql`pragma table_info(document_fields)`);
+    const names = columns.map((c) => c.name).sort();
+    expect(names).toEqual(
+      [
+        "confidence",
+        "created_at",
+        "currency",
+        "document_id",
+        "id",
+        "key",
+        "source",
+        "updated_at",
+        "user_id",
+        "value",
+        "value_date",
+        "value_number",
+      ].sort(),
+    );
+    const fk = await db.all<{ table: string; on_delete: string }>(sql`pragma foreign_key_list(document_fields)`);
+    expect(fk.find((f) => f.table === "documents")?.on_delete).toBe("CASCADE");
+  });
+
   it("holds a file database to a single pooled connection", async () => {
     // An in-memory database is always a single connection regardless of client config, so
     // this has to use a real file to exercise the pool. Without forcing `concurrency: 1`,
