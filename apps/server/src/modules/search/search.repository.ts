@@ -1,10 +1,15 @@
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type { Database } from "../database/database.js";
+import { meaningfulQueryTokens } from "./search.models.js";
 import { documentChunksTable, savedSearchesTable } from "./search.tables.js";
 import type { DocumentChunk, NewDocumentChunk } from "./search.types.js";
 
 const DEFAULT_KEYWORD_LIMIT = 10;
 const DEFAULT_VECTOR_LIMIT = 10;
+// Cosine distance past which a chunk is treated as unrelated to the query whatever else
+// the corpus holds. Measured on text-embedding-3-large, where a correct match lands near
+// 0.6 and unrelated text sits at 0.79 and above.
+const MAX_VECTOR_DISTANCE = 0.78;
 
 export type KeywordSearchRow = {
   chunkId: number;
@@ -23,15 +28,18 @@ export type VectorSearchRow = {
 };
 
 // FTS5 MATCH treats *, -, +, (, ), :, ^, ~, and bare AND/OR/NOT as query syntax. Wrapping
-// each whitespace-delimited token in double quotes makes FTS5 treat it as a literal phrase
-// token instead, so a user query can never be parsed as an FTS5 operator expression.
-function escapeFts5Query(query: string): string {
-  return query
-    .trim()
-    .split(/\s+/)
-    .filter((token) => token.length > 0)
+// each token in double quotes makes FTS5 treat it as a literal phrase token instead, so a
+// user query can never be parsed as an FTS5 operator expression.
+//
+// The tokens are joined with OR, not FTS5's implicit AND. A question asks for a document
+// in the user's words, not in the document's, so requiring every word to appear in one
+// chunk finds nothing. Ranking sorts out which of the OR matches is worth showing: bm25
+// weighs a rare word far above a common one, and the caller fuses this list with the
+// vector list before anything is returned.
+export function escapeFts5Query(query: string): string {
+  return meaningfulQueryTokens(query)
     .map((token) => `"${token.replace(/"/g, '""')}"*`)
-    .join(" ");
+    .join(" OR ");
 }
 
 export function createSearchRepository({ db }: { db: Database }) {
@@ -75,7 +83,13 @@ export function createSearchRepository({ db }: { db: Database }) {
 
     // Brute-force cosine distance over the emb column using libsql's native vector
     // functions. vector() parses a JSON array string into the F32_BLOB representation.
-    async searchVector(embedding: number[], limit = DEFAULT_VECTOR_LIMIT, maxDistance = 0.55): Promise<VectorSearchRow[]> {
+    //
+    // maxDistance is a sanity bound, not a relevance test: it keeps a corpus with nothing
+    // relevant in it from filling the chat context with noise. Which of the rows under it
+    // are actually relevant is decided by withinDistanceMargin in the usecase, because
+    // absolute distances shift with the embedding model while the gap between a good match
+    // and the rest does not.
+    async searchVector(embedding: number[], limit = DEFAULT_VECTOR_LIMIT, maxDistance = MAX_VECTOR_DISTANCE): Promise<VectorSearchRow[]> {
       const vectorJson = JSON.stringify(embedding);
       return db.all<VectorSearchRow>(sql`
         SELECT id AS chunkId,
