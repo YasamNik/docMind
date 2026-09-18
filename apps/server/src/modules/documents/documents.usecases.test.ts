@@ -174,6 +174,39 @@ describe("documents service filters and enrichment", () => {
     expect(byTag[0]?.tags).toEqual([{ id: tag.id, name: "Rent", color: null, auto: false, manual: true }]);
   });
 
+  it("filters by documentTypeId and resolves the type name onto each row", async () => {
+    const tags = createTagsService({ db });
+    const invoice = await tags.createType({ userId, name: "Invoice" });
+    const receipt = await tags.createType({ userId, name: "Receipt" });
+    const repository = createDocumentsRepository({ db });
+
+    const { document: anInvoice } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    const { document: aReceipt } = await documents.upload({ userId, name: "b.txt", mimeType: "text/plain", body: Readable.from(["b"]) });
+    const { document: untyped } = await documents.upload({ userId, name: "c.txt", mimeType: "text/plain", body: Readable.from(["c"]) });
+    await repository.update({ userId, documentId: anInvoice.id, patch: { documentTypeId: invoice.id, documentTypeSource: "manual" } });
+    await repository.update({ userId, documentId: aReceipt.id, patch: { documentTypeId: receipt.id, documentTypeSource: "auto" } });
+
+    const all = await documents.list({ userId });
+    expect(all.find((d) => d.id === anInvoice.id)?.documentTypeName).toBe("Invoice");
+    expect(all.find((d) => d.id === aReceipt.id)?.documentTypeName).toBe("Receipt");
+    expect(all.find((d) => d.id === untyped.id)?.documentTypeName).toBeNull();
+
+    const byInvoice = await documents.list({ userId, documentTypeId: invoice.id });
+    expect(byInvoice.map((d) => d.id)).toEqual([anInvoice.id]);
+    expect(byInvoice[0]?.documentTypeName).toBe("Invoice");
+  });
+
+  it("get() resolves the document type name for a single document", async () => {
+    const tags = createTagsService({ db });
+    const invoice = await tags.createType({ userId, name: "Invoice" });
+    const repository = createDocumentsRepository({ db });
+    const { document } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    await repository.update({ userId, documentId: document.id, patch: { documentTypeId: invoice.id, documentTypeSource: "manual" } });
+
+    const detail = await documents.get({ userId, documentId: document.id });
+    expect(detail).toMatchObject({ documentTypeId: invoice.id, documentTypeName: "Invoice" });
+  });
+
   it("combines categoryId and tagId filters with AND", async () => {
     const tags = createTagsService({ db });
     const category = await tags.createCategory({ userId, name: "Finance" });

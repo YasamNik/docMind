@@ -39,8 +39,8 @@ export function registerDocumentsRoutes({
   });
 
   app.get("/api/documents", async (c) => {
-    const { categoryId, tagId, view } = parseOrValidationError(listDocumentsQuerySchema, c.req.query());
-    const documents = await documentsService.list({ userId: getUserId(c), categoryId, tagId, view });
+    const { categoryId, documentTypeId, tagId, view } = parseOrValidationError(listDocumentsQuerySchema, c.req.query());
+    const documents = await documentsService.list({ userId: getUserId(c), categoryId, documentTypeId, tagId, view });
     return c.json({ documents });
   });
 

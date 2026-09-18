@@ -117,15 +117,17 @@ export function createDocumentsService({
     list({
       userId,
       categoryId,
+      documentTypeId,
       tagId,
       view,
     }: {
       userId: string;
       categoryId?: string;
+      documentTypeId?: string;
       tagId?: string;
       view?: DocumentView;
     }): Promise<DocumentListRow[]> {
-      return repository.listByUser({ userId, categoryId, tagId, view });
+      return repository.listByUser({ userId, categoryId, documentTypeId, tagId, view });
     },
 
     get({ userId, documentId }: { userId: string; documentId: string }) {
