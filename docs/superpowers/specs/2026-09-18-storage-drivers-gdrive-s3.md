@@ -89,8 +89,8 @@ storageKey: stored.key,
 
 So the Google Drive driver may treat the incoming key as a naming hint, create the file,
 and return the Drive file id as the key. Every later `get`, `delete`, and `exists` gets
-that id back. `documents.usecases.ts` lines 166 and 173, and `export.usecases.ts` line
-42, all read `document.storageKey` and never rebuild a path.
+that id back. `purge()` at `documents.usecases.ts:169`, `openFile()` at line 174, and
+`export.usecases.ts` line 42 all read `document.storageKey` and never rebuild a path.
 
 Streaming needs no change either. `put` takes a `Readable`, `get` returns one. The upload
 path tees the request body through a hashing `PassThrough` into `driver.put`, so the
@@ -354,6 +354,36 @@ fallback is `google-auth-library` for tokens plus the same hand-written upload, 
 removes the easy part and keeps the hard part. I do not recommend switching to
 `googleapis`.
 
+### Decision 8b: the chunk size is injectable, so CI exercises the multi-chunk path
+
+Without this the riskiest code in the item is never run by a test, and the spec would be
+implying otherwise. `driver-contract.test-utils.ts` lines 37 to 49 push a largest body of
+exactly 8 MiB, and the chunk size above is also 8 MiB. An 8 MiB body in 8 MiB chunks is
+**one chunk**. The 308-continue path, a `Content-Range` spanning more than one PUT, and a
+resend after a mid-transfer 5xx would all be dead code as far as CI is concerned.
+
+So `createGdriveDriver` takes `chunkBytes` with a default of `8 * 1024 * 1024`, and the
+Drive contract test constructs a second driver with `chunkBytes: 256 * 1024`, the
+protocol minimum, against the same fetch fake. The shared contract suite gains one
+parameter, `largeBodyBytes`, defaulting to the current 8 MiB, and the small-chunk Drive
+run passes `1024 * 1024`, which is four times the chunk size. That guarantees at least
+three 308 responses and a final chunk carrying the real total. Two lines of production
+code for the item's riskiest loop, so it is worth it.
+
+Two tests beyond the contract suite, both against the fake with the small chunk size:
+
+- A 5xx on the second chunk. The driver must query the session for the committed range
+  and resend from there, not from zero, and must end with the same bytes.
+- A chunk boundary that does not divide the body evenly, so the final `Content-Range`
+  carries a partial chunk plus the real total rather than a round number.
+
+**What this still does not cover, stated plainly so nobody over-reads the green tick.**
+The fake and the driver share an author and a mental model. If my reading of the Drive
+resumable protocol is wrong, the wrong assumption goes into both and the suite passes
+anyway. CI proves the driver is internally consistent and that the chunk arithmetic is
+right; it does not prove Google agrees. Only manual check 4 does that, which is why that
+check is now attached to task 7 rather than floating at the end of the document.
+
 For bodies under 5 MiB the driver uses the simple multipart upload, one request. Since
 the size is unknown up front, it reads up to 5 MiB into memory first: if the stream ends
 inside that, it does the simple upload; if not, it opens a resumable session and sends
@@ -599,9 +629,9 @@ checked before choosing:
 
 - `documents.usecases.ts` lines 56 to 57 resolve the active driver **at upload time** and
   write `storageDriver: driverId` onto the row.
-- Line 166 (delete) and line 173 (download) both call
+- `purge()` at line 168 and `openFile()` at line 173 both call
   `storageService.getDriver(userId, document.storageDriver)`, the driver on the row, not
-  the active one.
+  the active one. `remove()` at line 152 calls storage not at all.
 - `export.usecases.ts` line 42 does the same.
 - `storage.usecases.ts` `getActiveDriverId` reads `storage.activeDriver` with a local
   fallback and is used only by the upload path.
@@ -627,15 +657,32 @@ Three distinct situations, each with a different answer.
    - **Download and preview fail** with 409 and the message `This document is stored on
      Google Drive, which is not connected. Reconnect it in Settings, Storage.` The
      document detail page shows that inline instead of a raw error.
-   - Export skips it. `export.usecases.ts` already catches per-document storage failures
-     and continues; this item additionally records the skipped documents in the export
-     manifest rather than silently omitting them.
-   - **Delete must still work.** Today `deleteDocument` calls `driver.delete` before the
-     row update, so an unreachable driver makes the document undeletable. This item
-     creates the conditions for that bug, so this item fixes it: wrap the storage delete
-     in a try/catch, log a warning with the document id, driver and key, and proceed. The
-     blob is then orphaned on the remote, which is the lesser evil, and the warning line
-     is the record.
+   - Export skips it. `export.usecases.ts` lines 47 to 49 already swallow per-document
+     storage failures and continue, but the catch is bare (`catch { }` with only a
+     comment) and records nothing at all. So this item does two things there, not one:
+     introduce the document id and the failure into that catch, since nothing currently
+     captures either, and then write the skipped documents into the export manifest
+     rather than silently omitting them.
+   - **Permanent delete must still work.** There are two delete paths and only one of
+     them touches storage:
+     - `remove()` at `documents.usecases.ts:152` is the soft delete behind
+       `DELETE /api/documents/:id`. It only writes `deletedAt` and **never touches the
+       blob**, so it is unaffected by an unconfigured driver and needs no change. Moving
+       a document to trash always works.
+     - `purge()` at `documents.usecases.ts:165`, behind
+       `DELETE /api/documents/:id/permanent`, is the only path that calls storage. It
+       does `const driver = await storageService.getDriver(userId, document.storageDriver)`
+       at line 168, and `getDriver` calls `definition.create` (`storage.usecases.ts:31`),
+       which throws `storage.not_configured` **before `driver.delete` on line 169 is ever
+       reached**. So the request fails at driver construction, not at the delete, and the
+       document can never be purged while its driver is unconfigured.
+
+     This item creates the conditions for that, so this item fixes it: inside `purge()`,
+     wrap **both** the `getDriver` call and the `driver.delete` call in one try/catch, log
+     a warning with the document id, driver id and storage key, and carry on to
+     `repository.remove`. Wrapping only the delete is not enough, because the throw comes
+     from `getDriver`. The blob is then orphaned on the remote, which is the lesser evil,
+     and the warning line is the record.
 3. **Driver id not in the registry at all.** Only reachable by downgrading after using a
    driver, since the registry is compiled in. `storage.unknown_driver`, 400, already
    handled.
@@ -776,7 +823,9 @@ storage. Disconnecting stays a deliberate user action.
 
 `apps/server/src/modules/storage/drivers/driver-contract.test-utils.ts` keeps its four
 existing tests (put/exists/get/delete, missing key is not found, health check passes,
-8 MB body streams) and gains four more, all driver-agnostic per decision 3.
+8 MiB body streams) and gains four more, all driver-agnostic per decision 3, plus the
+`largeBodyBytes` parameter from decision 8b so a driver can be run a second time with a
+body sized against its own chunking.
 
 1. **The returned key is authoritative.** Put with a requested key, then `exists`, `get`
    and `delete` using only the returned key. Assert the round trip, and do not assert
@@ -813,6 +862,9 @@ All of this is a normal `pnpm test` run.
   rejected, state signed for one driver rejected on another driver callback. The signing
   key is derived from `SETTINGS_ENCRYPTION_KEY` with HKDF and the label `oauth-state`,
   as `DOCMIND-DESIGN.md` specifies, with a ten minute expiry.
+- **The multi-chunk resumable path**, through the small-chunk driver variant described
+  in decision 8b: at least three 308 responses per upload, a resend after a mid-transfer
+  5xx, and a final partial chunk carrying the real total.
 - **Decision 16: Google Drive driver against a stubbed fetch.** `createGdriveDriver` and
   the OAuth usecases take an injected `fetchImpl` defaulting to `globalThis.fetch`, and
   the S3 driver takes an injected client factory. With that, the full contract suite runs
@@ -830,8 +882,11 @@ All of this is a normal `pnpm test` run.
   `GET /api/storage/drivers` shape and document counts, `POST /api/storage/drivers/:id/test`
   with a stub driver returning ok and not-ok, unknown driver id rejected, and the OAuth
   callback against a stubbed token endpoint including a replayed and an expired state.
-- **Documents:** delete succeeds when the driver throws `storage.not_configured`, with
-  the row marked deleted. That is the regression test for the bug named in section 5.
+- **Documents:** `purge()` succeeds when `getDriver` throws `storage.not_configured`,
+  with the row gone from the table and a warning logged. The stub must throw from the
+  driver factory, not from `driver.delete`, because that is where the real throw comes
+  from. A second case asserts `remove()` never calls the storage service at all. That is
+  the regression test for the bug named in section 5.
 - **Client:** the Storage tab renders a card per driver, disables an unconfigured driver
   radio option and names the missing settings, shows the document count, shows Connect
   versus Reconnect versus Disconnect for Drive based on `connection.connected` and
@@ -847,8 +902,11 @@ here.
    downloading.
 3. Revoking DocMind from the Google account third-party access page, confirming the
    Reconnect state appears, and reconnecting to restore service.
-4. A real upload over 5 MiB and one near 100 MB to Drive, to exercise the resumable path
-   and the chunk boundaries against Google rather than against the fake.
+4. **Owned by task 7, not deferred to the end.** A real upload over 5 MiB and one near
+   100 MB to Drive, to exercise the resumable path and the chunk boundaries against
+   Google rather than against the fake. This is the only check that can catch a wrong
+   assumption baked into both the driver and the fake, so task 7 is not done until it has
+   been run and its result written into the worklog.
 5. One real bucket on each of Cloudflare R2, Backblaze B2 and AWS S3: create, test
    connection, upload, download, delete. This is where decision 10 (checksums) and
    decision 11 (addressing) actually get validated.
@@ -949,6 +1007,12 @@ agent once fixed.
 8. No googleapis dependency. Plain fetch against the Drive v3 REST API, with a
    hand-written chunked resumable upload. Cost acknowledged: that loop is the riskiest
    code in the item, so it is split into pure helpers and covered by a fetch fake.
+8b. The Drive chunk size is injectable, defaulting to 8 MiB, and the contract suite takes
+    a `largeBodyBytes` parameter, so CI runs the driver a second time at a 256 KiB chunk
+    size with a 1 MiB body and actually exercises the 308-continue path, a multi-PUT
+    Content-Range, and a resend after a mid-transfer 5xx. Without it the riskiest loop in
+    the item is never executed by a test, because the existing 8 MiB contract body is
+    exactly one 8 MiB chunk.
 9. S3 uses `@aws-sdk/client-s3` and `@aws-sdk/lib-storage`. Rejected: aws4fetch (no
    multipart helper, hand-rolled XML), the MinIO client (third-party reimplementation),
    hand-rolled SigV4.
@@ -1019,7 +1083,7 @@ apps/server/src/modules/settings/
 
 apps/server/src/modules/documents/
   documents.repository.ts                   CHANGED  countByDriver
-  documents.usecases.ts                     CHANGED  delete tolerates an unreachable driver
+  documents.usecases.ts                     CHANGED  purge() tolerates an unreachable driver
   documents.usecases.test.ts                CHANGED
 
 apps/server/src/modules/export/
@@ -1059,22 +1123,34 @@ plan with interfaces, test strategy and commit messages comes next; this is the 
 2. **Storage contract: types, errors, tests.** `requiredSettings`, the oauth type,
    `storage.errors.ts`, the four new contract tests, the local driver updated. Pure
    groundwork, no new driver.
-3. **Documents and export resilience.** `countByDriver`, delete tolerates an unreachable
-   driver plus its regression test, export manifest records skips.
+3. **Documents and export resilience.** `countByDriver`; `purge()` tolerates an
+   unreachable driver (the try/catch goes around `getDriver` as well as `driver.delete`)
+   plus its regression test; the bare catch in `export.usecases.ts` captures the document
+   id and the export manifest records the skips. `remove()` is not touched.
 4. **Storage status and test routes.** `storage.routes.ts`, `listDriverStatus`,
    `testDriver`, `assertStorageUpdatesValid` wired into `beforeSet`, route tests with a
    stub driver. Only the local driver exists at this point, and it now has an API behind
    a Test button.
 5. **S3 driver.** Models, driver, settings, guide, registry entry, unit tests, contract
    suite gated on MinIO. The two new dependencies land here.
+
+   Note for whoever reviews between tasks 5 and 6: for that one commit the S3 driver is
+   configurable only through the existing generic settings loop. `StorageTab.tsx` renders
+   every `storage.*` key as `String(setting.value)` in a plain text input, so
+   `storage.s3.forcePathStyle` appears as the text `false` rather than a checkbox, and
+   there is no active-driver selector yet. That is the current tab behaving as written,
+   not a regression, and secrets are still masked server side by `listResolved`. Task 6
+   replaces the whole tab.
 6. **Client: shared guide component and the new Storage tab.** Extract `SetupGuide`,
    rewrite `StorageTab` into driver cards with the active driver selector, disabled
    unconfigured options, document counts, the test button and the red banner. After this
    task S3 is usable end to end from the UI.
 7. **Google Drive driver.** OAuth models, token cache, API wrappers, the driver with both
-   upload paths, settings, guide, registry entry, the fetch fake, the contract suite,
-   unit tests. The largest task by far. The plan should consider landing the pure models
-   and the fake ahead of the driver itself.
+   upload paths, the injectable `chunkBytes` from decision 8b, settings, guide, registry
+   entry, the fetch fake, the contract suite at both chunk sizes, unit tests. The largest
+   task by far. The plan should consider landing the pure models and the fake ahead of
+   the driver itself. **This task also owns manual check 4** (a real multi-chunk upload
+   to a real Drive account) and is not done without it.
 8. **Google Drive OAuth routes and the client connect flow.** Start and callback
    registered before the session middleware, folder creation on connect, disconnect, the
    redirect URI copy button, Connect, Reconnect and Disconnect in the card.
@@ -1102,7 +1178,10 @@ Before this spec is considered implemented:
 
 - `pnpm typecheck` and `pnpm test` pass from the root.
 - The shared contract suite passes for local, for S3 against a local MinIO, and for
-  Google Drive against the fetch fake.
+  Google Drive against the fetch fake at both the default 8 MiB chunk size and the
+  256 KiB variant, with the small-chunk run observably taking more than one PUT.
+- Manual check 4 has been run against a real Drive account, because no CI run can catch a
+  protocol assumption shared by the driver and the fake.
 - `GET /api/settings` contains no `storage.gdrive.refreshToken`, no `folderId`, no
   `connectedEmail`, and returns `storage.s3.secretAccessKey` only as
   `{ isSet, lastFour }`.
@@ -1113,7 +1192,9 @@ Before this spec is considered implemented:
 - A document uploaded under the local driver still downloads after the active driver has
   been switched to S3.
 - A document on a disconnected driver still appears in the library and in search, shows
-  the reconnect message on download, and can still be deleted.
+  the reconnect message on download, can still be moved to trash through `remove()`, and
+  can still be permanently deleted through `purge()` with a warning logged and the blob
+  left orphaned.
 - Clearing the credentials of an inactive driver that holds documents shows the confirm
   copy in section 4 with the right singular or plural, and succeeds. Clearing the active
   driver credentials returns 409.
@@ -1143,6 +1224,14 @@ were deliberate.
   splitting every range decision into pure functions plus an in-memory Drive fake that
   runs the whole contract suite. If the implementer hits trouble here, swapping in
   `@googleapis/drive` is a legitimate reversal, not a failure.
+- **Ruled by `plan-reviewer`, 2026-09-18: the Drive chunk size becomes injectable rather
+  than the multi-chunk path being declared manual only.** The review found that the
+  existing 8 MiB contract body against an 8 MiB chunk size is a single chunk, so CI would
+  never have run the 308-continue path, a multi-PUT Content-Range, or a resend after a
+  5xx. Both options were on the table, honest documentation of an untested path or a two
+  line change making it testable; the second won because the code in question is the
+  riskiest in the item. See decision 8b. The residual risk, an assumption shared by the
+  driver and its fake, is covered only by manual check 4, which is now owned by task 7.
 - **A reasonable person would have made the S3 test connection read-only**, like the
   Drive one. Chosen to write and delete a probe object instead, because HeadBucket
   passing while PutObject is denied is the single most common S3 misconfiguration and a
