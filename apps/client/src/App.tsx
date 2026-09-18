@@ -5,6 +5,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { authClient } from "@/lib/auth-client";
 import { SignInPage } from "@/pages/auth/SignInPage";
 import { CategoriesPage } from "@/pages/categories/CategoriesPage";
+import { ChatPage } from "@/pages/chat/ChatPage";
 import { DocumentsPage } from "@/pages/documents/DocumentsPage";
 import { DocumentDetailPage } from "@/pages/documents/DocumentDetailPage";
 import { JobsPage } from "@/pages/jobs/JobsPage";
@@ -46,6 +47,7 @@ export default function App() {
             <Route path="/tags" element={<TagsPage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/sorting" element={<SortingPage />} />
+            <Route path="/chat" element={<ChatPage />} />
             <Route path="/jobs" element={<JobsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>

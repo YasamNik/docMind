@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Briefcase, FileText, LogOut, Search, Settings, Sparkles, Tags as TagsIcon } from "lucide-react";
+import { Briefcase, FileText, LogOut, MessageCircle, Search, Settings, Sparkles, Tags as TagsIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
@@ -7,19 +7,19 @@ import { Badge } from "@/components/ui/badge";
 import { authClient } from "@/lib/auth-client";
 import { documentsApi } from "@/lib/documents-api";
 import { categoriesApi, tagsApi, type CategoryRow, type TagRow } from "@/lib/tags-api";
-import { CategoryTreeNav } from "./CategoryTreeNav";
 
 // Two-level navigation: a thin icon rail selects a section, a context panel next to
 // it shows that section's links. Pattern similar to editors like VS Code that pair an
 // activity bar with a contextual side panel.
 
-type RailTab = "files" | "search" | "tags" | "sorting" | "settings" | "jobs";
+type RailTab = "files" | "search" | "tags" | "sorting" | "chat" | "settings" | "jobs";
 
 const railItems: { tab: RailTab; label: string; to: string; icon: LucideIcon }[] = [
   { tab: "files", label: "Files", to: "/documents", icon: FileText },
   { tab: "search", label: "Search", to: "/search", icon: Search },
   { tab: "tags", label: "Tags", to: "/tags", icon: TagsIcon },
   { tab: "sorting", label: "Sorting", to: "/sorting", icon: Sparkles },
+  { tab: "chat", label: "Chat", to: "/chat", icon: MessageCircle },
   { tab: "settings", label: "Settings", to: "/settings", icon: Settings },
   { tab: "jobs", label: "Jobs", to: "/jobs", icon: Briefcase },
 ];
@@ -28,6 +28,7 @@ function tabForPath(pathname: string): RailTab {
   if (pathname.startsWith("/search")) return "search";
   if (pathname.startsWith("/tags") || pathname.startsWith("/categories")) return "tags";
   if (pathname.startsWith("/sorting")) return "sorting";
+  if (pathname.startsWith("/chat")) return "chat";
   if (pathname.startsWith("/settings")) return "settings";
   if (pathname.startsWith("/jobs")) return "jobs";
   return "files";
@@ -41,10 +42,6 @@ function countAutomaticItems(tags: TagRow[], categories: CategoryRow[]): number 
 
 function navPillClass({ isActive }: { isActive: boolean }) {
   return `rounded-full px-3 py-2 text-sm ${isActive ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-foreground/5"}`;
-}
-
-function sectionHeadingClass() {
-  return "text-[10px] uppercase tracking-widest font-semibold text-org-neutral-700";
 }
 
 function CountRow({ to, label, count, color }: { to: string; label: string; count: number; color?: string | null }) {
@@ -103,17 +100,7 @@ function IconRail({ activeTab }: { activeTab: RailTab }) {
   );
 }
 
-function FilesPanel({
-  inboxCount,
-  needsReviewCount,
-  categories,
-  tags,
-}: {
-  inboxCount: number;
-  needsReviewCount: number;
-  categories: CategoryRow[];
-  tags: TagRow[];
-}) {
+function FilesPanel({ inboxCount, needsReviewCount }: { inboxCount: number; needsReviewCount: number }) {
   return (
     <>
       <div className="flex items-center gap-2">
@@ -128,32 +115,13 @@ function FilesPanel({
         <CountRow to="/documents?view=needs_review" label="Needs review" count={needsReviewCount} />
       </nav>
 
-      <div>
-        <div className="mb-1 flex items-center justify-between px-3">
-          <span className={sectionHeadingClass()}>Categories</span>
-          <NavLink to="/categories" className="text-xs underline-offset-2 hover:underline">
-            Manage
-          </NavLink>
-        </div>
-        <CategoryTreeNav categories={categories} />
-      </div>
-
-      <div>
-        <div className="mb-1 flex items-center justify-between px-3">
-          <span className={sectionHeadingClass()}>Tags</span>
-          <NavLink to="/tags" className="text-xs underline-offset-2 hover:underline">
-            Manage
-          </NavLink>
-        </div>
-        {tags.length === 0 ? (
-          <p className="px-3 text-xs text-muted-foreground">No tags yet.</p>
-        ) : (
-          <nav className="flex flex-col gap-0.5">
-            {tags.map((t) => (
-              <CountRow key={t.id} to={`/documents?tagId=${t.id}`} label={t.name} count={t.documentCount} color={t.color} />
-            ))}
-          </nav>
-        )}
+      <div className="mt-auto flex flex-col gap-1 px-3">
+        <NavLink to="/categories" className="text-xs text-muted-foreground underline-offset-2 hover:underline">
+          Manage categories
+        </NavLink>
+        <NavLink to="/tags" className="text-xs text-muted-foreground underline-offset-2 hover:underline">
+          Manage tags
+        </NavLink>
       </div>
     </>
   );
@@ -179,6 +147,19 @@ function TagsPanel({ tags, categories }: { tags: TagRow[]; categories: CategoryR
       <nav className="flex flex-col gap-1">
         <CountRow to="/tags" label="Manage tags" count={tags.length} />
         <CountRow to="/categories" label="Manage categories" count={categories.length} />
+      </nav>
+    </>
+  );
+}
+
+function ChatPanel() {
+  return (
+    <>
+      <span className="font-heading text-lg">Chat</span>
+      <nav className="flex flex-col gap-1">
+        <NavLink to="/chat" className={navPillClass}>
+          Chat with your documents
+        </NavLink>
       </nav>
     </>
   );
@@ -237,12 +218,11 @@ export function AppShell() {
     <div className="flex min-h-screen">
       <IconRail activeTab={activeTab} />
       <aside className="flex w-[220px] shrink-0 flex-col gap-6 overflow-y-auto border-r border-border bg-card p-6">
-        {activeTab === "files" && (
-          <FilesPanel inboxCount={counts.inbox} needsReviewCount={counts.needsReview} categories={categories} tags={tags} />
-        )}
+        {activeTab === "files" && <FilesPanel inboxCount={counts.inbox} needsReviewCount={counts.needsReview} />}
         {activeTab === "search" && <SearchPanel />}
         {activeTab === "tags" && <TagsPanel tags={tags} categories={categories} />}
         {activeTab === "sorting" && <SortingPanel automaticCount={countAutomaticItems(tags, categories)} />}
+        {activeTab === "chat" && <ChatPanel />}
         {activeTab === "settings" && <SettingsPanel />}
         {activeTab === "jobs" && <JobsPanel />}
       </aside>
