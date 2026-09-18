@@ -1,14 +1,56 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { UploadDropzone } from "@/components/documents/UploadDropzone";
 import { DATE_FILTER_OPTIONS, dateFilterBadgeLabel, matchesDateFilter, type DateFilterValue } from "@/lib/date-filter";
-import { documentsApi, type DocumentListFilters } from "@/lib/documents-api";
+import { documentsApi, type DocumentListFilters, type DocumentRow } from "@/lib/documents-api";
 import { formatBytes, formatDate, formatDocumentDate } from "@/lib/format";
 import { categoriesApi, tagsApi } from "@/lib/tags-api";
 
 const VIEW_LABELS: Record<string, string> = { inbox: "Inbox", needs_review: "Needs review" };
+
+const MIME_LABELS: Record<string, string> = {
+  "application/pdf": "PDF",
+  "image/png": "PNG",
+  "image/jpeg": "JPEG",
+  "image/jpg": "JPG",
+  "text/plain": "Text",
+  "text/csv": "CSV",
+  "text/markdown": "Markdown",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "Word",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "Excel",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PowerPoint",
+  "application/msword": "Word",
+  "application/vnd.ms-excel": "Excel",
+  "application/vnd.ms-powerpoint": "PowerPoint",
+};
+
+function friendlyMime(mime: string | null): string {
+  if (!mime) return "-";
+  return MIME_LABELS[mime] ?? mime.split("/").pop() ?? mime;
+}
+
+type SortKey = "name" | "category" | "tags" | "type" | "size" | "createdAt" | "documentDate";
+type SortDir = "asc" | "desc";
+
+function sortDocuments(docs: DocumentRow[], key: SortKey, dir: SortDir): DocumentRow[] {
+  const sorted = [...docs].sort((a, b) => {
+    let cmp = 0;
+    switch (key) {
+      case "name": cmp = a.name.localeCompare(b.name); break;
+      case "category": cmp = (a.categoryPath ?? "").localeCompare(b.categoryPath ?? ""); break;
+      case "tags": cmp = (a.tags[0]?.name ?? "").localeCompare(b.tags[0]?.name ?? ""); break;
+      case "type": cmp = (a.mimeType ?? "").localeCompare(b.mimeType ?? ""); break;
+      case "size": cmp = (a.sizeBytes ?? 0) - (b.sizeBytes ?? 0); break;
+      case "createdAt": cmp = a.createdAt.localeCompare(b.createdAt); break;
+      case "documentDate": cmp = (a.documentDate ?? "").localeCompare(b.documentDate ?? ""); break;
+    }
+    return dir === "asc" ? cmp : -cmp;
+  });
+  return sorted;
+}
 
 // The category filter needs an option for "no category assigned" but categoryId in the
 // API only accepts real category ids, so this sentinel is resolved into a client-side
@@ -135,10 +177,22 @@ export function DocumentsPage() {
   });
   const addedFilter = readDateFilter(searchParams, "added");
   const docDateFilter = readDateFilter(searchParams, "docDate");
-  const documents = rawDocuments
+  const [sortKey, setSortKey] = useState<SortKey>("createdAt");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const filtered = rawDocuments
     .filter((d) => !isUncategorized || d.categoryId === null)
     .filter((d) => matchesDateFilter(d.createdAt, addedFilter))
     .filter((d) => matchesDateFilter(d.documentDate, docDateFilter));
+  const documents = sortDocuments(filtered, sortKey, sortDir);
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) setSortDir(sortDir === "asc" ? "desc" : "asc");
+    else { setSortKey(key); setSortDir(key === "name" ? "asc" : "desc"); }
+  }
+  function sortIndicator(key: SortKey) {
+    if (sortKey !== key) return "";
+    return sortDir === "asc" ? " ▲" : " ▼";
+  }
 
   const { data: categories = [] } = useQuery({ queryKey: ["categories"], queryFn: categoriesApi.list });
   const { data: tags = [] } = useQuery({ queryKey: ["tags"], queryFn: tagsApi.list });
@@ -188,10 +242,10 @@ export function DocumentsPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Name</TableHead>
+              <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("name")}>Name{sortIndicator("name")}</TableHead>
               <TableHead>
                 <div className="flex flex-wrap items-center gap-1.5 normal-case tracking-normal">
-                  <span>Category</span>
+                  <span className="cursor-pointer select-none" onClick={() => toggleSort("category")}>Category{sortIndicator("category")}</span>
                   <ColumnFilter
                     label="Filter by category"
                     value={categoryParam}
@@ -214,7 +268,7 @@ export function DocumentsPage() {
               </TableHead>
               <TableHead>
                 <div className="flex flex-wrap items-center gap-1.5 normal-case tracking-normal">
-                  <span>Tags</span>
+                  <span className="cursor-pointer select-none" onClick={() => toggleSort("tags")}>Tags{sortIndicator("tags")}</span>
                   <ColumnFilter
                     label="Filter by tags"
                     value={tagParam}
@@ -226,11 +280,11 @@ export function DocumentsPage() {
                   )}
                 </div>
               </TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>Size</TableHead>
+              <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("type")}>Type{sortIndicator("type")}</TableHead>
+              <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("size")}>Size{sortIndicator("size")}</TableHead>
               <TableHead>
                 <div className="flex flex-wrap items-center gap-1.5 normal-case tracking-normal">
-                  <span>Added</span>
+                  <span className="cursor-pointer select-none" onClick={() => toggleSort("createdAt")}>Added{sortIndicator("createdAt")}</span>
                   <DateColumnFilter label="Filter by added date" value={addedFilter} onChange={(v) => setDateFilter("added", v)} />
                   {addedFilterLabel && (
                     <ActiveFilterBadge
@@ -244,7 +298,7 @@ export function DocumentsPage() {
               </TableHead>
               <TableHead>
                 <div className="flex flex-wrap items-center gap-1.5 normal-case tracking-normal">
-                  <span>Doc Date</span>
+                  <span className="cursor-pointer select-none" onClick={() => toggleSort("documentDate")}>Doc Date{sortIndicator("documentDate")}</span>
                   <DateColumnFilter label="Filter by document date" value={docDateFilter} onChange={(v) => setDateFilter("docDate", v)} />
                   {docDateFilterLabel && (
                     <ActiveFilterBadge
@@ -262,13 +316,13 @@ export function DocumentsPage() {
           <TableBody>
             {documents.map((d) => (
               <TableRow key={d.id}>
-                <TableCell>
-                  <Link to={`/documents/${d.id}`} className="underline-offset-2 hover:underline">
+                <TableCell className="max-w-[260px]">
+                  <Link to={`/documents/${d.id}`} className="block truncate underline-offset-2 hover:underline" title={d.name}>
                     {d.name}
                   </Link>
-                  {d.summary && <p className="text-xs text-muted-foreground line-clamp-1">{d.summary}</p>}
+                  {d.summary && <p className="truncate text-xs text-muted-foreground" title={d.summary}>{d.summary}</p>}
                 </TableCell>
-                <TableCell className="text-muted-foreground">{d.categoryPath ?? "None"}</TableCell>
+                <TableCell className="max-w-[120px] truncate text-muted-foreground" title={d.categoryPath ?? undefined}>{d.categoryPath ?? "None"}</TableCell>
                 <TableCell>
                   <div className="flex flex-wrap gap-1">
                     {d.tags.map((t) => (
@@ -279,7 +333,7 @@ export function DocumentsPage() {
                     ))}
                   </div>
                 </TableCell>
-                <TableCell className="text-muted-foreground">{d.mimeType ?? "unknown"}</TableCell>
+                <TableCell className="text-muted-foreground" title={d.mimeType ?? undefined}>{friendlyMime(d.mimeType)}</TableCell>
                 <TableCell>{d.sizeBytes == null ? "" : formatBytes(d.sizeBytes)}</TableCell>
                 <TableCell>{formatDate(d.createdAt)}</TableCell>
                 <TableCell className="text-muted-foreground">{formatDocumentDate(d.documentDate)}</TableCell>
