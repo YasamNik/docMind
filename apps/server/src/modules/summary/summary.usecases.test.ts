@@ -35,6 +35,33 @@ async function uploadWithText(t: Awaited<ReturnType<typeof setup>>["t"], userId:
   return document.id;
 }
 
+async function setupBackfillTest() {
+  const { t, userId } = await setup();
+  const jobs = t.services.jobsService;
+
+  const bareId = await uploadWithText(t, userId, "bare document text");
+
+  const withFieldsId = await uploadWithText(t, userId, "document with fields already");
+  await createFieldsRepository({ db: t.db }).replaceForDocument({
+    userId,
+    documentId: withFieldsId,
+    fields: [{ key: "documentType", value: "invoice", valueNumber: null, valueDate: null, currency: null, confidence: null }],
+  });
+
+  const { document: pendingDoc } = await t.services.documentsService.upload({
+    userId,
+    name: "pending.txt",
+    mimeType: "text/plain",
+    body: Readable.from(["pending extraction"]),
+  });
+  const pendingId = pendingDoc.id; // Left at its default extractionStatus of "pending".
+
+  const trashedId = await uploadWithText(t, userId, "trashed document text");
+  await t.db.run(sql`update documents set deleted_at = ${new Date().toISOString()} where id = ${trashedId}`);
+
+  return { t, userId, jobs, bareId, withFieldsId, pendingId, trashedId };
+}
+
 describe("summary service, summarize job", () => {
   it("generates and stores a summary and suggested title", async () => {
     const { t, userId, runner } = await setup();
@@ -165,6 +192,31 @@ describe("summary service, summarize job", () => {
     const document = await t.services.documentsService.get({ userId, documentId });
     expect(document.summaryStatus).toBe("done");
     expect(await createFieldsRepository({ db: t.db }).listByDocument({ userId, documentId })).toEqual([]);
+  });
+});
+
+describe("summary service, enqueueBackfill", () => {
+  it("enqueues only documents that have no fields yet", async () => {
+    const { t, userId, jobs, bareId } = await setupBackfillTest();
+    const result = await t.services.summaryService.enqueueBackfill({ userId });
+    expect(result.enqueued).toBe(1);
+    const enqueued = (await jobs.list({ userId })).filter((j) => j.type === "summarize");
+    expect(enqueued).toHaveLength(1);
+    expect(JSON.parse(enqueued[0]!.payload).documentId).toBe(bareId);
+  });
+
+  it("skips a document that already has a summarize job in flight", async () => {
+    const { t, userId, jobs, bareId } = await setupBackfillTest();
+    await jobs.enqueue({ userId, type: "summarize", payload: { documentId: bareId, userId } });
+    const result = await t.services.summaryService.enqueueBackfill({ userId });
+    expect(result.enqueued).toBe(0);
+    expect(result.skipped).toBe(1);
+  });
+
+  it("ignores documents whose extraction is not done and documents in the trash", async () => {
+    const { t, userId } = await setupBackfillTest();
+    const result = await t.services.summaryService.enqueueBackfill({ userId });
+    expect(result.enqueued).toBe(1);
   });
 });
 

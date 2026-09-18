@@ -112,6 +112,42 @@ export function createSummaryService({
     }
   };
 
+  // Documents summarized before smart fields shipped have no field rows. Re-running the
+  // summary is the only way to get them, and each one costs a model call, so this stays
+  // deliberately narrow: only documents with no fields at all, and never one whose
+  // summarize job is already waiting to run. listByUser's default "all" view already
+  // excludes trashed documents, so there is no separate deletedAt check here.
+  async function enqueueBackfill({ userId }: { userId: string }): Promise<{ enqueued: number; skipped: number }> {
+    const documents = await documentsRepository.listByUser({ userId });
+    const withFields = await fieldsRepository.listDocumentIdsWithFields({ userId });
+    const userJobs = await jobs.list({ userId });
+    const activeSummarizeIds = new Set<string>();
+    for (const job of userJobs) {
+      if (job.type !== "summarize") continue;
+      if (job.status !== "pending" && job.status !== "processing") continue;
+      try {
+        const payload = JSON.parse(job.payload) as { documentId?: string };
+        if (payload.documentId) activeSummarizeIds.add(payload.documentId);
+      } catch {
+        // A job with an unreadable payload cannot be matched to a document; ignore it.
+      }
+    }
+
+    let enqueued = 0;
+    let skipped = 0;
+    for (const document of documents) {
+      if (document.extractionStatus !== "done") continue;
+      if (withFields.has(document.id)) continue;
+      if (activeSummarizeIds.has(document.id)) {
+        skipped += 1;
+        continue;
+      }
+      await jobs.enqueue({ userId, type: "summarize", payload: { documentId: document.id, userId } });
+      enqueued += 1;
+    }
+    return { enqueued, skipped };
+  }
+
   async function acceptTitle({ userId, documentId }: { userId: string; documentId: string }) {
     const document = await documentsRepository.findById({ userId, documentId });
     if (!document) throw documentNotFound(documentId);
@@ -125,7 +161,7 @@ export function createSummaryService({
     return getEnrichedOrThrow(userId, documentId);
   }
 
-  return { handler, acceptTitle };
+  return { handler, acceptTitle, enqueueBackfill };
 }
 
 export type SummaryService = ReturnType<typeof createSummaryService>;
