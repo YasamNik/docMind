@@ -197,4 +197,13 @@ describe("CategoriesPage", () => {
     fireEvent.click(dialog.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('A category named "Finance" already exists.'));
   });
+
+  it("renders the description assistant and the color picker in the new category dialog", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByText("New category"));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByRole("button", { name: "Draft with AI" })).toBeInTheDocument();
+    expect(dialog.getByRole("group", { name: "Preset colors" })).toBeInTheDocument();
+    expect(dialog.getByLabelText("Custom color")).toBeInTheDocument();
+  });
 });

@@ -7,6 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ColorPicker } from "@/components/forms/ColorPicker";
+import { DescriptionAssistant } from "@/components/forms/DescriptionAssistant";
 import { DryRunPanel } from "@/components/sorting/DryRunPanel";
 import { categoriesApi, type CategoryInput, type CategoryRow } from "@/lib/tags-api";
 
@@ -76,7 +78,15 @@ function CategoryForm({
         </select>
       </div>
       <div>
-        <Label htmlFor="category-description">Description (the rule)</Label>
+        <div className="flex items-center justify-between gap-2">
+          <Label htmlFor="category-description">Description (the rule)</Label>
+          <DescriptionAssistant
+            targetType="category"
+            name={form.name}
+            description={form.description ?? ""}
+            onUse={(text) => setForm({ ...form, description: text })}
+          />
+        </div>
         <textarea
           id="category-description"
           className="w-full min-h-24 rounded-[1.75rem] border bg-secondary px-4 py-3 text-sm"
@@ -86,16 +96,9 @@ function CategoryForm({
         />
         <p className="text-xs text-muted-foreground mt-1">{(form.description ?? "").length}/2000. Leave empty to keep this category manual only.</p>
       </div>
-      <div className="flex items-center gap-3">
-        <Label htmlFor="category-color">Color</Label>
-        <Input
-          id="category-color"
-          value={form.color ?? ""}
-          placeholder="#4f46e5"
-          className="w-32"
-          onChange={(e) => setForm({ ...form, color: e.target.value || null })}
-        />
-        {form.color && <span className="inline-block h-5 w-5 rounded border" style={{ backgroundColor: form.color }} />}
+      <div>
+        <Label>Color</Label>
+        <ColorPicker idPrefix="category" value={form.color ?? null} onChange={(color) => setForm({ ...form, color })} />
       </div>
       <div>
         <Label htmlFor="category-threshold">Confidence threshold: {(form.confidenceThreshold ?? 0.7).toFixed(2)}</Label>

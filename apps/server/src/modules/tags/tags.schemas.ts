@@ -59,3 +59,19 @@ export const reorderCategoriesBodySchema = v.object({
   a: reorderEntrySchema,
   b: reorderEntrySchema,
 });
+
+export const descriptionAssistantTargetTypeSchema = v.picklist(["tag", "category"]);
+
+export const descriptionAssistantBodySchema = v.object({
+  targetType: descriptionAssistantTargetTypeSchema,
+  name: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(60)),
+  description: v.pipe(v.string(), v.maxLength(2000)),
+});
+
+// Kept loose deliberately: no maxLength here. generateStructured parses the whole
+// reply with one safeParse and throws on any failure, so enforcing the 300 character
+// limit in the schema would turn a slightly-too-long answer into a 502 instead of
+// something usable. The limit is enforced after parsing, in trimDescriptionSuggestion.
+export const descriptionAssistantReplySchema = v.object({
+  description: v.string(),
+});

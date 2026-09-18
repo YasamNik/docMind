@@ -5,6 +5,8 @@ import {
   categoryIdSchema,
   colorSchema,
   createCategoryBodySchema,
+  descriptionAssistantBodySchema,
+  descriptionAssistantReplySchema,
   nameSchema,
   tagDescriptionSchema,
   tagIdSchema,
@@ -58,5 +60,16 @@ describe("tags schemas", () => {
   it("rejects a malformed parentId in the create and update category body schemas", () => {
     expect(v.safeParse(createCategoryBodySchema, { name: "Tax", parentId: "not-an-id" }).success).toBe(false);
     expect(v.safeParse(updateCategoryBodySchema, { parentId: "not-an-id" }).success).toBe(false);
+  });
+
+  it("accepts a valid description assistant request and rejects an unknown target type", () => {
+    expect(v.safeParse(descriptionAssistantBodySchema, { targetType: "tag", name: "Medical", description: "" }).success).toBe(true);
+    expect(v.safeParse(descriptionAssistantBodySchema, { targetType: "category", name: "Tax", description: "invoices" }).success).toBe(true);
+    expect(v.safeParse(descriptionAssistantBodySchema, { targetType: "widget", name: "Tax", description: "" }).success).toBe(false);
+    expect(v.safeParse(descriptionAssistantBodySchema, { targetType: "tag", name: "", description: "" }).success).toBe(false);
+  });
+
+  it("accepts a description assistant reply of any length, since the limit is enforced after parsing", () => {
+    expect(v.safeParse(descriptionAssistantReplySchema, { description: "a".repeat(1000) }).success).toBe(true);
   });
 });

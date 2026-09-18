@@ -3,8 +3,11 @@ import { createError } from "../../shared/errors/errors.js";
 import { asTxDb, type Database } from "../database/database.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import { createRulesRepository } from "../rules/rules.repository.js";
+import type { AiService } from "../ai/ai.usecases.js";
 import {
   buildCategoryPaths,
+  buildDescriptionAssistantPrompt,
+  descriptionAssistantLimit,
   newCategoryId,
   newTagId,
   nextSortOrder,
@@ -12,8 +15,10 @@ import {
   nowIso,
   sortByNameCI,
   sortCategories,
+  trimDescriptionSuggestion,
   wouldCreateCycle,
 } from "./tags.models.js";
+import { descriptionAssistantReplySchema } from "./tags.schemas.js";
 import { createTagsRepository } from "./tags.repository.js";
 import type { Category, CategoryWithMeta, NewCategory, NewTag, Tag, TagChip, TagWithCount } from "./tags.types.js";
 
@@ -44,7 +49,13 @@ function documentNotFound(documentId: string) {
 type TagPatch = { name?: string; color?: string | null; description?: string; confidenceThreshold?: number; autoApply?: boolean };
 type CategoryPatch = TagPatch & { parentId?: string | null; sortOrder?: number };
 
-export function createTagsService({ db }: { db: Database }) {
+export function createTagsService({
+  db,
+  aiService,
+}: {
+  db: Database;
+  aiService?: Pick<AiService, "generateStructured">;
+}) {
   const repository = createTagsRepository({ db });
   const documentsRepository = createDocumentsRepository({ db });
   const rulesRepository = createRulesRepository({ db });
@@ -327,6 +338,40 @@ export function createTagsService({ db }: { db: Database }) {
       await getTagOrThrow(userId, tagId);
       await repository.upsertDocumentTagManual({ documentId, tagId, manual: false });
       return repository.listTagsForDocument(documentId);
+    },
+
+    // Uses the rules model slot deliberately: this description is consumed by the
+    // sorter, which runs on that slot, so the same model should write it. Any error
+    // from aiService (including "no rules model configured") is left to propagate to
+    // the route unchanged so the client gets a clear, structured error to toast.
+    async suggestDescription({
+      userId,
+      targetType,
+      name,
+      description,
+    }: {
+      userId: string;
+      targetType: "tag" | "category";
+      name: string;
+      description: string;
+    }): Promise<{ suggestion: string }> {
+      if (!aiService) {
+        throw createError({
+          code: "tags.description_assistant_unavailable",
+          message: "The description assistant is not available.",
+          status: 500,
+        });
+      }
+      const { system, input } = buildDescriptionAssistantPrompt({ targetType, name, description });
+      const { data } = await aiService.generateStructured<{ description: string }>({
+        userId,
+        task: "rules",
+        schema: descriptionAssistantReplySchema,
+        schemaName: "description_suggestion",
+        system,
+        input,
+      });
+      return { suggestion: trimDescriptionSuggestion(data.description, descriptionAssistantLimit(targetType)) };
     },
   };
 }

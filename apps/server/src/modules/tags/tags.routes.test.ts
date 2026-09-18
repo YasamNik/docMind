@@ -1,11 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createTestApp } from "../../shared/test/app.test-utils.js";
+import type { AiAdapter, ModelInfo, StructuredResult, TestResult } from "../ai/ai.types.js";
+
+function fakeAdapter(replyRef: { current: unknown }): AiAdapter {
+  return {
+    generateStructured: vi.fn(async () => ({ data: replyRef.current, usage: { promptTokens: 10, completionTokens: 10 } }) as StructuredResult),
+    streamText: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
+    streamChat: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
+    embed: vi.fn(async () => ({ vectors: [], dimension: 0 })),
+    recognizeImage: vi.fn(async () => ({ text: "" })),
+    listModels: vi.fn(async () => [] as ModelInfo[]),
+    testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1, message: "ok" }) as TestResult),
+  };
+}
 
 describe("tags and categories routes", () => {
   it("requires a session on every route", async () => {
     const { app } = await createTestApp();
     expect((await app.request("/api/tags")).status).toBe(401);
     expect((await app.request("/api/categories")).status).toBe(401);
+    expect((await app.request("/api/tags/description-assistant", { method: "POST" })).status).toBe(401);
   });
 
   it("creates, lists, updates, and deletes a tag over HTTP", async () => {
@@ -157,5 +171,47 @@ describe("tags and categories routes", () => {
       body: JSON.stringify({ categoryId: null }),
     });
     expect(missing.status).toBe(404);
+  });
+
+  it("returns a description suggestion trimmed to 300 characters over HTTP", async () => {
+    const replyRef = { current: { description: `${"word ".repeat(80)}tail` } as unknown };
+    const adapter = fakeAdapter(replyRef);
+    const t = await createTestApp({ adapterFactories: { "openai-compatible": () => adapter, "anthropic": () => adapter } });
+    const { cookie, userId } = await t.signIn();
+    await t.services.settingsService.set(userId, { "ai.openrouter.apiKey": "sk-or-v1-test", "ai.model.rules": "openrouter://test-model" });
+
+    const res = await t.app.request("/api/tags/description-assistant", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ targetType: "tag", name: "Medical", description: "" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(typeof body.suggestion).toBe("string");
+    expect(body.suggestion.length).toBeLessThanOrEqual(300);
+  });
+
+  it("returns a clean error when no rules model is configured", async () => {
+    const { app, signIn } = await createTestApp();
+    const { cookie } = await signIn();
+    const res = await app.request("/api/tags/description-assistant", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ targetType: "tag", name: "Medical", description: "" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error.code).toBe("ai.slot_not_configured");
+  });
+
+  it("validates the description assistant body", async () => {
+    const { app, signIn } = await createTestApp();
+    const { cookie } = await signIn();
+    const res = await app.request("/api/tags/description-assistant", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ targetType: "widget", name: "Medical", description: "" }),
+    });
+    expect(res.status).toBe(400);
   });
 });

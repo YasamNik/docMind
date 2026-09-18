@@ -6,6 +6,7 @@ import {
   categoryIdSchema,
   createCategoryBodySchema,
   createTagBodySchema,
+  descriptionAssistantBodySchema,
   documentCategoryBodySchema,
   reorderCategoriesBodySchema,
   tagIdSchema,
@@ -60,6 +61,13 @@ export function registerTagsRoutes({
     const tagId = parseOrValidationError(tagIdSchema, c.req.param("id"));
     await tagsService.deleteTag({ userId: getUserId(c), tagId });
     return c.body(null, 204);
+  });
+
+  app.post("/api/tags/description-assistant", async (c) => {
+    const userId = getUserId(c);
+    const body = await parseJsonBody(c, descriptionAssistantBodySchema);
+    const result = await tagsService.suggestDescription({ userId, ...body });
+    return c.json(result);
   });
 
   app.get("/api/categories", async (c) => {

@@ -152,7 +152,7 @@ export function createServer({
     },
   });
   const aiService = createAiService({ settingsService, registry: aiProviderRegistry, adapterFactories });
-  const tagsService = createTagsService({ db });
+  const tagsService = createTagsService({ db, aiService });
   const rulesService = createRulesService({ db, aiService, documentsService });
   const extractionService: ExtractionService = createExtractionService({ db, documentsService, settingsService, registry, rulesService, aiService });
   const searchService = createSearchService({ db, aiService, settingsService });

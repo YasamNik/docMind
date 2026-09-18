@@ -103,4 +103,20 @@ describe("TagsPage", () => {
     fireEvent.click(dialog.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('A tag named "Rent" already exists.'));
   });
+
+  it("renders the description assistant and the color picker in the new tag dialog", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByText("New tag"));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByRole("button", { name: "Draft with AI" })).toBeInTheDocument();
+    expect(dialog.getByRole("group", { name: "Preset colors" })).toBeInTheDocument();
+    expect(dialog.getByLabelText("Custom color")).toBeInTheDocument();
+  });
+
+  it("reads Improve with AI in the edit dialog since the tag already has a description", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByText("Edit"));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByRole("button", { name: "Improve with AI" })).toBeInTheDocument();
+  });
 });
