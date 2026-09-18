@@ -124,6 +124,30 @@ describe("rules routes", () => {
     expect(jobs.filter((j) => j.type === "rules")).toHaveLength(0);
   });
 
+  it("returns evaluation history for a document via the evaluations endpoint", async () => {
+    const { t, cookie, userId, replyRef, runner } = await setup();
+    const category = await t.services.tagsService.createCategory({ userId, name: "Finance", description: "Money matters" });
+    const tag = await t.services.tagsService.createTag({ userId, name: "Receipt", description: "Receipts" });
+    const documentId = await uploadWithText(t, userId, "Invoice for consulting services");
+    replyRef.current = {
+      items: [
+        { type: "category", id: category.id, matched: true, confidence: 0.85, reasoning: "Relates to finances." },
+        { type: "tag", id: tag.id, matched: true, confidence: 0.9, reasoning: "Looks like a receipt." },
+      ],
+    };
+    await t.services.jobsService.enqueue({ userId, type: "rules", payload: { documentId, userId, mode: "initial" } });
+    await runner.runOnce();
+
+    const res = await t.app.request(`/api/documents/${documentId}/evaluations`, { headers: { cookie } });
+    expect(res.status).toBe(200);
+    const { evaluations } = await res.json();
+    expect(evaluations.length).toBeGreaterThanOrEqual(2);
+    const categoryEval = evaluations.find((e: { targetType: string }) => e.targetType === "category");
+    expect(categoryEval).toMatchObject({ targetId: category.id, itemName: "Finance", outcome: "applied" });
+    const tagEval = evaluations.find((e: { targetType: string; targetId: string }) => e.targetType === "tag" && e.targetId === tag.id);
+    expect(tagEval).toMatchObject({ itemName: "Receipt", outcome: "applied" });
+  });
+
   it("includes a document with a pending proposal in needs_review even when it has a category", async () => {
     const { t, cookie, userId, replyRef, runner } = await setup();
     const current = await t.services.tagsService.createCategory({ userId, name: "Personal" });
