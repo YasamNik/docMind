@@ -167,8 +167,10 @@ export function createSearchService({
       if (queryVector) vectorRows = await repository.searchVector(queryVector, VECTOR_RESULT_LIMIT);
     } catch (error) {
       const isSlotMissing = isAppError(error) && error.code === "ai.slot_not_configured";
-      const isSqlError = error instanceof Error && error.message.includes("no such column");
-      if (!isSlotMissing && !isSqlError) throw error;
+      const msg = error instanceof Error ? error.message : "";
+      const isNoEmbeddings = msg.includes("no such column") || msg.includes("vector_distance_cos") || msg.includes("F32_BLOB");
+      if (!isSlotMissing && !isNoEmbeddings) throw error;
+      logger.info("Vector search unavailable, falling back to keyword-only");
     }
 
     const keywordIds = dedupeOrderedIds(keywordRows.map((r) => r.documentId));
