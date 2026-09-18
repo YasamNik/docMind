@@ -41,7 +41,7 @@ describe("AppShell", () => {
     renderShell();
     expect(await screen.findByText("Inbox")).toBeInTheDocument();
     expect(screen.getByText("Needs review")).toBeInTheDocument();
-    expect(screen.getByText("Inbox").closest("a")).toHaveAttribute("href", "/documents?view=inbox");
+    expect(screen.getByText("Inbox").closest("a")).toHaveAttribute("href", "/inbox");
     expect(screen.getByText("Needs review").closest("a")).toHaveAttribute("href", "/documents?view=needs_review");
     expect(screen.getByText("Manage categories").closest("a")).toHaveAttribute("href", "/categories");
     expect(screen.getByText("Manage tags").closest("a")).toHaveAttribute("href", "/tags");

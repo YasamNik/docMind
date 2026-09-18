@@ -100,6 +100,7 @@ export function createDocumentsService({
         categoryId: null,
         categorySource: null,
         documentDate: null,
+        triageStatus: "pending",
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -156,6 +157,25 @@ export function createDocumentsService({
       const driver = await storageService.getDriver(userId, document.storageDriver);
       const stream = await driver.get({ key: document.storageKey });
       return { document, stream };
+    },
+
+    async acceptTriage({ userId, documentId, acceptTitle = false }: { userId: string; documentId: string; acceptTitle?: boolean }) {
+      const document = await getOrThrow(userId, documentId);
+      if (document.triageStatus !== "pending") {
+        throw createError({ code: "documents.already_reviewed", message: "Document is already reviewed", status: 400 });
+      }
+      const patch: Record<string, unknown> = { triageStatus: "reviewed", updatedAt: nowIso() };
+      if (acceptTitle && document.suggestedTitle) {
+        patch.name = document.suggestedTitle;
+        patch.suggestedTitle = null;
+      }
+      await repository.update({ userId, documentId, patch });
+      return getEnrichedOrThrow(userId, documentId);
+    },
+
+    async acceptTriageBatch({ userId, documentIds }: { userId: string; documentIds: string[] }) {
+      const updatedCount = await repository.updateTriageStatusBatch({ userId, documentIds, status: "reviewed" });
+      return { updatedCount };
     },
   };
 }

@@ -252,6 +252,15 @@ export function DocumentDetailPage() {
     },
     onError: (e: Error) => toast.error(e.message),
   });
+  const acceptTriage = useMutation({
+    mutationFn: () => documentsApi.acceptTriage(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["documents", id] });
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
+      toast.success("Document filed");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   if (!document) return null;
 
@@ -275,6 +284,11 @@ export function DocumentDetailPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {document.triageStatus === "pending" && (
+            <Button onClick={() => acceptTriage.mutate()} disabled={acceptTriage.isPending}>
+              Accept and file
+            </Button>
+          )}
           <Button variant="outline" render={<a href={documentsApi.fileUrl(id, true)} />}>
             Download
           </Button>

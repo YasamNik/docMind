@@ -460,6 +460,18 @@ export function createRulesService({
     return { appliedCount: acceptRows.length, dismissedCount: dismissRows.length };
   }
 
+  async function listEvaluationsForDocument({ userId, documentId }: { userId: string; documentId: string }) {
+    await documentsService.get({ userId, documentId });
+    const rows = await repository.listLatestEvaluationsForDocument({ userId, documentId });
+    const [tags, categories] = await Promise.all([tagsRepository.listTagsRaw(userId), tagsRepository.listCategoriesRaw(userId)]);
+    const paths = buildCategoryPaths(categories);
+    const tagNames = new Map(tags.map((t) => [t.id, t.name]));
+    return rows.map((r) => ({
+      ...r,
+      itemName: r.targetType === "tag" ? (tagNames.get(r.targetId) ?? "(deleted tag)") : (paths.get(r.targetId) ?? "(deleted category)"),
+    }));
+  }
+
   return {
     handler,
     hasAutomaticItems,
@@ -468,6 +480,7 @@ export function createRulesService({
     countForScope,
     dryRun,
     listProposalsForDocument,
+    listEvaluationsForDocument,
     listProposals,
     applyProposals,
   };

@@ -10,6 +10,7 @@ import { DocumentsPage } from "@/pages/documents/DocumentsPage";
 import { DocumentDetailPage } from "@/pages/documents/DocumentDetailPage";
 import { JobsPage } from "@/pages/jobs/JobsPage";
 import { SearchPage } from "@/pages/search/SearchPage";
+import { InboxPage } from "@/pages/inbox/InboxPage";
 import { SettingsPage } from "@/pages/settings/SettingsPage";
 import { SortingPage } from "@/pages/sorting/SortingPage";
 import { TagsPage } from "@/pages/tags/TagsPage";
@@ -40,7 +41,8 @@ export default function App() {
               </RequireSession>
             }
           >
-            <Route index element={<Navigate to="/documents" replace />} />
+            <Route index element={<Navigate to="/inbox" replace />} />
+            <Route path="/inbox" element={<InboxPage />} />
             <Route path="/documents" element={<DocumentsPage />} />
             <Route path="/documents/:id" element={<DocumentDetailPage />} />
             <Route path="/categories" element={<CategoriesPage />} />

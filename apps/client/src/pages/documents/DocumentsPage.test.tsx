@@ -108,10 +108,10 @@ describe("DocumentsPage", () => {
   });
 
   it("reads categoryId, tagId, and view from the URL and passes them to the api", async () => {
-    renderAt("/documents?categoryId=cat_1&tagId=tag_1&view=inbox");
+    renderAt("/documents?categoryId=cat_1&tagId=tag_1&view=needs_review");
     await screen.findByText("invoice.pdf");
-    expect(listMock).toHaveBeenCalledWith({ categoryId: "cat_1", tagId: "tag_1", view: "inbox" });
-    expect(screen.getByText("Inbox")).toBeInTheDocument();
+    expect(listMock).toHaveBeenCalledWith({ categoryId: "cat_1", tagId: "tag_1", view: "needs_review" });
+    expect(screen.getByText("Needs review")).toBeInTheDocument();
   });
 
   it("filters by category using the header dropdown and shows a clearable active filter", async () => {

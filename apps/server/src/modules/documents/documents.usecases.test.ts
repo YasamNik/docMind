@@ -77,6 +77,7 @@ describe("documents service", () => {
       embeddingError: null,
       categoryId: null,
       categorySource: null,
+      triageStatus: "reviewed",
       createdAt: t,
       updatedAt: t,
     });
@@ -124,27 +125,27 @@ describe("documents service", () => {
 });
 
 describe("documents service filters and enrichment", () => {
-  it("filters by view: inbox is unstarted rule status, needs_review is done with no category", async () => {
-    const { document: pending } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
-    const { document: done } = await documents.upload({ userId, name: "b.txt", mimeType: "text/plain", body: Readable.from(["b"]) });
+  it("filters by view: inbox is triageStatus pending, needs_review is done with no category", async () => {
+    const { document: inInbox } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    const { document: reviewed } = await documents.upload({ userId, name: "b.txt", mimeType: "text/plain", body: Readable.from(["b"]) });
     const repository = createDocumentsRepository({ db });
-    await repository.update({ userId, documentId: done.id, patch: { ruleStatus: "done" } });
+    await repository.update({ userId, documentId: reviewed.id, patch: { triageStatus: "reviewed", ruleStatus: "done" } });
 
     const inbox = await documents.list({ userId, view: "inbox" });
-    expect(inbox.map((d) => d.id)).toEqual([pending.id]);
+    expect(inbox.map((d) => d.id)).toEqual([inInbox.id]);
 
     const needsReview = await documents.list({ userId, view: "needs_review" });
-    expect(needsReview.map((d) => d.id)).toEqual([done.id]);
+    expect(needsReview.map((d) => d.id)).toEqual([reviewed.id]);
 
-    await repository.update({ userId, documentId: done.id, patch: { categoryId: "cat_0000000000000001", categorySource: "manual" } });
+    await repository.update({ userId, documentId: reviewed.id, patch: { categoryId: "cat_0000000000000001", categorySource: "manual" } });
     expect((await documents.list({ userId, view: "needs_review" })).map((d) => d.id)).toEqual([]);
   });
 
   it("counts() reports inbox and needs_review sizes without returning full rows", async () => {
     await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
-    const { document: done } = await documents.upload({ userId, name: "b.txt", mimeType: "text/plain", body: Readable.from(["b"]) });
+    const { document: reviewed } = await documents.upload({ userId, name: "b.txt", mimeType: "text/plain", body: Readable.from(["b"]) });
     const repository = createDocumentsRepository({ db });
-    await repository.update({ userId, documentId: done.id, patch: { ruleStatus: "done" } });
+    await repository.update({ userId, documentId: reviewed.id, patch: { triageStatus: "reviewed", ruleStatus: "done" } });
 
     expect(await documents.counts({ userId })).toEqual({ inbox: 1, needsReview: 1 });
     expect(await documents.counts({ userId: "someone-else" })).toEqual({ inbox: 0, needsReview: 0 });
@@ -252,6 +253,7 @@ describe("documents service filters and enrichment", () => {
       embeddingError: null,
       categoryId: "cat_0000000000000001",
       categorySource: "manual",
+      triageStatus: "reviewed",
       createdAt: t,
       updatedAt: t,
     };

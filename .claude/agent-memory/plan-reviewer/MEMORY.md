@@ -7,3 +7,4 @@
 - [Milestone C2 plan review](review-plan-c2.md) -- CategoryInput type gap, unverified PRAGMA foreign_keys, sidebar count mismatch, 8 rulings
 - [Milestone C3 plan review](review-plan-c3.md) -- missing proposals polling on Sorting page, 13 verified checks
 - [Phase 2 Find and Ask spec review](review-spec-phase2-find-and-ask.md) -- sqlite-vec/@libsql pooling infeasibility (verified in node_modules), unprotected internal setting, vec-wipe blast radius
+- [D4 Inbox triage spec review](review-spec-d4-inbox-triage.md) -- implementation already in tree before spec review, unflagged departure from Phase 2 decision 12, dead code and empty-state contradictions found

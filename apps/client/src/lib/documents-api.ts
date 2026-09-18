@@ -16,8 +16,22 @@ export type DocumentRow = {
   summaryStatus: "pending" | "processing" | "done" | "failed";
   summaryError: string | null;
   documentDate: string | null;
+  triageStatus: "pending" | "reviewed";
   createdAt: string;
   updatedAt: string;
+};
+
+export type EvaluationRow = {
+  id: string;
+  targetType: "tag" | "category";
+  targetId: string;
+  itemName: string;
+  matched: number;
+  confidence: number | null;
+  reasoning: string | null;
+  outcome: string;
+  proposalKind: string | null;
+  evaluatedAt: string;
 };
 
 export type DocumentDetail = DocumentRow & { extractedText: string | null; categorySource: "manual" | "auto" | null };
@@ -55,6 +69,15 @@ export const documentsApi = {
   },
   fileUrl(id: string, download = false) {
     return `/api/documents/${id}/file${download ? "?download=1" : ""}`;
+  },
+  async acceptTriage(id: string, acceptTitle = false) {
+    return (await api.json<{ document: DocumentDetail }>("POST", `/api/documents/${id}/triage`, { action: "accept", acceptTitle })).document;
+  },
+  async acceptTriageBatch(documentIds: string[]) {
+    return api.json<{ updatedCount: number }>("POST", "/api/documents/triage", { documentIds, action: "accept" });
+  },
+  async listEvaluations(id: string) {
+    return (await api.get<{ evaluations: EvaluationRow[] }>(`/api/documents/${id}/evaluations`)).evaluations;
   },
   upload(file: File, onProgress: (percent: number) => void) {
     return new Promise<UploadResult>((resolve, reject) => {

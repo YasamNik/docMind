@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../database/database.js";
 import { documentsTable } from "../documents/documents.tables.js";
 import { documentTagsTable } from "../tags/tags.tables.js";
@@ -129,6 +129,37 @@ export function createRulesRepository({ db }: { db: Database }) {
         .innerJoin(documentsTable, eq(sortEvaluationsTable.documentId, documentsTable.id))
         .where(and(eq(documentsTable.userId, userId), eq(sortEvaluationsTable.outcome, "proposed")))
         .orderBy(desc(sortEvaluationsTable.evaluatedAt), desc(sortEvaluationsTable.id));
+    },
+
+    async listLatestEvaluationsForDocument({ userId, documentId }: { userId: string; documentId: string }) {
+      type EvalRow = {
+        id: string;
+        targetType: string;
+        targetId: string;
+        matched: number;
+        confidence: number | null;
+        reasoning: string | null;
+        outcome: string;
+        proposalKind: string | null;
+        evaluatedAt: string;
+      };
+      return db.all<EvalRow>(sql`
+        SELECT se.id, se.target_type AS targetType, se.target_id AS targetId,
+               se.matched, se.confidence, se.reasoning, se.outcome,
+               se.proposal_kind AS proposalKind, se.evaluated_at AS evaluatedAt
+        FROM sort_evaluations se
+        INNER JOIN documents d ON se.document_id = d.id
+        WHERE se.document_id = ${documentId} AND d.user_id = ${userId}
+          AND se.id IN (
+            SELECT se2.id FROM sort_evaluations se2
+            WHERE se2.document_id = se.document_id
+              AND se2.target_type = se.target_type
+              AND se2.target_id = se.target_id
+            ORDER BY se2.evaluated_at DESC
+            LIMIT 1
+          )
+        ORDER BY se.evaluated_at DESC
+      `);
     },
   };
 }

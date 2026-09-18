@@ -4,7 +4,7 @@ import type { Context, Hono } from "hono";
 import { stream } from "hono/streaming";
 import { createError } from "../../shared/errors/errors.js";
 import { parseJsonBody, parseOrValidationError } from "../../shared/http/validate.js";
-import { documentIdSchema, listDocumentsQuerySchema, renameBodySchema, uploadQuerySchema } from "./documents.schemas.js";
+import { documentIdSchema, listDocumentsQuerySchema, renameBodySchema, triageActionSchema, triageBatchSchema, uploadQuerySchema } from "./documents.schemas.js";
 import type { DocumentsService } from "./documents.usecases.js";
 
 export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
@@ -72,5 +72,18 @@ export function registerDocumentsRoutes({
     const documentId = parseOrValidationError(documentIdSchema, c.req.param("id"));
     await documentsService.remove({ userId: getUserId(c), documentId });
     return c.body(null, 204);
+  });
+
+  app.post("/api/documents/:id/triage", async (c) => {
+    const documentId = parseOrValidationError(documentIdSchema, c.req.param("id"));
+    const { acceptTitle } = await parseJsonBody(c, triageActionSchema);
+    const document = await documentsService.acceptTriage({ userId: getUserId(c), documentId, acceptTitle });
+    return c.json({ document });
+  });
+
+  app.post("/api/documents/triage", async (c) => {
+    const { documentIds } = await parseJsonBody(c, triageBatchSchema);
+    const result = await documentsService.acceptTriageBatch({ userId: getUserId(c), documentIds });
+    return c.json(result);
   });
 }

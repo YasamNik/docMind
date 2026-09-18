@@ -25,8 +25,12 @@ export const documentsTable = sqliteTable(
     categoryId: text("category_id"),
     categorySource: text("category_source"),
     documentDate: text("document_date"),
+    triageStatus: text("triage_status").notNull().default("pending"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
-  (t) => [index("documents_user_category_idx").on(t.userId, t.categoryId)],
+  (t) => [
+    index("documents_user_category_idx").on(t.userId, t.categoryId),
+    index("documents_user_triage_idx").on(t.userId, t.triageStatus),
+  ],
 );

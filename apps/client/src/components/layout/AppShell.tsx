@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Briefcase, FileText, LogOut, MessageCircle, Search, Settings, Sparkles, Tags as TagsIcon } from "lucide-react";
+import { Briefcase, Inbox, LogOut, MessageCircle, Search, Settings, Sparkles, Tags as TagsIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
@@ -15,7 +15,7 @@ import { categoriesApi, tagsApi, type CategoryRow, type TagRow } from "@/lib/tag
 type RailTab = "files" | "search" | "tags" | "sorting" | "chat" | "settings" | "jobs";
 
 const railItems: { tab: RailTab; label: string; to: string; icon: LucideIcon }[] = [
-  { tab: "files", label: "Files", to: "/documents", icon: FileText },
+  { tab: "files", label: "Files", to: "/inbox", icon: Inbox },
   { tab: "search", label: "Search", to: "/search", icon: Search },
   { tab: "tags", label: "Tags", to: "/tags", icon: TagsIcon },
   { tab: "sorting", label: "Sorting", to: "/sorting", icon: Sparkles },
@@ -31,6 +31,7 @@ function tabForPath(pathname: string): RailTab {
   if (pathname.startsWith("/chat")) return "chat";
   if (pathname.startsWith("/settings")) return "settings";
   if (pathname.startsWith("/jobs")) return "jobs";
+  if (pathname.startsWith("/inbox") || pathname.startsWith("/documents")) return "files";
   return "files";
 }
 
@@ -108,10 +109,10 @@ function FilesPanel({ inboxCount, needsReviewCount }: { inboxCount: number; need
       </div>
 
       <nav className="flex flex-col gap-1">
+        <CountRow to="/inbox" label="Inbox" count={inboxCount} />
         <NavLink to="/documents" end className={navPillClass}>
           All documents
         </NavLink>
-        <CountRow to="/documents?view=inbox" label="Inbox" count={inboxCount} />
         <CountRow to="/documents?view=needs_review" label="Needs review" count={needsReviewCount} />
       </nav>
 

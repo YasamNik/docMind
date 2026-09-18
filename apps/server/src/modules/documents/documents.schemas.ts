@@ -18,3 +18,13 @@ export const listDocumentsQuerySchema = v.object({
   tagId: v.optional(tagIdSchema),
   view: v.optional(documentViewSchema, "all"),
 });
+
+export const triageActionSchema = v.object({
+  action: v.literal("accept"),
+  acceptTitle: v.optional(v.boolean(), false),
+});
+
+export const triageBatchSchema = v.object({
+  documentIds: v.pipe(v.array(documentIdSchema), v.minLength(1), v.maxLength(100)),
+  action: v.literal("accept"),
+});

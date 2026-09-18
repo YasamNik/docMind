@@ -29,6 +29,7 @@ const listColumns = {
   categoryId: documentsTable.categoryId,
   categorySource: documentsTable.categorySource,
   documentDate: documentsTable.documentDate,
+  triageStatus: documentsTable.triageStatus,
   createdAt: documentsTable.createdAt,
   updatedAt: documentsTable.updatedAt,
 };
@@ -43,7 +44,7 @@ export function createDocumentsRepository({ db }: { db: Database }) {
   // cannot drift between the row fetch and the count-only path.
   async function buildViewConditions(userId: string, view: DocumentView) {
     const conditions = [eq(documentsTable.userId, userId)];
-    if (view === "inbox") conditions.push(inArray(documentsTable.ruleStatus, ["pending", "processing"]));
+    if (view === "inbox") conditions.push(eq(documentsTable.triageStatus, "pending"));
     if (view === "needs_review") {
       conditions.push(eq(documentsTable.ruleStatus, "done"));
       const proposedRows = await db
@@ -185,6 +186,40 @@ export function createDocumentsRepository({ db }: { db: Database }) {
 
     async remove({ userId, documentId }: { userId: string; documentId: string }) {
       await db.delete(documentsTable).where(and(eq(documentsTable.userId, userId), eq(documentsTable.id, documentId)));
+    },
+
+    async updateTriageStatus({
+      userId,
+      documentId,
+      status,
+      tx = db,
+    }: {
+      userId: string;
+      documentId: string;
+      status: string;
+      tx?: Database;
+    }) {
+      await tx
+        .update(documentsTable)
+        .set({ triageStatus: status, updatedAt: new Date().toISOString() })
+        .where(and(eq(documentsTable.userId, userId), eq(documentsTable.id, documentId)));
+    },
+
+    async updateTriageStatusBatch({
+      userId,
+      documentIds,
+      status,
+    }: {
+      userId: string;
+      documentIds: string[];
+      status: string;
+    }): Promise<number> {
+      if (documentIds.length === 0) return 0;
+      const result = await db
+        .update(documentsTable)
+        .set({ triageStatus: status, updatedAt: new Date().toISOString() })
+        .where(and(eq(documentsTable.userId, userId), inArray(documentsTable.id, documentIds), eq(documentsTable.triageStatus, "pending")));
+      return result.rowsAffected;
     },
   };
 }

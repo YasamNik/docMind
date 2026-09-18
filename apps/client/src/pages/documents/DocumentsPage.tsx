@@ -9,7 +9,7 @@ import { documentsApi, type DocumentListFilters, type DocumentRow } from "@/lib/
 import { formatBytes, formatDate, formatDocumentDate } from "@/lib/format";
 import { categoriesApi, tagsApi } from "@/lib/tags-api";
 
-const VIEW_LABELS: Record<string, string> = { inbox: "Inbox", needs_review: "Needs review" };
+const VIEW_LABELS: Record<string, string> = { needs_review: "Needs review" };
 
 const MIME_LABELS: Record<string, string> = {
   "application/pdf": "PDF",
