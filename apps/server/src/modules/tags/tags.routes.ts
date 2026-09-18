@@ -13,6 +13,7 @@ import {
   updateTagBodySchema,
 } from "./tags.schemas.js";
 import type { TagChip } from "./tags.types.js";
+import type { RulesService } from "../rules/rules.usecases.js";
 import type { TagsService } from "./tags.usecases.js";
 
 type EnrichedDocument = Document & { categoryPath: string | null; tags: TagChip[] };
@@ -29,10 +30,12 @@ function omitExtractedText(document: EnrichedDocument): DocumentListRow {
 export function registerTagsRoutes({
   app,
   tagsService,
+  rulesService,
   getUserId,
 }: {
   app: Hono;
   tagsService: TagsService;
+  rulesService?: RulesService;
   getUserId: (c: Context) => string;
 }) {
   app.get("/api/tags", async (c) => {
@@ -92,21 +95,33 @@ export function registerTagsRoutes({
   app.put("/api/documents/:id/category", async (c) => {
     const documentId = parseOrValidationError(documentIdSchema, c.req.param("id"));
     const { categoryId } = await parseJsonBody(c, documentCategoryBodySchema);
-    const document = await tagsService.setDocumentCategory({ userId: getUserId(c), documentId, categoryId });
+    const userId = getUserId(c);
+    const document = await tagsService.setDocumentCategory({ userId, documentId, categoryId });
+    if (rulesService && categoryId) {
+      rulesService.recordCorrection({ userId, documentId, targetType: "category", targetId: categoryId, signal: "positive" }).catch(() => {});
+    }
     return c.json({ document: document ? omitExtractedText(document) : null });
   });
 
   app.post("/api/documents/:id/tags/:tagId", async (c) => {
     const documentId = parseOrValidationError(documentIdSchema, c.req.param("id"));
     const tagId = parseOrValidationError(tagIdSchema, c.req.param("tagId"));
-    const tags = await tagsService.setDocumentTag({ userId: getUserId(c), documentId, tagId });
+    const userId = getUserId(c);
+    const tags = await tagsService.setDocumentTag({ userId, documentId, tagId });
+    if (rulesService) {
+      rulesService.recordCorrection({ userId, documentId, targetType: "tag", targetId: tagId, signal: "positive" }).catch(() => {});
+    }
     return c.json({ tags });
   });
 
   app.delete("/api/documents/:id/tags/:tagId", async (c) => {
     const documentId = parseOrValidationError(documentIdSchema, c.req.param("id"));
     const tagId = parseOrValidationError(tagIdSchema, c.req.param("tagId"));
-    const tags = await tagsService.clearDocumentTag({ userId: getUserId(c), documentId, tagId });
+    const userId = getUserId(c);
+    const tags = await tagsService.clearDocumentTag({ userId, documentId, tagId });
+    if (rulesService) {
+      rulesService.recordCorrection({ userId, documentId, targetType: "tag", targetId: tagId, signal: "negative" }).catch(() => {});
+    }
     return c.json({ tags });
   });
 }

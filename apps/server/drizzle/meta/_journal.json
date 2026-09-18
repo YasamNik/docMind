@@ -85,6 +85,13 @@
       "when": 1789727759175,
       "tag": "0011_add_saved_searches",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1789729374212,
+      "tag": "0012_add_rule_examples",
+      "breakpoints": true
     }
   ]
 }

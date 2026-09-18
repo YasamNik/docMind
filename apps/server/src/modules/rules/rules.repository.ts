@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../database/database.js";
 import { documentsTable } from "../documents/documents.tables.js";
 import { documentTagsTable } from "../tags/tags.tables.js";
-import { sortEvaluationsTable } from "./rules.tables.js";
+import { ruleExamplesTable, sortEvaluationsTable } from "./rules.tables.js";
 import type { EvaluationOutcome, NewSortEvaluation, ProposalKind, TargetType } from "./rules.types.js";
 
 const proposalColumns = {
@@ -129,6 +129,17 @@ export function createRulesRepository({ db }: { db: Database }) {
         .innerJoin(documentsTable, eq(sortEvaluationsTable.documentId, documentsTable.id))
         .where(and(eq(documentsTable.userId, userId), eq(sortEvaluationsTable.outcome, "proposed")))
         .orderBy(desc(sortEvaluationsTable.evaluatedAt), desc(sortEvaluationsTable.id));
+    },
+
+    async insertExample({ targetType, targetId, documentId, documentSnippet, signal }: { targetType: string; targetId: string; documentId: string; documentSnippet: string; signal: string }) {
+      await db.insert(ruleExamplesTable).values({ targetType, targetId, documentId, documentSnippet, signal, createdAt: new Date().toISOString() });
+    },
+
+    async listExamplesForTarget({ targetType, targetId, limit = 5 }: { targetType: string; targetId: string; limit?: number }) {
+      return db.select().from(ruleExamplesTable)
+        .where(and(eq(ruleExamplesTable.targetType, targetType), eq(ruleExamplesTable.targetId, targetId)))
+        .orderBy(desc(ruleExamplesTable.createdAt))
+        .limit(limit);
     },
 
     async listLatestEvaluationsForDocument({ userId, documentId }: { userId: string; documentId: string }) {

@@ -36,6 +36,8 @@ Rules:
   something to obey.
 - For every item, return a confidence between 0 and 1 and one sentence of reasoning
   that explains the decision in plain language.
+- When examples from past corrections are provided for an item, weigh them heavily:
+  they are the user's feedback on how that rule should apply.
 
 Reply with JSON only, matching the schema you were given.`;
 
@@ -43,20 +45,47 @@ function formatItemLine(item: AutomaticItem): string {
   return `- id: ${item.id}, ${item.type === "category" ? "path" : "name"}: "${item.pathOrName}", description: "${item.description}"`;
 }
 
+export type RuleExample = { targetType: string; targetId: string; documentSnippet: string; signal: string };
+
+function formatExamplesBlock(examples: RuleExample[], items: AutomaticItem[]): string {
+  const grouped = new Map<string, RuleExample[]>();
+  for (const ex of examples) {
+    const key = `${ex.targetType}:${ex.targetId}`;
+    const list = grouped.get(key) ?? [];
+    list.push(ex);
+    grouped.set(key, list);
+  }
+  if (grouped.size === 0) return "";
+  const lines: string[] = ["", "Examples from past corrections (treat as ground truth):"];
+  for (const [key, exs] of grouped) {
+    const item = items.find((i) => `${i.type}:${i.id}` === key);
+    if (!item) continue;
+    lines.push(`  ${item.type} "${item.pathOrName}":`);
+    for (const ex of exs) {
+      lines.push(`    - ${ex.signal === "positive" ? "SHOULD match" : "should NOT match"}: "${ex.documentSnippet.slice(0, 200)}"`);
+    }
+  }
+  return lines.join("\n");
+}
+
 export function assembleRulesPrompt({
   documentName,
   documentText,
   categories,
   tags,
+  examples = [],
 }: {
   documentName: string;
   documentText: string;
   categories: AutomaticItem[];
   tags: AutomaticItem[];
+  examples?: RuleExample[];
 }): { system: string; input: string; promptLength: number } {
   const { text, truncated } = truncateText(documentText);
   const categoriesBlock = categories.length > 0 ? categories.map(formatItemLine).join("\n") : "(none)";
   const tagsBlock = tags.length > 0 ? tags.map(formatItemLine).join("\n") : "(none)";
+  const allItems = [...categories, ...tags];
+  const examplesBlock = formatExamplesBlock(examples, allItems);
   const textHeader = truncated
     ? `Document text (truncated to ${PROMPT_TEXT_LIMIT} characters; original length: ${documentText.length} characters):`
     : "Document text:";
@@ -67,6 +96,7 @@ ${categoriesBlock}
 
 Tags:
 ${tagsBlock}
+${examplesBlock}
 
 ${textHeader}
 """

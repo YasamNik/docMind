@@ -174,7 +174,7 @@ export function createServer({
   registerExtractionRoutes({ app, extractionService, getUserId });
   registerJobsRoutes({ app, jobsService, getUserId });
   registerAiRoutes({ app, aiService, settingsService, getUserId });
-  registerTagsRoutes({ app, tagsService, getUserId });
+  registerTagsRoutes({ app, tagsService, rulesService, getUserId });
   registerRulesRoutes({ app, rulesService, getUserId });
   registerSearchRoutes({ app, searchService, getUserId });
   registerSummaryRoutes({ app, summaryService, getUserId });

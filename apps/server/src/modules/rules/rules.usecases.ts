@@ -147,11 +147,16 @@ export function createRulesService({
   }): Promise<{ modelId: string; results: EvaluationResult[] }> {
     const { providerId, model } = await aiService.resolveSlot(userId, "rules");
     const modelId = buildModelUri(providerId, model);
+    const exampleRows = (await Promise.all(
+      targetItems.map((item) => repository.listExamplesForTarget({ targetType: item.type, targetId: item.id })),
+    )).flat();
+    const examples = exampleRows.map((e) => ({ targetType: e.targetType, targetId: e.targetId, documentSnippet: e.documentSnippet, signal: e.signal }));
     const { system, input, promptLength } = assembleRulesPrompt({
       documentName: document.name,
       documentText: document.extractedText ?? "",
       categories: targetItems.filter((i) => i.type === "category"),
       tags: targetItems.filter((i) => i.type === "tag"),
+      examples,
     });
     if (promptLength > PROMPT_WARNING_THRESHOLD) {
       logger.warn({ userId, documentId, promptLength }, "Rules prompt exceeds the size warning threshold");
@@ -472,6 +477,24 @@ export function createRulesService({
     }));
   }
 
+  async function recordCorrection({
+    userId,
+    documentId,
+    targetType,
+    targetId,
+    signal,
+  }: {
+    userId: string;
+    documentId: string;
+    targetType: "tag" | "category";
+    targetId: string;
+    signal: "positive" | "negative";
+  }) {
+    const doc = await documentsService.get({ userId, documentId });
+    const snippet = (doc.extractedText ?? doc.name).slice(0, 500);
+    await repository.insertExample({ targetType, targetId, documentId, documentSnippet: snippet, signal });
+  }
+
   return {
     handler,
     hasAutomaticItems,
@@ -483,6 +506,7 @@ export function createRulesService({
     listEvaluationsForDocument,
     listProposals,
     applyProposals,
+    recordCorrection,
   };
 }
 

@@ -29,3 +29,19 @@ export const sortEvaluationsTable = sqliteTable(
     index("sort_evaluations_outcome_document_idx").on(t.outcome, t.documentId),
   ],
 );
+
+export const ruleExamplesTable = sqliteTable(
+  "rule_examples",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    targetType: text("target_type").notNull(),
+    targetId: text("target_id").notNull(),
+    documentId: text("document_id")
+      .notNull()
+      .references(() => documentsTable.id, { onDelete: "cascade" }),
+    documentSnippet: text("document_snippet").notNull(),
+    signal: text("signal").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("rule_examples_target_idx").on(t.targetType, t.targetId)],
+);
