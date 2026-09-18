@@ -20,6 +20,12 @@ auth client refreshes.
 tasks landed. This plan assumes `storage.routes.ts`, `listDriverSummaries`, the
 `describeLocation` contract method and the rebuilt Storage tab already exist.
 
+**Task order correction, made during execution.** Task 3 runs before Task 2. Task 2's
+route tests need a registered OAuth driver to exercise connect and callback, and the only
+one is the Drive driver from Task 3. Task 3 therefore also owns the `StorageOAuth` type
+and the `oauth?` field on `StorageDriverDefinition`, which the Interfaces block of Task 2
+defines. Task 2 keeps the routes themselves.
+
 ## Global Constraints
 
 - No em dashes anywhere: code, comments, tests, docs, UI copy, commit messages.
