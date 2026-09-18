@@ -8,3 +8,5 @@
 - [Milestone C3 plan review](review-plan-c3.md) -- missing proposals polling on Sorting page, 13 verified checks
 - [Phase 2 Find and Ask spec review](review-spec-phase2-find-and-ask.md) -- sqlite-vec/@libsql pooling infeasibility (verified in node_modules), unprotected internal setting, vec-wipe blast radius
 - [D4 Inbox triage spec review](review-spec-d4-inbox-triage.md) -- implementation already in tree before spec review, unflagged departure from Phase 2 decision 12, dead code and empty-state contradictions found
+- [Smart fields spec review](review-spec-smart-fields.md) -- backfill "rerun exists" claim was false, currency-merge ruling, module boundary gap
+- [LLM reply partial-tolerance lesson](lesson-llm-reply-partial-tolerance.md) -- generateStructured fails the whole reply on any bad array element; check the reply schema is loose where the spec claims per-row tolerance, mirror rules.schemas.ts
