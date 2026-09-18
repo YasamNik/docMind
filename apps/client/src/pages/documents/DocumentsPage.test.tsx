@@ -6,6 +6,13 @@ import { DocumentsPage } from "./DocumentsPage";
 
 afterEach(() => cleanup());
 
+// Local noon on purpose: the date filter reasons about local calendar days, so fixture
+// timestamps are built from local time instead of literal UTC "Z" strings to land on the
+// intended day regardless of the machine's timezone.
+function localIso(year: number, month: number, day: number) {
+  return new Date(year, month - 1, day, 12, 0, 0).toISOString();
+}
+
 const listMock = vi.fn(async (_filters?: unknown) => [
   {
     id: "doc_1",
@@ -24,8 +31,9 @@ const listMock = vi.fn(async (_filters?: unknown) => [
     suggestedTitle: null,
     summaryStatus: "done",
     summaryError: null,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
+    documentDate: "2026-01-01",
+    createdAt: localIso(2026, 1, 1),
+    updatedAt: localIso(2026, 1, 1),
   },
   {
     id: "doc_2",
@@ -41,8 +49,9 @@ const listMock = vi.fn(async (_filters?: unknown) => [
     suggestedTitle: null,
     summaryStatus: "done",
     summaryError: null,
-    createdAt: "2026-01-02T00:00:00.000Z",
-    updatedAt: "2026-01-02T00:00:00.000Z",
+    documentDate: null,
+    createdAt: localIso(2026, 1, 2),
+    updatedAt: localIso(2026, 1, 2),
   },
 ]);
 
@@ -141,5 +150,41 @@ describe("DocumentsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Clear category filter" }));
     await waitFor(() => expect(listMock).toHaveBeenLastCalledWith({ categoryId: undefined, tagId: undefined, view: "all" }));
     expect(screen.queryByRole("button", { name: "Clear category filter" })).not.toBeInTheDocument();
+  });
+
+  it("shows the extracted document date or a dash in the Doc Date column", async () => {
+    const { container } = renderAt("/documents");
+    await screen.findByText("invoice.pdf");
+    const body = tableBody(container);
+    expect(within(body).getByText("Jan 1, 2026")).toBeInTheDocument();
+    expect(within(body).getByText("-")).toBeInTheDocument();
+  });
+
+  it("filters by a custom added date range and shows a clearable active filter", async () => {
+    renderAt("/documents");
+    await screen.findByText("invoice.pdf");
+    await screen.findByText("note.txt");
+    fireEvent.change(screen.getByLabelText("Filter by added date"), { target: { value: "custom" } });
+    fireEvent.change(await screen.findByLabelText("Filter by added date, start date"), { target: { value: "2026-01-01" } });
+    fireEvent.change(screen.getByLabelText("Filter by added date, end date"), { target: { value: "2026-01-01" } });
+    await waitFor(() => expect(screen.queryByText("note.txt")).not.toBeInTheDocument());
+    expect(screen.getByText("invoice.pdf")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear added date filter" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear added date filter" }));
+    await waitFor(() => expect(screen.getByText("note.txt")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Clear added date filter" })).not.toBeInTheDocument();
+  });
+
+  it("filters out documents with no document date once a doc date range is set", async () => {
+    renderAt("/documents");
+    await screen.findByText("invoice.pdf");
+    await screen.findByText("note.txt");
+    fireEvent.change(screen.getByLabelText("Filter by document date"), { target: { value: "custom" } });
+    fireEvent.change(await screen.findByLabelText("Filter by document date, start date"), { target: { value: "2026-01-01" } });
+    fireEvent.change(screen.getByLabelText("Filter by document date, end date"), { target: { value: "2026-01-01" } });
+    await waitFor(() => expect(screen.queryByText("note.txt")).not.toBeInTheDocument());
+    expect(screen.getByText("invoice.pdf")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear document date filter" })).toBeInTheDocument();
   });
 });

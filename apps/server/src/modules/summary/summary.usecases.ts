@@ -74,7 +74,14 @@ export function createSummaryService({
       await documentsRepository.update({
         userId,
         documentId,
-        patch: { summary: data.summary, suggestedTitle: data.suggestedTitle, summaryStatus: "done", summaryError: null, updatedAt: nowIso() },
+        patch: {
+          summary: data.summary,
+          suggestedTitle: data.suggestedTitle,
+          documentDate: data.documentDate,
+          summaryStatus: "done",
+          summaryError: null,
+          updatedAt: nowIso(),
+        },
       });
     } catch (error) {
       const message = ((error as Error).message ?? String(error)).slice(0, 2000);

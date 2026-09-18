@@ -99,6 +99,7 @@ export function createDocumentsService({
         summaryError: null,
         categoryId: null,
         categorySource: null,
+        documentDate: null,
         createdAt: timestamp,
         updatedAt: timestamp,
       };

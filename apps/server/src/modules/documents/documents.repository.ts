@@ -28,6 +28,7 @@ const listColumns = {
   summaryError: documentsTable.summaryError,
   categoryId: documentsTable.categoryId,
   categorySource: documentsTable.categorySource,
+  documentDate: documentsTable.documentDate,
   createdAt: documentsTable.createdAt,
   updatedAt: documentsTable.updatedAt,
 };

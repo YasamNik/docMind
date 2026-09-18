@@ -24,6 +24,7 @@ export const documentsTable = sqliteTable(
     summaryError: text("summary_error"),
     categoryId: text("category_id"),
     categorySource: text("category_source"),
+    documentDate: text("document_date"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },

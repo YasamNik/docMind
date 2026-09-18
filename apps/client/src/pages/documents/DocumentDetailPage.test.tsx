@@ -22,6 +22,7 @@ const documentDetail = {
   suggestedTitle: null as string | null,
   summaryStatus: "done" as "pending" | "processing" | "done" | "failed",
   summaryError: null as string | null,
+  documentDate: null as string | null,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
@@ -84,6 +85,24 @@ function renderPage() {
   );
   return { invalidateSpy };
 }
+
+describe("DocumentDetailPage document date", () => {
+  afterEach(() => {
+    getMock.mockImplementation(async () => documentDetail);
+  });
+
+  it("shows the extracted document date when present", async () => {
+    getMock.mockImplementationOnce(async () => ({ ...documentDetail, documentDate: "2026-02-14" }));
+    renderPage();
+    expect(await screen.findByText(/document date Feb 14, 2026/)).toBeInTheDocument();
+  });
+
+  it("does not show a document date line when there is none", async () => {
+    renderPage();
+    await screen.findByText("Rent");
+    expect(screen.queryByText(/document date/)).not.toBeInTheDocument();
+  });
+});
 
 describe("DocumentDetailPage pickers", () => {
   it("shows the current tag and lets the category be changed", async () => {

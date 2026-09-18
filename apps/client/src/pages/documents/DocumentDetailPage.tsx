@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { documentsApi, type DocumentDetail } from "@/lib/documents-api";
-import { formatBytes, formatDate } from "@/lib/format";
+import { formatBytes, formatDate, formatDocumentDate } from "@/lib/format";
 import { jobsApi } from "@/lib/jobs-api";
 import { sortApi, type ProposalRow } from "@/lib/sort-api";
 import { categoriesApi, documentCategorizationApi, tagsApi } from "@/lib/tags-api";
@@ -271,6 +271,7 @@ export function DocumentDetailPage() {
           <h1 className="font-heading text-2xl break-all mt-1">{document.name}</h1>
           <p className="text-sm text-muted-foreground mt-1">
             {document.mimeType ?? "unknown type"} · {document.sizeBytes == null ? "" : formatBytes(document.sizeBytes)} · added {formatDate(document.createdAt)}
+            {document.documentDate && <> · document date {formatDocumentDate(document.documentDate)}</>}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">

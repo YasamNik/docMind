@@ -15,6 +15,7 @@ export type DocumentRow = {
   suggestedTitle: string | null;
   summaryStatus: "pending" | "processing" | "done" | "failed";
   summaryError: string | null;
+  documentDate: string | null;
   createdAt: string;
   updatedAt: string;
 };

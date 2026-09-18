@@ -19,7 +19,7 @@ function fakeAdapter(replyRef: { current: unknown }): AiAdapter {
 }
 
 async function setup() {
-  const replyRef = { current: { summary: "A short summary.", suggestedTitle: "Better Title" } as unknown };
+  const replyRef = { current: { summary: "A short summary.", suggestedTitle: "Better Title", documentDate: "2026-03-05" } as unknown };
   const adapter = fakeAdapter(replyRef);
   const t = await createTestApp({ adapterFactories: { "openai-compatible": () => adapter, "anthropic": () => adapter } });
   const { userId } = await t.signIn();
@@ -44,8 +44,20 @@ describe("summary service, summarize job", () => {
     const document = await t.services.documentsService.get({ userId, documentId });
     expect(document.summary).toBe("A short summary.");
     expect(document.suggestedTitle).toBe("Better Title");
+    expect(document.documentDate).toBe("2026-03-05");
     expect(document.summaryStatus).toBe("done");
     expect(document.summaryError).toBeNull();
+  });
+
+  it("stores a null documentDate when the model finds no clear date", async () => {
+    const { t, userId, runner, replyRef } = await setup();
+    replyRef.current = { summary: "A short summary.", suggestedTitle: "Better Title", documentDate: null };
+    const documentId = await uploadWithText(t, userId, "Some undated note.");
+    await t.services.jobsService.enqueue({ userId, type: "summarize", payload: { documentId, userId } });
+    expect(await runner.runOnce()).toBe(1);
+
+    const document = await t.services.documentsService.get({ userId, documentId });
+    expect(document.documentDate).toBeNull();
   });
 
   it("marks done with no summary when the extracted text is empty", async () => {
@@ -59,6 +71,7 @@ describe("summary service, summarize job", () => {
     expect(after.summaryStatus).toBe("done");
     expect(after.summary).toBeNull();
     expect(after.suggestedTitle).toBeNull();
+    expect(after.documentDate).toBeNull();
   });
 
   it("reverts to pending and records the error when the model call fails", async () => {
