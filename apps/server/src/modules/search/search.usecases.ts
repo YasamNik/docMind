@@ -166,9 +166,9 @@ export function createSearchService({
       const queryVector = vectors[0];
       if (queryVector) vectorRows = await repository.searchVector(queryVector, VECTOR_RESULT_LIMIT);
     } catch (error) {
-      // No embedding model configured: fall back to keyword-only search. Any other
-      // failure (a misconfigured or unreachable provider) is a real error and propagates.
-      if (!isAppError(error) || error.code !== "ai.slot_not_configured") throw error;
+      const isSlotMissing = isAppError(error) && error.code === "ai.slot_not_configured";
+      const isSqlError = error instanceof Error && error.message.includes("no such column");
+      if (!isSlotMissing && !isSqlError) throw error;
     }
 
     const keywordIds = dedupeOrderedIds(keywordRows.map((r) => r.documentId));
