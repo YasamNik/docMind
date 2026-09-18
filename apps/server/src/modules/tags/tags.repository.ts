@@ -5,7 +5,6 @@ import { documentsTable } from "../documents/documents.tables.js";
 // documents.repository.ts reads document_fields directly: this repository owns the
 // one-time move of the retired documentType values, not the fields module.
 import { documentFieldsTable } from "../fields/fields.tables.js";
-import type { ExtractedField } from "../fields/fields.types.js";
 import { categoriesTable, documentTagsTable, documentTypesTable, tagsTable } from "./tags.tables.js";
 import type { Category, DocumentTag, DocumentType, NewCategory, NewDocumentType, NewTag, Tag, TagChip } from "./tags.types.js";
 
@@ -151,12 +150,14 @@ export function createTagsRepository({ db }: { db: Database }) {
 
     // The one time migration off the retired documentType smart field. Read once per
     // ensureTypesSeeded call, then deleted as a batch once every row has been resolved.
-    async listDocumentTypeFieldRows({ userId }: { userId: string }): Promise<ExtractedField[]> {
-      const rows = await db
-        .select()
+    // Only documentId and value matter to the migration, and key is no longer a FieldKey
+    // by the time this runs: documentType left FIELD_KEYS in commit 052e5a0, these rows
+    // are its only remaining trace.
+    async listDocumentTypeFieldRows({ userId }: { userId: string }): Promise<{ documentId: string; value: string }[]> {
+      return db
+        .select({ documentId: documentFieldsTable.documentId, value: documentFieldsTable.value })
         .from(documentFieldsTable)
         .where(and(eq(documentFieldsTable.userId, userId), eq(documentFieldsTable.key, "documentType")));
-      return rows as ExtractedField[];
     },
     async deleteDocumentTypeFieldRows({ userId, tx = db }: { userId: string; tx?: Database }) {
       await tx.delete(documentFieldsTable).where(and(eq(documentFieldsTable.userId, userId), eq(documentFieldsTable.key, "documentType")));

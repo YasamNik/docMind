@@ -1,17 +1,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createTestDatabase } from "../../shared/test/database.test-utils.js";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
+import { createTestTagsService } from "../../shared/test/tags-service.test-utils.js";
 import type { Database } from "../database/database.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import { newDocumentId, nowIso } from "../documents/documents.models.js";
 import type { NewDocument } from "../documents/documents.types.js";
 import { createFieldsRepository } from "../fields/fields.repository.js";
 import { createRulesRepository } from "../rules/rules.repository.js";
-import { createSettingsRegistry } from "../settings/settings.registry.js";
-import { createSettingsService } from "../settings/settings.usecases.js";
 import { DOCUMENT_TYPE_PRESETS } from "./tags.models.js";
 import { createTagsRepository } from "./tags.repository.js";
-import { tagsSettingDefinitions } from "./tags.settings.js";
 import { createTagsService } from "./tags.usecases.js";
 
 const userId = "user-1";
@@ -19,20 +17,9 @@ let tags: ReturnType<typeof createTagsService>;
 let tagsRepository: ReturnType<typeof createTagsRepository>;
 let documents: ReturnType<typeof createDocumentsRepository>;
 
-// Not a full settings service double: it is the real thing, scoped to the one
-// registry tags needs, matching the pattern documents.usecases.test.ts already uses
-// for storage settings.
-function testSettingsService(db: Database) {
-  return createSettingsService({
-    db,
-    registry: createSettingsRegistry(tagsSettingDefinitions),
-    config: { settingsEncryptionKey: "44".repeat(32), env: {} },
-  });
-}
-
 beforeEach(async () => {
   const { db } = await createTestDatabase();
-  tags = createTagsService({ db, settingsService: testSettingsService(db) });
+  tags = createTestTagsService({ db });
   tagsRepository = createTagsRepository({ db });
   documents = createDocumentsRepository({ db });
 });
@@ -306,7 +293,7 @@ describe("tags service", () => {
 
   it("clears applied_by_auto on every document when a tag's auto_apply is turned off", async () => {
     const { db: freshDb } = await createTestDatabase();
-    const freshTags = createTagsService({ db: freshDb, settingsService: testSettingsService(freshDb) });
+    const freshTags = createTestTagsService({ db: freshDb });
     const freshTagsRepository = createTagsRepository({ db: freshDb });
     const freshDocuments = createDocumentsRepository({ db: freshDb });
     const freshRulesRepository = createRulesRepository({ db: freshDb });
@@ -320,7 +307,7 @@ describe("tags service", () => {
 
   it("deletes a tag's sort_evaluations when the tag is deleted", async () => {
     const { db: freshDb } = await createTestDatabase();
-    const freshTags = createTagsService({ db: freshDb, settingsService: testSettingsService(freshDb) });
+    const freshTags = createTestTagsService({ db: freshDb });
     const freshDocuments = createDocumentsRepository({ db: freshDb });
     const freshRulesRepository = createRulesRepository({ db: freshDb });
     const tag = await freshTags.createTag({ userId, name: "Rent", description: "Monthly rent" });
@@ -357,7 +344,7 @@ describe("document type presets and the retired field migration", () => {
 
   beforeEach(async () => {
     ({ db } = await createTestDatabase());
-    tags = createTagsService({ db, settingsService: testSettingsService(db) });
+    tags = createTestTagsService({ db });
     documents = createDocumentsRepository({ db });
   });
 
