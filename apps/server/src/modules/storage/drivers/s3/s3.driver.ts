@@ -26,12 +26,17 @@ function fullKey(prefix: string, key: string) {
 
 export function createS3Driver({
   bucket,
+  region,
   prefix,
+  endpoint,
   client,
 }: {
   bucket: string;
   region: string;
   prefix: string;
+  // Present means an S3 clone rather than Amazon itself, which describeLocation uses to
+  // decide whether a console link can be guessed.
+  endpoint?: string;
   client: S3Client;
 }): StorageDriver {
   return {
@@ -83,7 +88,12 @@ export function createS3Driver({
       }
     },
     describeLocation({ key }) {
-      return { label: `s3://${bucket}/${fullKey(prefix, key)}` };
+      const objectKey = fullKey(prefix, key);
+      // Only Amazon's own console has a URL shape worth guessing. A custom endpoint means
+      // R2, B2, MinIO or something else entirely, and each puts its browser UI somewhere
+      // different, so the label alone is the honest answer there.
+      const url = endpoint ? undefined : `https://s3.console.aws.amazon.com/s3/object/${bucket}?region=${region}&prefix=${objectKey}`;
+      return { label: `s3://${bucket}/${objectKey}`, url };
     },
   };
 }
@@ -226,6 +236,6 @@ export const s3DriverDefinition: StorageDriverDefinition = {
       credentials: { accessKeyId, secretAccessKey },
     });
 
-    return createS3Driver({ bucket, region, prefix, client });
+    return createS3Driver({ bucket, region, prefix, endpoint: endpoint || undefined, client });
   },
 };

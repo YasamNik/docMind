@@ -83,6 +83,19 @@ describe("s3 driver extras", () => {
     expect(driver.describeLocation({ key: "user_1/a.pdf" }).label).toBe("s3://docs/docmind/user_1/a.pdf");
   });
 
+  it("links to the AWS console for a bucket on Amazon S3 itself", () => {
+    const driver = createS3Driver({ bucket: "docs", region: "us-east-1", prefix: "docmind/", client });
+    expect(driver.describeLocation({ key: "user_1/a.pdf" }).url).toBe(
+      "https://s3.console.aws.amazon.com/s3/object/docs?region=us-east-1&prefix=docmind/user_1/a.pdf",
+    );
+  });
+
+  it("offers no console link when a custom endpoint makes the provider unknown", () => {
+    const driver = createS3Driver({ bucket: "docs", region: "auto", prefix: "docmind/", endpoint: "https://account.r2.cloudflarestorage.com", client });
+    expect(driver.describeLocation({ key: "user_1/a.pdf" }).url).toBeUndefined();
+    expect(driver.describeLocation({ key: "user_1/a.pdf" }).label).toBe("s3://docs/docmind/user_1/a.pdf");
+  });
+
   it("round trips a body larger than one multipart chunk", async () => {
     const driver = createS3Driver({ bucket: "docs", region: "auto", prefix: "docmind/", client });
     const big = Buffer.alloc(6 * 1024 * 1024, "x");
