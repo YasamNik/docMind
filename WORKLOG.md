@@ -3,7 +3,89 @@
 Newest entry first. The `end-session` skill appends one entry per session. Each entry has
 four parts: Done, Decisions, Comments (the user's words, not a paraphrase), Open / Next.
 
-Active branch: `feat/design-pass`
+Active branch: `feat/document-types`
+
+## 2026-09-18: Fresh clone fixes, smart fields, document types specced
+
+### Done
+- Brought up a fresh clone on the office machine. Two real bugs found and fixed before
+  any feature work: `pnpm dev` never started the API (`tsx watch` does not run under
+  pnpm `--parallel` on Windows, swapped to `node --watch --import tsx`), and
+  `database.test.ts` failed on Windows with EBUSY (the native libsql binding releases
+  the OS file handle on GC, not when `close()` returns). Both recorded in
+  `docs/bugs_fix_tracking.md`.
+- Fixed five client tests that failed only when both suites ran at once, by raising
+  Testing Library's `asyncUtilTimeout` and vitest's `testTimeout`.
+- Item #13 Smart fields shipped end to end and merged to `main` (11 commits):
+  `document_fields` table and migration 0013, a fourteen key vocabulary, the repository,
+  extraction folded into the existing summary call inside one transaction, a backfill for
+  documents predating the feature, routes, and the client.
+- AI settings tab rebuilt: only added providers show as cards, with an Add provider
+  picker and a Remove action (`7672438`).
+- AI description assistant and a colour picker for tags and categories, shared by both
+  pages (`bd92e38`).
+- Replaced the smart fields badge column with a sortable Exp. Date column that turns red
+  once the date is past (`ae0d112`).
+- Merged and pushed to `origin/main` twice at the user's request. `main` is at `ae0d112`.
+- Document types specced and planned on `feat/document-types`, reviewed and revised.
+
+### Decisions
+- Smart fields extraction rides on the existing summary call rather than a second LLM
+  call, so cost per document does not change. The precedent was `documentDate`, already
+  extracted that way.
+- The field vocabulary stayed generic (fourteen keys) instead of growing a branch per
+  document domain. Vendor, merchant, airline, landlord and insurer are all
+  `counterparty`. The rejected alternatives were type specific field groups in the same
+  prompt and a two stage classify then extract pipeline at two calls per document.
+- LLM reply schemas stay loose and every semantic check runs after parsing. This bit
+  twice: first as a design constraint, then as a real blocker when the schema still
+  asserted that `fields` was an array of objects, which would have destroyed a
+  document's summary, title and date if a model answered `"fields": "none"`. Fixed in
+  `3358294` with regression tests run against the strict schema first.
+- Document types become a third dimension of the sorting engine, not a smart field, so
+  they inherit thresholds, reasoning, dry run, rerun and correction learning. The
+  hardcoded nineteen value enum is replaced by a user curated list with descriptions.
+- Preset type seeding is lazy per user, not at server start. A fresh install has no user
+  at boot, because sign up closes after the first account and happens once the process is
+  already serving, so a boot time step would find nobody and never run again.
+- Presets default to auto apply on, matching tags and categories. Deleting a type clears
+  it from its documents, matching what `deleteCategory` already does.
+
+### Comments
+- "Read HANDOFF.md first, then CLAUDE.md. This is a fresh clone on a new machine."
+- "If all good, run licalhost dev server"
+- "there is another running dev server on that port , you can kill it"
+- "do not see login"
+- "did you restarted backend or the server is down?"
+- "in the UI settings do not need to have all the ai providers list , but just have a plus button and then select from list of providers and set api keys"
+- "another feature for the both Category and Tag setup, I'd like to add AI assistant for description paraphrase, that should be well instructed to make a best description for further AI use a nd following the characters limitation, and second to add Color picker, rather than manual hex color value entry"
+- "try to merge to main and push to git origin"
+- "What are the next faetures to plan and work on?"
+- "I agree to extract as much more data from document, I even think some more fields, think about different types of documents, business related, houls hold related, travel, bills, receipts etc."
+- "no need for all those badges, the only thing, lets add a column of Exp. Date and it will be filled in docs which have this and mark red when it is expired"
+- "i checked it with an example license docuent and seems that it worked ok. i thought that if we detecting document type, lets make it as a field in the main documents table."
+- "lets have it similar to category a nd tags, with types and short description, like identity -- document to identify person name etc."
+- "finish the task and I want to make an end session and start a new fresh one after pc restart"
+
+### Open / Next
+- Implement document types from `docs/superpowers/plans/2026-09-18-document-types.md`,
+  seven tasks, starting with the table and migration 0014. Task 6 must not run before
+  task 2, because smart fields keeps `documentType` until the data migration has moved
+  the already extracted values.
+- The smart fields backfill has not been run. Existing documents have no fields until
+  the user presses "Extract fields for all documents" on the Sorting page, which costs
+  one model call per document.
+- The extraction quality check on real documents is still outstanding. The user checked
+  one licence document and it looked right, but the summary prompt now asks for thirteen
+  extra facts in the same call and nothing has compared summary quality before and after.
+- Item #32 Renewals and expiries is the agreed next feature after document types. The
+  Exp. Date column is already its visible front end.
+- Accepted limitation, not fixed: two concurrent backfill requests can double enqueue a
+  document. A transaction would make the second request fail instead, because the libsql
+  client is pinned to `concurrency: 1`.
+- The field key and value filter on the documents table was removed with the badge
+  column. If it is wanted back, it belongs above the table, not bolted to a column.
+- Local branch `fix/fresh-clone-dev-and-tests` is fully merged and can be deleted.
 
 ## 2026-09-17: C3 merged, design pass, Phase 2 built, vision fallback
 

@@ -93,6 +93,11 @@ First run: open http://localhost:5173, create the single account. Sign up closes
   `*.schemas.ts`, `*.types.ts`. Pure logic in models, orchestration in usecases, database
   access in repositories.
 - Valibot for every boundary: HTTP input, env and settings, LLM output.
+- LLM reply schemas stay loose, HTTP and job input schemas stay strict. `generateStructured`
+  parses a whole reply in one pass and throws on any nested failure, so anything asserted
+  in a reply schema can throw away the parts the model got right. That includes the shape
+  of a nested array, not only the values in it. Use `v.string()` or `v.unknown()` and do
+  every semantic check after parsing, dropping only the offending row.
 - Drizzle for every database access. No raw SQL outside migrations and the vector table.
 - Settings, API keys, and OAuth tokens go through the settings module only. Secrets are
   encrypted at rest and never logged or returned by the API.
