@@ -1,7 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { searchApi, type SearchResult } from "@/lib/search-api";
@@ -75,9 +77,20 @@ export function SearchPage() {
 
   const results = data?.results ?? [];
 
+  const reembed = useMutation({
+    mutationFn: () => searchApi.reembedAll(),
+    onSuccess: (result) => toast.success(`Queued ${result.count} document${result.count === 1 ? "" : "s"} for embedding`),
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   return (
     <div className="space-y-6">
-      <h1 className="font-heading text-2xl">Search</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="font-heading text-2xl">Search</h1>
+        <Button size="sm" variant="outline" onClick={() => reembed.mutate()} disabled={reembed.isPending}>
+          {reembed.isPending ? "Embedding..." : "Embed all documents"}
+        </Button>
+      </div>
       <Input
         autoFocus
         placeholder="Search your documents..."
