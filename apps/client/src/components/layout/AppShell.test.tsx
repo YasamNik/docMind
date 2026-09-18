@@ -17,6 +17,10 @@ vi.mock("@/lib/tags-api", () => ({
   tagsApi: { list: vi.fn(async () => [{ id: "tag_1", name: "Rent", documentCount: 3 }]) },
 }));
 
+vi.mock("@/lib/types-api", () => ({
+  typesApi: { list: vi.fn(async () => [{ id: "dtype_1", name: "Invoice", documentCount: 2 }]) },
+}));
+
 vi.mock("@/lib/auth-client", () => ({ authClient: { signOut: vi.fn(async () => {}) } }));
 
 // AppShell renders an <Outlet/>, which needs a real route match to resolve without
@@ -48,5 +52,25 @@ describe("AppShell", () => {
     expect(screen.getByText("Sorting").closest("a")).toHaveAttribute("href", "/sorting");
     expect(screen.queryByText("Finance")).not.toBeInTheDocument();
     expect(screen.queryByText("Rent")).not.toBeInTheDocument();
+  });
+});
+
+describe("AppShell types panel", () => {
+  it("shows a Manage types link beside tags and categories", async () => {
+    render(
+      <MemoryRouter initialEntries={["/tags"]}>
+        <QueryClientProvider client={new QueryClient()}>
+          <Routes>
+            <Route element={<AppShell />}>
+              <Route path="/tags" element={null} />
+            </Route>
+          </Routes>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("Manage types")).toBeInTheDocument();
+    expect(screen.getByText("Manage types").closest("a")).toHaveAttribute("href", "/types");
+    expect(screen.getByText("Manage tags").closest("a")).toHaveAttribute("href", "/tags");
+    expect(screen.getByText("Manage categories").closest("a")).toHaveAttribute("href", "/categories");
   });
 });

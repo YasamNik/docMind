@@ -1,12 +1,12 @@
 import { api } from "./api";
 
-export type ProposalKind = "add_tag" | "remove_tag" | "set_category";
+export type ProposalKind = "add_tag" | "remove_tag" | "set_category" | "set_type";
 
 export type ProposalRow = {
   id: string;
   documentId: string;
   documentName: string;
-  targetType: "tag" | "category";
+  targetType: "tag" | "category" | "type";
   targetId: string;
   itemName: string;
   kind: ProposalKind;
@@ -16,7 +16,7 @@ export type ProposalRow = {
 
 export type DryRunInput = {
   documentId: string;
-  targetType: "tag" | "category";
+  targetType: "tag" | "category" | "type";
   name: string;
   description: string;
   threshold: number;
@@ -30,7 +30,7 @@ export const sortApi = {
   async requestSort(documentId: string) {
     return (await api.json<{ job: { id: string; status: string } }>("POST", `/api/documents/${documentId}/sort`, {})).job;
   },
-  run(targetType: "tag" | "category", targetId: string, scope: SortScope) {
+  run(targetType: "tag" | "category" | "type", targetId: string, scope: SortScope) {
     return api.json<{ count: number; jobIds: string[] }>("POST", "/api/sort/run", { targetType, targetId, scope });
   },
   async count(scope: SortScope) {
@@ -57,4 +57,4 @@ export const sortApi = {
   },
 };
 
-export type RuleSuggestion = { type: "tag" | "category"; name: string; description: string; reasoning: string };
+export type RuleSuggestion = { type: "tag" | "category" | "type"; name: string; description: string; reasoning: string };
