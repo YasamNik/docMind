@@ -11,6 +11,7 @@ import { createLogger, type Logger } from "../../shared/logger/logger.js";
 import { parseOrValidationError } from "../../shared/http/validate.js";
 import { buildCategoryPaths } from "../tags/tags.models.js";
 import { createTagsRepository } from "../tags/tags.repository.js";
+import type { TagsService } from "../tags/tags.usecases.js";
 import {
   assembleRulesPrompt,
   deriveRerunOutcome,
@@ -33,11 +34,13 @@ export function createRulesService({
   db,
   aiService,
   documentsService,
+  tagsService,
   logger = createLogger("rules"),
 }: {
   db: Database;
   aiService: AiService;
   documentsService: DocumentsService;
+  tagsService?: Pick<TagsService, "ensureTypesSeeded">;
   logger?: Logger;
 }) {
   const repository = createRulesRepository({ db });
@@ -46,6 +49,10 @@ export function createRulesService({
   const jobsService = createJobsService({ db });
 
   async function loadAutomaticItems(userId: string): Promise<{ categories: AutomaticItem[]; tags: AutomaticItem[] }> {
+    // Seeding is lazy (see tags.usecases.ts), so a sort run is one of the two places
+    // that must trigger it: a user who never opens the Types page still gets the
+    // presets and the retired documentType migration the first time a sort runs.
+    if (tagsService) await tagsService.ensureTypesSeeded({ userId });
     const [rawCategories, rawTags] = await Promise.all([tagsRepository.listCategoriesRaw(userId), tagsRepository.listTagsRaw(userId)]);
     const paths = buildCategoryPaths(rawCategories);
     const categories: AutomaticItem[] = rawCategories

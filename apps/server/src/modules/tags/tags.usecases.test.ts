@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createTestDatabase } from "../../shared/test/database.test-utils.js";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
+import type { Database } from "../database/database.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import { newDocumentId, nowIso } from "../documents/documents.models.js";
 import type { NewDocument } from "../documents/documents.types.js";
+import { createFieldsRepository } from "../fields/fields.repository.js";
 import { createRulesRepository } from "../rules/rules.repository.js";
+import { createSettingsRegistry } from "../settings/settings.registry.js";
+import { createSettingsService } from "../settings/settings.usecases.js";
+import { DOCUMENT_TYPE_PRESETS } from "./tags.models.js";
 import { createTagsRepository } from "./tags.repository.js";
+import { tagsSettingDefinitions } from "./tags.settings.js";
 import { createTagsService } from "./tags.usecases.js";
 
 const userId = "user-1";
@@ -13,9 +19,20 @@ let tags: ReturnType<typeof createTagsService>;
 let tagsRepository: ReturnType<typeof createTagsRepository>;
 let documents: ReturnType<typeof createDocumentsRepository>;
 
+// Not a full settings service double: it is the real thing, scoped to the one
+// registry tags needs, matching the pattern documents.usecases.test.ts already uses
+// for storage settings.
+function testSettingsService(db: Database) {
+  return createSettingsService({
+    db,
+    registry: createSettingsRegistry(tagsSettingDefinitions),
+    config: { settingsEncryptionKey: "44".repeat(32), env: {} },
+  });
+}
+
 beforeEach(async () => {
   const { db } = await createTestDatabase();
-  tags = createTagsService({ db });
+  tags = createTagsService({ db, settingsService: testSettingsService(db) });
   tagsRepository = createTagsRepository({ db });
   documents = createDocumentsRepository({ db });
 });
@@ -289,7 +306,7 @@ describe("tags service", () => {
 
   it("clears applied_by_auto on every document when a tag's auto_apply is turned off", async () => {
     const { db: freshDb } = await createTestDatabase();
-    const freshTags = createTagsService({ db: freshDb });
+    const freshTags = createTagsService({ db: freshDb, settingsService: testSettingsService(freshDb) });
     const freshTagsRepository = createTagsRepository({ db: freshDb });
     const freshDocuments = createDocumentsRepository({ db: freshDb });
     const freshRulesRepository = createRulesRepository({ db: freshDb });
@@ -303,7 +320,7 @@ describe("tags service", () => {
 
   it("deletes a tag's sort_evaluations when the tag is deleted", async () => {
     const { db: freshDb } = await createTestDatabase();
-    const freshTags = createTagsService({ db: freshDb });
+    const freshTags = createTagsService({ db: freshDb, settingsService: testSettingsService(freshDb) });
     const freshDocuments = createDocumentsRepository({ db: freshDb });
     const freshRulesRepository = createRulesRepository({ db: freshDb });
     const tag = await freshTags.createTag({ userId, name: "Rent", description: "Monthly rent" });
@@ -332,5 +349,91 @@ describe("tags service", () => {
     expect(await freshTags.listTags(userId)).toEqual([]);
     const remaining = await freshDb.select().from((await import("../rules/rules.tables.js")).sortEvaluationsTable);
     expect(remaining).toEqual([]);
+  });
+});
+
+describe("document type presets and the retired field migration", () => {
+  let db: Database;
+
+  beforeEach(async () => {
+    ({ db } = await createTestDatabase());
+    tags = createTagsService({ db, settingsService: testSettingsService(db) });
+    documents = createDocumentsRepository({ db });
+  });
+
+  it("seeds the preset types once", async () => {
+    await tags.ensureTypesSeeded({ userId });
+    await tags.ensureTypesSeeded({ userId });
+    const types = await tags.listTypes(userId);
+    expect(types).toHaveLength(DOCUMENT_TYPE_PRESETS.length);
+    expect(types.map((x) => x.name)).toContain("Identity");
+  });
+
+  it("does not resurrect a preset the user deleted", async () => {
+    await tags.ensureTypesSeeded({ userId });
+    const identity = (await tags.listTypes(userId)).find((x) => x.name === "Identity")!;
+    await tags.deleteType({ userId, typeId: identity.id });
+    await tags.ensureTypesSeeded({ userId });
+    expect((await tags.listTypes(userId)).map((x) => x.name)).not.toContain("Identity");
+  });
+
+  it("keeps the user's own type when a preset wants the same name", async () => {
+    await tags.createType({ userId, name: "Receipt", description: "Mine" });
+    await tags.ensureTypesSeeded({ userId });
+    const receipts = (await tags.listTypes(userId)).filter((x) => x.name.toLowerCase() === "receipt");
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]!.description).toBe("Mine");
+  });
+
+  it("moves an already extracted documentType field onto the document and removes the field row", async () => {
+    const doc = documentFixture();
+    await documents.insert(doc);
+    const fieldsRepository = createFieldsRepository({ db });
+    await fieldsRepository.replaceForDocument({
+      userId,
+      documentId: doc.id! as string,
+      fields: [{ key: "documentType", value: "invoice", valueNumber: null, valueDate: null, currency: null, confidence: null }],
+    });
+
+    await tags.ensureTypesSeeded({ userId });
+
+    const invoice = (await tags.listTypes(userId)).find((x) => x.name === "Invoice")!;
+    expect(await documents.findById({ userId, documentId: doc.id! as string })).toMatchObject({
+      documentTypeId: invoice.id,
+      documentTypeSource: "auto",
+    });
+    expect(await fieldsRepository.listByDocument({ userId, documentId: doc.id! as string })).toEqual([]);
+  });
+
+  it("maps the retired utility value onto Bill and leaves other with no type", async () => {
+    const utilityDoc = documentFixture();
+    const otherDoc = documentFixture();
+    await documents.insert(utilityDoc);
+    await documents.insert(otherDoc);
+    const fieldsRepository = createFieldsRepository({ db });
+    await fieldsRepository.replaceForDocument({
+      userId,
+      documentId: utilityDoc.id! as string,
+      fields: [{ key: "documentType", value: "utility", valueNumber: null, valueDate: null, currency: null, confidence: null }],
+    });
+    await fieldsRepository.replaceForDocument({
+      userId,
+      documentId: otherDoc.id! as string,
+      fields: [{ key: "documentType", value: "other", valueNumber: null, valueDate: null, currency: null, confidence: null }],
+    });
+
+    await tags.ensureTypesSeeded({ userId });
+
+    const bill = (await tags.listTypes(userId)).find((x) => x.name === "Bill")!;
+    expect(await documents.findById({ userId, documentId: utilityDoc.id! as string })).toMatchObject({
+      documentTypeId: bill.id,
+      documentTypeSource: "auto",
+    });
+    expect(await documents.findById({ userId, documentId: otherDoc.id! as string })).toMatchObject({
+      documentTypeId: null,
+      documentTypeSource: null,
+    });
+    expect(await fieldsRepository.listByDocument({ userId, documentId: utilityDoc.id! as string })).toEqual([]);
+    expect(await fieldsRepository.listByDocument({ userId, documentId: otherDoc.id! as string })).toEqual([]);
   });
 });

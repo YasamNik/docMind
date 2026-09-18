@@ -2,6 +2,7 @@ import * as v from "valibot";
 
 export const tagIdSchema = v.pipe(v.string(), v.regex(/^tag_[0-9a-f]{16}$/));
 export const categoryIdSchema = v.pipe(v.string(), v.regex(/^cat_[0-9a-f]{16}$/));
+export const documentTypeIdSchema = v.pipe(v.string(), v.regex(/^dtype_[0-9a-f]{16}$/));
 
 export const nameSchema = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(60));
 export const colorSchema = v.pipe(v.string(), v.regex(/^#[0-9a-fA-F]{6}$/, "Color must be a hex value like #4f46e5"));

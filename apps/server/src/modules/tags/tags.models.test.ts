@@ -5,10 +5,13 @@ import {
   collectDescendantIds,
   DESCRIPTION_ASSISTANT_LIMITS,
   descriptionAssistantLimit,
+  DOCUMENT_TYPE_PRESETS,
   newCategoryId,
+  newDocumentTypeId,
   newTagId,
   nextSortOrder,
   normalizeName,
+  RETIRED_TYPE_VALUE_MAP,
   sortByNameCI,
   sortCategories,
   trimDescriptionSuggestion,
@@ -21,7 +24,41 @@ describe("tags models", () => {
   it("makes prefixed ids", () => {
     expect(newTagId()).toMatch(/^tag_[0-9a-f]{16}$/);
     expect(newCategoryId()).toMatch(/^cat_[0-9a-f]{16}$/);
+    expect(newDocumentTypeId()).toMatch(/^dtype_[0-9a-f]{16}$/);
     expect(newTagId()).not.toBe(newTagId());
+  });
+
+  describe("DOCUMENT_TYPE_PRESETS", () => {
+    it("lists eighteen presets, each with a unique name and a non-empty description", () => {
+      expect(DOCUMENT_TYPE_PRESETS).toHaveLength(18);
+      const names = DOCUMENT_TYPE_PRESETS.map((p) => p.name);
+      expect(new Set(names).size).toBe(names.length);
+      expect(names).toContain("Identity");
+      for (const preset of DOCUMENT_TYPE_PRESETS) {
+        expect(preset.description.trim().length).toBeGreaterThan(0);
+      }
+    });
+
+    it("has no Other preset, so an unmatched document keeps no type", () => {
+      expect(DOCUMENT_TYPE_PRESETS.map((p) => p.name)).not.toContain("Other");
+    });
+  });
+
+  describe("RETIRED_TYPE_VALUE_MAP", () => {
+    it("maps the retired utility value onto Bill", () => {
+      expect(RETIRED_TYPE_VALUE_MAP.utility).toBe("Bill");
+    });
+
+    it("has no entry for other, so it leaves the document with no type", () => {
+      expect(RETIRED_TYPE_VALUE_MAP.other).toBeUndefined();
+    });
+
+    it("maps every value onto a real preset name", () => {
+      const presetNames = new Set(DOCUMENT_TYPE_PRESETS.map((p) => p.name));
+      for (const presetName of Object.values(RETIRED_TYPE_VALUE_MAP)) {
+        expect(presetNames.has(presetName)).toBe(true);
+      }
+    });
   });
 
   it("trims names", () => {

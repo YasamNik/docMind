@@ -8,6 +8,56 @@ export function newCategoryId() {
   return `cat_${randomBytes(8).toString("hex")}`;
 }
 
+export function newDocumentTypeId() {
+  return `dtype_${randomBytes(8).toString("hex")}`;
+}
+
+// Copied verbatim from the design spec's "Preset types" table: these are read by the
+// sorting engine, a language model, so wording changes here change what it decides.
+export const DOCUMENT_TYPE_PRESETS: { name: string; description: string }[] = [
+  { name: "Identity", description: "Proves who someone is. Passport, driving licence, national ID card, residence permit, visa." },
+  { name: "Receipt", description: "Proof of a purchase already paid, usually itemised, issued at the point of sale." },
+  { name: "Bill", description: "A request for payment for a service over a period, such as electricity, water, gas, phone, or internet." },
+  { name: "Invoice", description: "A request for payment for goods or work, usually carrying an invoice number and a due date." },
+  { name: "Statement", description: "A periodic account summary from a bank, card issuer, or broker. Lists transactions rather than asking for payment." },
+  { name: "Contract", description: "A signed agreement setting out obligations between two or more parties." },
+  { name: "Lease", description: "A rental agreement for a property or vehicle, with a term and a rent amount." },
+  { name: "Insurance", description: "A policy, certificate, schedule, or renewal notice for cover of any kind." },
+  { name: "Medical", description: "Anything from a clinic, hospital, doctor, dentist, or pharmacy: results, prescriptions, referrals, discharge notes." },
+  { name: "Tax", description: "Anything issued by or addressed to a tax authority, including returns, assessments, and tax certificates." },
+  { name: "Payslip", description: "A record of pay for one period, showing gross pay, deductions, and net pay." },
+  { name: "Travel", description: "A booking, ticket, itinerary, or boarding pass for a trip." },
+  { name: "Warranty", description: "A guarantee covering a product for a period after purchase." },
+  { name: "Subscription", description: "A confirmation or renewal notice for a recurring paid service." },
+  { name: "Legal", description: "Correspondence or filings from a lawyer, a court, or a government legal body." },
+  { name: "Vehicle", description: "Registration, title, service record, or inspection for a car, motorcycle, or other vehicle." },
+  { name: "Letter", description: "General correspondence that does not fit another type." },
+  { name: "Report", description: "An analysis or set of findings, such as an inspection, survey, or assessment." },
+];
+
+// Maps the retired smart fields enum onto the presets. `other` is deliberately absent:
+// a document that matched nothing keeps no type at all.
+export const RETIRED_TYPE_VALUE_MAP: Record<string, string> = {
+  invoice: "Invoice",
+  receipt: "Receipt",
+  utility: "Bill",
+  statement: "Statement",
+  contract: "Contract",
+  lease: "Lease",
+  insurance: "Insurance",
+  identity: "Identity",
+  medical: "Medical",
+  tax: "Tax",
+  payslip: "Payslip",
+  travel: "Travel",
+  warranty: "Warranty",
+  subscription: "Subscription",
+  legal: "Legal",
+  vehicle: "Vehicle",
+  letter: "Letter",
+  report: "Report",
+};
+
 export function nowIso() {
   return new Date().toISOString();
 }

@@ -1,18 +1,23 @@
 import { LibsqlError } from "@libsql/client";
 import { createError } from "../../shared/errors/errors.js";
+import { createLogger, type Logger } from "../../shared/logger/logger.js";
 import { asTxDb, type Database } from "../database/database.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import { createRulesRepository } from "../rules/rules.repository.js";
 import type { AiService } from "../ai/ai.usecases.js";
+import type { SettingsService } from "../settings/settings.usecases.js";
 import {
   buildCategoryPaths,
   buildDescriptionAssistantPrompt,
   descriptionAssistantLimit,
+  DOCUMENT_TYPE_PRESETS,
   newCategoryId,
+  newDocumentTypeId,
   newTagId,
   nextSortOrder,
   normalizeName,
   nowIso,
+  RETIRED_TYPE_VALUE_MAP,
   sortByNameCI,
   sortCategories,
   trimDescriptionSuggestion,
@@ -20,7 +25,18 @@ import {
 } from "./tags.models.js";
 import { descriptionAssistantReplySchema } from "./tags.schemas.js";
 import { createTagsRepository } from "./tags.repository.js";
-import type { Category, CategoryWithMeta, NewCategory, NewTag, Tag, TagChip, TagWithCount } from "./tags.types.js";
+import type {
+  Category,
+  CategoryWithMeta,
+  DocumentType,
+  DocumentTypeWithCount,
+  NewCategory,
+  NewDocumentType,
+  NewTag,
+  Tag,
+  TagChip,
+  TagWithCount,
+} from "./tags.types.js";
 
 function isUniqueConstraintError(error: unknown): boolean {
   const cause = (error as { cause?: unknown } | null)?.cause;
@@ -45,16 +61,27 @@ function categoryInvalidParent() {
 function documentNotFound(documentId: string) {
   return createError({ code: "documents.not_found", message: `Document "${documentId}" not found`, status: 404 });
 }
+function typeNotFound(typeId: string) {
+  return createError({ code: "types.not_found", message: `Document type "${typeId}" not found`, status: 404 });
+}
+function typeDuplicateName() {
+  return createError({ code: "types.duplicate_name", message: "A document type with this name already exists", status: 409 });
+}
 
 type TagPatch = { name?: string; color?: string | null; description?: string; confidenceThreshold?: number; autoApply?: boolean };
 type CategoryPatch = TagPatch & { parentId?: string | null; sortOrder?: number };
+type TypePatch = TagPatch;
 
 export function createTagsService({
   db,
   aiService,
+  settingsService,
+  logger = createLogger("tags"),
 }: {
   db: Database;
   aiService?: Pick<AiService, "generateStructured">;
+  settingsService: Pick<SettingsService, "get" | "setInternal">;
+  logger?: Logger;
 }) {
   const repository = createTagsRepository({ db });
   const documentsRepository = createDocumentsRepository({ db });
@@ -70,6 +97,12 @@ export function createTagsService({
     const category = await repository.findCategoryById({ userId, categoryId });
     if (!category) throw categoryNotFound(categoryId);
     return category;
+  }
+
+  async function getTypeOrThrow(userId: string, typeId: string): Promise<DocumentType> {
+    const type = await repository.findTypeById({ userId, typeId });
+    if (!type) throw typeNotFound(typeId);
+    return type;
   }
 
   async function ensureDocumentExists(userId: string, documentId: string) {
@@ -89,6 +122,10 @@ export function createTagsService({
     return { ...category, autoApply: category.autoApply === 1, path, documentCount };
   }
 
+  function presentType(type: DocumentType, documentCount: number): DocumentTypeWithCount {
+    return { ...type, autoApply: type.autoApply === 1, documentCount };
+  }
+
   async function withTagCounts(userId: string, tags: Tag[]): Promise<TagWithCount[]> {
     const counts = await repository.countDocumentsByTag(userId);
     return sortByNameCI(tags).map((t) => presentTag(t, counts.get(t.id) ?? 0));
@@ -97,6 +134,88 @@ export function createTagsService({
   async function withCategoryMeta(userId: string, categories: Category[]): Promise<CategoryWithMeta[]> {
     const [counts, paths] = await Promise.all([repository.countDocumentsByCategory(userId), Promise.resolve(buildCategoryPaths(categories))]);
     return sortCategories(categories).map((c) => presentCategory(c, paths.get(c.id) ?? c.name, counts.get(c.id) ?? 0));
+  }
+
+  async function withTypeCounts(userId: string, types: DocumentType[]): Promise<DocumentTypeWithCount[]> {
+    const counts = await repository.countDocumentsByType(userId);
+    return sortByNameCI(types).map((t) => presentType(t, counts.get(t.id) ?? 0));
+  }
+
+  function buildPresetType(userId: string, preset: { name: string; description: string }): NewDocumentType {
+    const t = nowIso();
+    return {
+      id: newDocumentTypeId(),
+      userId,
+      name: preset.name,
+      description: preset.description,
+      color: null,
+      confidenceThreshold: 0.7,
+      autoApply: 1,
+      createdAt: t,
+      updatedAt: t,
+    };
+  }
+
+  // Reads every retired documentType field row for the user, resolves it through
+  // RETIRED_TYPE_VALUE_MAP against the just-seeded presets, and writes the winning
+  // type onto its document. Runs after the presets exist so the lookup by name finds
+  // them, and deletes every row it read in the same transaction as the writes, so a
+  // document is never left pointing at a type while its old field row still exists.
+  async function migrateExtractedTypes({ userId }: { userId: string }) {
+    const rows = await repository.listDocumentTypeFieldRows({ userId });
+    if (rows.length === 0) return;
+
+    const types = await repository.listTypesRaw(userId);
+    const typeByName = new Map(types.map((t) => [t.name.toLowerCase(), t]));
+
+    await db.transaction(async (tx) => {
+      const txDb = asTxDb(tx);
+      for (const row of rows) {
+        const presetName = RETIRED_TYPE_VALUE_MAP[row.value];
+        const type = presetName ? typeByName.get(presetName.toLowerCase()) : undefined;
+        if (type) {
+          await documentsRepository.update({
+            userId,
+            documentId: row.documentId,
+            patch: { documentTypeId: type.id, documentTypeSource: "auto", updatedAt: nowIso() },
+            tx: txDb,
+          });
+        } else if (row.value !== "other") {
+          // "other" is the expected case for "matched nothing" and is not logged. Any
+          // other unrecognised value is left on the document as no type, but is worth a
+          // trace since it means the retired enum had a value this map does not know.
+          logger.info({ userId, documentId: row.documentId, value: row.value }, "Unrecognised document type value left unmapped");
+        }
+      }
+      await repository.deleteDocumentTypeFieldRows({ userId, tx: txDb });
+    });
+  }
+
+  // Not called at server start. A fresh install has no user at boot: sign up closes
+  // after the first account and happens once the process is already serving, so a boot
+  // time step would find nobody and never run again. Callers pass a real userId.
+  async function ensureTypesSeeded({ userId }: { userId: string }) {
+    const done = await settingsService.get<boolean>(userId, "types.presetsSeeded");
+    if (done) return;
+
+    // Inserted one at a time, not as a batch. The guard flag cannot commit in the same
+    // transaction as these rows, because the settings repository takes no tx, so a crash
+    // between the inserts and the flag has to leave a retry able to finish. A name the
+    // user already owns is skipped, never overwritten.
+    for (const preset of DOCUMENT_TYPE_PRESETS) {
+      try {
+        await repository.insertType(buildPresetType(userId, preset));
+      } catch (error) {
+        if (isUniqueConstraintError(error)) {
+          logger.info({ userId, name: preset.name }, "Preset document type skipped, the name is already taken");
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    await migrateExtractedTypes({ userId });
+    await settingsService.setInternal(userId, "types.presetsSeeded", true);
   }
 
   return {
@@ -305,6 +424,77 @@ export function createTagsService({
         presentCategory(updatedA, paths.get(a.id) ?? updatedA.name, counts.get(a.id) ?? 0),
         presentCategory(updatedB, paths.get(b.id) ?? updatedB.name, counts.get(b.id) ?? 0),
       ];
+    },
+
+    ensureTypesSeeded,
+
+    async listTypes(userId: string) {
+      await ensureTypesSeeded({ userId });
+      return withTypeCounts(userId, await repository.listTypesRaw(userId));
+    },
+
+    async createType({
+      userId,
+      name,
+      color = null,
+      description = "",
+      confidenceThreshold = 0.7,
+      autoApply = true,
+    }: {
+      userId: string;
+      name: string;
+      color?: string | null;
+      description?: string;
+      confidenceThreshold?: number;
+      autoApply?: boolean;
+    }): Promise<DocumentTypeWithCount> {
+      const id = newDocumentTypeId();
+      const t = nowIso();
+      const type: NewDocumentType = {
+        id,
+        userId,
+        name: normalizeName(name),
+        color,
+        description,
+        confidenceThreshold,
+        autoApply: autoApply ? 1 : 0,
+        createdAt: t,
+        updatedAt: t,
+      };
+      try {
+        await repository.insertType(type);
+      } catch (error) {
+        if (isUniqueConstraintError(error)) throw typeDuplicateName();
+        throw error;
+      }
+      return presentType(await getTypeOrThrow(userId, id), 0);
+    },
+
+    async updateType({ userId, typeId, patch }: { userId: string; typeId: string; patch: TypePatch }): Promise<DocumentTypeWithCount> {
+      await getTypeOrThrow(userId, typeId);
+      const dbPatch: Partial<NewDocumentType> = { updatedAt: nowIso() };
+      if (patch.name !== undefined) dbPatch.name = normalizeName(patch.name);
+      if (patch.color !== undefined) dbPatch.color = patch.color;
+      if (patch.description !== undefined) dbPatch.description = patch.description;
+      if (patch.confidenceThreshold !== undefined) dbPatch.confidenceThreshold = patch.confidenceThreshold;
+      if (patch.autoApply !== undefined) dbPatch.autoApply = patch.autoApply ? 1 : 0;
+      try {
+        await repository.updateType({ userId, typeId, patch: dbPatch });
+      } catch (error) {
+        if (isUniqueConstraintError(error)) throw typeDuplicateName();
+        throw error;
+      }
+      const counts = await repository.countDocumentsByType(userId);
+      return presentType(await getTypeOrThrow(userId, typeId), counts.get(typeId) ?? 0);
+    },
+
+    async deleteType({ userId, typeId }: { userId: string; typeId: string }) {
+      await getTypeOrThrow(userId, typeId);
+      await db.transaction(async (tx) => {
+        const txDb = asTxDb(tx);
+        await repository.clearTypeOnDocuments({ userId, typeId, tx: txDb });
+        await repository.deleteType({ userId, typeId, tx: txDb });
+      });
     },
 
     async setDocumentCategory({

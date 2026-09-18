@@ -1,8 +1,13 @@
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { asTxDb, type Database } from "../database/database.js";
 import { documentsTable } from "../documents/documents.tables.js";
-import { categoriesTable, documentTagsTable, tagsTable } from "./tags.tables.js";
-import type { Category, DocumentTag, NewCategory, NewTag, Tag, TagChip } from "./tags.types.js";
+// Read and cleared here rather than through createFieldsRepository, the same way
+// documents.repository.ts reads document_fields directly: this repository owns the
+// one-time move of the retired documentType values, not the fields module.
+import { documentFieldsTable } from "../fields/fields.tables.js";
+import type { ExtractedField } from "../fields/fields.types.js";
+import { categoriesTable, documentTagsTable, documentTypesTable, tagsTable } from "./tags.tables.js";
+import type { Category, DocumentTag, DocumentType, NewCategory, NewDocumentType, NewTag, Tag, TagChip } from "./tags.types.js";
 
 export function createTagsRepository({ db }: { db: Database }) {
   return {
@@ -101,6 +106,60 @@ export function createTagsRepository({ db }: { db: Database }) {
         .update(documentsTable)
         .set({ categoryId: null, categorySource: null })
         .where(and(eq(documentsTable.userId, userId), eq(documentsTable.categoryId, categoryId), eq(documentsTable.categorySource, "auto")));
+    },
+
+    async insertType(type: NewDocumentType) {
+      await db.insert(documentTypesTable).values(type);
+    },
+    async findTypeById({ userId, typeId }: { userId: string; typeId: string }): Promise<DocumentType | null> {
+      const [row] = await db.select().from(documentTypesTable).where(and(eq(documentTypesTable.userId, userId), eq(documentTypesTable.id, typeId)));
+      return row ?? null;
+    },
+    async listTypesRaw(userId: string): Promise<DocumentType[]> {
+      return db.select().from(documentTypesTable).where(eq(documentTypesTable.userId, userId));
+    },
+    async countDocumentsByType(userId: string): Promise<Map<string, number>> {
+      const rows = await db
+        .select({ documentTypeId: documentsTable.documentTypeId, count: sql<number>`count(*)` })
+        .from(documentsTable)
+        .where(and(eq(documentsTable.userId, userId), isNotNull(documentsTable.documentTypeId)))
+        .groupBy(documentsTable.documentTypeId);
+      return new Map(rows.map((r) => [r.documentTypeId as string, Number(r.count)]));
+    },
+    async updateType({
+      userId,
+      typeId,
+      patch,
+      tx = db,
+    }: {
+      userId: string;
+      typeId: string;
+      patch: Partial<NewDocumentType>;
+      tx?: Database;
+    }) {
+      await tx.update(documentTypesTable).set(patch).where(and(eq(documentTypesTable.userId, userId), eq(documentTypesTable.id, typeId)));
+    },
+    async deleteType({ userId, typeId, tx = db }: { userId: string; typeId: string; tx?: Database }) {
+      await tx.delete(documentTypesTable).where(and(eq(documentTypesTable.userId, userId), eq(documentTypesTable.id, typeId)));
+    },
+    async clearTypeOnDocuments({ userId, typeId, tx = db }: { userId: string; typeId: string; tx?: Database }) {
+      await tx
+        .update(documentsTable)
+        .set({ documentTypeId: null, documentTypeSource: null })
+        .where(and(eq(documentsTable.userId, userId), eq(documentsTable.documentTypeId, typeId)));
+    },
+
+    // The one time migration off the retired documentType smart field. Read once per
+    // ensureTypesSeeded call, then deleted as a batch once every row has been resolved.
+    async listDocumentTypeFieldRows({ userId }: { userId: string }): Promise<ExtractedField[]> {
+      const rows = await db
+        .select()
+        .from(documentFieldsTable)
+        .where(and(eq(documentFieldsTable.userId, userId), eq(documentFieldsTable.key, "documentType")));
+      return rows as ExtractedField[];
+    },
+    async deleteDocumentTypeFieldRows({ userId, tx = db }: { userId: string; tx?: Database }) {
+      await tx.delete(documentFieldsTable).where(and(eq(documentFieldsTable.userId, userId), eq(documentFieldsTable.key, "documentType")));
     },
 
     async clearAutoTagOnDocuments({ tagId, tx = db }: { tagId: string; tx?: Database }) {
