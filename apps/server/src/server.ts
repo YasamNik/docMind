@@ -35,6 +35,8 @@ import { createSettingsService } from "./modules/settings/settings.usecases.js";
 import { createStorageService } from "./modules/storage/storage.usecases.js";
 import { registerRulesRoutes } from "./modules/rules/rules.routes.js";
 import { createRulesService } from "./modules/rules/rules.usecases.js";
+import { registerChatRoutes } from "./modules/chat/chat.routes.js";
+import { createChatService } from "./modules/chat/chat.usecases.js";
 import { registerSearchRoutes } from "./modules/search/search.routes.js";
 import { createSearchService } from "./modules/search/search.usecases.js";
 import { registerSummaryRoutes } from "./modules/summary/summary.routes.js";
@@ -148,6 +150,7 @@ export function createServer({
   const extractionService: ExtractionService = createExtractionService({ db, documentsService, settingsService, registry, rulesService, aiService });
   const searchService = createSearchService({ db, aiService, settingsService });
   const summaryService = createSummaryService({ db, aiService });
+  const chatService = createChatService({ db, aiService, searchService });
   const jobRunner = createJobRunner({
     db,
     handlers: { extraction: extractionService.handler, rules: rulesService.handler, embedding: searchService.handler, summarize: summaryService.handler },
@@ -168,6 +171,7 @@ export function createServer({
   registerRulesRoutes({ app, rulesService, getUserId });
   registerSearchRoutes({ app, searchService, getUserId });
   registerSummaryRoutes({ app, summaryService, getUserId });
+  registerChatRoutes({ app, chatService, getUserId });
 
   return {
     app,
@@ -184,6 +188,7 @@ export function createServer({
     rulesService,
     searchService,
     summaryService,
+    chatService,
     getUserId,
   };
 }
