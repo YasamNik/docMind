@@ -31,8 +31,8 @@ const listMock = vi.fn(async (_filters?: unknown) => [
       {
         id: "field_1",
         documentId: "doc_1",
-        key: "documentType",
-        value: "invoice",
+        key: "counterparty",
+        value: "Acme Corp",
         valueNumber: null,
         valueDate: null,
         currency: null,
@@ -77,8 +77,8 @@ const listMock = vi.fn(async (_filters?: unknown) => [
       {
         id: "field_2",
         documentId: "doc_2",
-        key: "documentType",
-        value: "receipt",
+        key: "counterparty",
+        value: "Globex",
         valueNumber: null,
         valueDate: null,
         currency: null,

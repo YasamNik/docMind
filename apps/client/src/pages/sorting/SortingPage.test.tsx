@@ -114,7 +114,7 @@ describe("SortingPage", () => {
   it("confirms before posting a fields backfill and states the document count and model call cost", async () => {
     listDocumentsFn.mockResolvedValue([
       { id: "doc_1", name: "a.pdf", extractionStatus: "done", tags: [], categoryId: null, fields: [] },
-      { id: "doc_2", name: "b.pdf", extractionStatus: "done", tags: [], categoryId: null, fields: [{ key: "documentType" }] },
+      { id: "doc_2", name: "b.pdf", extractionStatus: "done", tags: [], categoryId: null, fields: [{ key: "counterparty" }] },
     ]);
     renderPage();
     fireEvent.click(await screen.findByText("Extract fields for all documents"));

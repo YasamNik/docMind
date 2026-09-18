@@ -4,7 +4,6 @@
 // put forty keys in the prompt of every document, so a grocery receipt would be asked
 // about lease terms.
 export const FIELD_KEYS = [
-  "documentType",
   "counterparty",
   "personName",
   "amountTotal",
@@ -21,30 +20,6 @@ export const FIELD_KEYS = [
 ] as const;
 
 export type FieldKey = (typeof FIELD_KEYS)[number];
-
-export const DOCUMENT_TYPES = [
-  "invoice",
-  "receipt",
-  "utility",
-  "statement",
-  "contract",
-  "lease",
-  "insurance",
-  "identity",
-  "medical",
-  "tax",
-  "payslip",
-  "travel",
-  "warranty",
-  "subscription",
-  "legal",
-  "vehicle",
-  "letter",
-  "report",
-  "other",
-] as const;
-
-export type DocumentType = (typeof DOCUMENT_TYPES)[number];
 
 export const FIELD_STATUSES = [
   "paid",
