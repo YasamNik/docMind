@@ -2,6 +2,7 @@ import type { Context, Hono } from "hono";
 import { parseJsonBody, parseOrValidationError } from "../../shared/http/validate.js";
 import { documentIdSchema } from "../documents/documents.schemas.js";
 import type { Document, DocumentListRow } from "../documents/documents.types.js";
+import type { ExtractedField } from "../fields/fields.types.js";
 import {
   categoryIdSchema,
   createCategoryBodySchema,
@@ -17,7 +18,7 @@ import type { TagChip } from "./tags.types.js";
 import type { RulesService } from "../rules/rules.usecases.js";
 import type { TagsService } from "./tags.usecases.js";
 
-type EnrichedDocument = Document & { categoryPath: string | null; tags: TagChip[] };
+type EnrichedDocument = Document & { categoryPath: string | null; tags: TagChip[]; fields: ExtractedField[] };
 
 // setDocumentCategory returns the full enriched document row, extractedText included.
 // Routes must never hand that back to the client, so strip it here before responding.

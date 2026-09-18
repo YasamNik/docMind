@@ -30,6 +30,8 @@ import { createExtractorRegistry } from "./modules/extraction/extraction.registr
 import { registerExtractionRoutes } from "./modules/extraction/extraction.routes.js";
 import { createExtractionService, type ExtractionService } from "./modules/extraction/extraction.usecases.js";
 import { createTesseractEngine, type OcrEngine } from "./modules/extraction/ocr.js";
+import { registerFieldsRoutes } from "./modules/fields/fields.routes.js";
+import { createFieldsRepository } from "./modules/fields/fields.repository.js";
 import { registerJobsRoutes } from "./modules/jobs/jobs.routes.js";
 import { createJobRunner } from "./modules/jobs/jobs.runner.js";
 import { createJobsService } from "./modules/jobs/jobs.usecases.js";
@@ -157,6 +159,7 @@ export function createServer({
   const extractionService: ExtractionService = createExtractionService({ db, documentsService, settingsService, registry, rulesService, aiService });
   const searchService = createSearchService({ db, aiService, settingsService });
   const summaryService = createSummaryService({ db, aiService });
+  const fieldsRepository = createFieldsRepository({ db });
   const chatService = createChatService({ db, aiService, searchService });
   const jobRunner = createJobRunner({
     db,
@@ -178,6 +181,7 @@ export function createServer({
   registerRulesRoutes({ app, rulesService, getUserId });
   registerSearchRoutes({ app, searchService, getUserId });
   registerSummaryRoutes({ app, summaryService, getUserId });
+  registerFieldsRoutes({ app, fieldsRepository, summaryService, getUserId });
   registerChatRoutes({ app, chatService, getUserId });
 
   const exportService = createExportService({ db, storageService });
@@ -209,6 +213,7 @@ export function createServer({
     rulesService,
     searchService,
     summaryService,
+    fieldsRepository,
     chatService,
     getUserId,
   };

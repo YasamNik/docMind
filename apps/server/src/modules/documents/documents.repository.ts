@@ -4,6 +4,10 @@ import { buildCategoryPaths, collectDescendantIds } from "../tags/tags.models.js
 import { sortEvaluationsTable } from "../rules/rules.tables.js";
 import { categoriesTable, documentTagsTable, tagsTable } from "../tags/tags.tables.js";
 import type { TagChip } from "../tags/tags.types.js";
+// Queried directly rather than through createFieldsRepository, the same way tags are
+// queried directly through their tables here rather than through the tags service.
+import { documentFieldsTable } from "../fields/fields.tables.js";
+import type { ExtractedField } from "../fields/fields.types.js";
 import { documentsTable } from "./documents.tables.js";
 import type { Document, DocumentListRow, DocumentView, NewDocument } from "./documents.types.js";
 
@@ -87,6 +91,18 @@ export function createDocumentsRepository({ db }: { db: Database }) {
     return map;
   }
 
+  async function loadFieldsByDocument(documentIds: string[]): Promise<Map<string, ExtractedField[]>> {
+    const map = new Map<string, ExtractedField[]>();
+    if (documentIds.length === 0) return map;
+    const rows = await db.select().from(documentFieldsTable).where(inArray(documentFieldsTable.documentId, documentIds));
+    for (const row of rows as ExtractedField[]) {
+      const list = map.get(row.documentId) ?? [];
+      list.push(row);
+      map.set(row.documentId, list);
+    }
+    return map;
+  }
+
   return {
     async insert(document: NewDocument, tx: Database = db) {
       await tx.insert(documentsTable).values(document);
@@ -124,11 +140,13 @@ export function createDocumentsRepository({ db }: { db: Database }) {
         .orderBy(desc(documentsTable.createdAt), desc(documentsTable.id));
 
       const pathMap = buildCategoryPaths(categories);
-      const tagsMap = await loadTagsByDocument(rows.map((r) => r.id));
+      const documentIds = rows.map((r) => r.id);
+      const [tagsMap, fieldsMap] = await Promise.all([loadTagsByDocument(documentIds), loadFieldsByDocument(documentIds)]);
       return rows.map((row) => ({
         ...row,
         categoryPath: row.categoryId ? (pathMap.get(row.categoryId) ?? null) : null,
         tags: tagsMap.get(row.id) ?? [],
+        fields: fieldsMap.get(row.id) ?? [],
       }));
     },
 
@@ -155,14 +173,23 @@ export function createDocumentsRepository({ db }: { db: Database }) {
     }: {
       userId: string;
       documentId: string;
-    }): Promise<(Document & { categoryPath: string | null; tags: TagChip[] }) | null> {
+    }): Promise<(Document & { categoryPath: string | null; tags: TagChip[]; fields: ExtractedField[] }) | null> {
       const [row] = await db
         .select()
         .from(documentsTable)
         .where(and(eq(documentsTable.userId, userId), eq(documentsTable.id, documentId)));
       if (!row) return null;
-      const [pathMap, tagsMap] = await Promise.all([loadCategoryPathMap(userId), loadTagsByDocument([row.id])]);
-      return { ...row, categoryPath: row.categoryId ? (pathMap.get(row.categoryId) ?? null) : null, tags: tagsMap.get(row.id) ?? [] };
+      const [pathMap, tagsMap, fieldsMap] = await Promise.all([
+        loadCategoryPathMap(userId),
+        loadTagsByDocument([row.id]),
+        loadFieldsByDocument([row.id]),
+      ]);
+      return {
+        ...row,
+        categoryPath: row.categoryId ? (pathMap.get(row.categoryId) ?? null) : null,
+        tags: tagsMap.get(row.id) ?? [],
+        fields: fieldsMap.get(row.id) ?? [],
+      };
     },
 
     async findByHash({ userId, contentHash }: { userId: string; contentHash: string }): Promise<Document | null> {

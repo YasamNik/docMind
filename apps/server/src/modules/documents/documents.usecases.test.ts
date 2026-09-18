@@ -10,6 +10,7 @@ import { createSettingsService } from "../settings/settings.usecases.js";
 import { storageSettingDefinitions } from "../storage/storage.settings.js";
 import { createStorageService } from "../storage/storage.usecases.js";
 import { createTagsService } from "../tags/tags.usecases.js";
+import { createFieldsRepository } from "../fields/fields.repository.js";
 import { createDocumentsRepository } from "./documents.repository.js";
 import { createDocumentsService } from "./documents.usecases.js";
 import type { NewDocument } from "./documents.types.js";
@@ -194,6 +195,21 @@ describe("documents service filters and enrichment", () => {
     await tags.setDocumentCategory({ userId, documentId: document.id, categoryId: category.id });
     const detail = await documents.get({ userId, documentId: document.id });
     expect(detail).toMatchObject({ categoryId: category.id, categoryPath: "Finance", tags: [] });
+  });
+
+  it("get() and list() embed the document's smart fields", async () => {
+    const { document } = await documents.upload({ userId, name: "invoice.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    await createFieldsRepository({ db }).replaceForDocument({
+      userId,
+      documentId: document.id,
+      fields: [{ key: "documentType", value: "invoice", valueNumber: null, valueDate: null, currency: null, confidence: null }],
+    });
+
+    const detail = await documents.get({ userId, documentId: document.id });
+    expect(detail.fields).toEqual([expect.objectContaining({ key: "documentType", value: "invoice" })]);
+
+    const [listed] = await documents.list({ userId });
+    expect(listed?.fields).toEqual([expect.objectContaining({ key: "documentType", value: "invoice" })]);
   });
 
   it("upload() returns the enriched row with categoryPath and tags", async () => {
