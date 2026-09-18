@@ -99,6 +99,8 @@ export function createDocumentsService({
         summaryError: null,
         categoryId: null,
         categorySource: null,
+        documentTypeId: null,
+        documentTypeSource: null,
         documentDate: null,
         triageStatus: "pending",
         deletedAt: null,

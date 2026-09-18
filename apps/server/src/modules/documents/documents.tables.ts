@@ -24,6 +24,8 @@ export const documentsTable = sqliteTable(
     summaryError: text("summary_error"),
     categoryId: text("category_id"),
     categorySource: text("category_source"),
+    documentTypeId: text("document_type_id"),
+    documentTypeSource: text("document_type_source"),
     documentDate: text("document_date"),
     triageStatus: text("triage_status").notNull().default("pending"),
     deletedAt: text("deleted_at"),

@@ -127,6 +127,18 @@ describe("database", () => {
     expect(fk.find((f) => f.table === "documents")?.on_delete).toBe("CASCADE");
   });
 
+  it("creates the document_types table and the documents type columns", async () => {
+    const { db } = await createTestDatabase();
+    const tables = await db.all<{ name: string }>(
+      sql`select name from sqlite_master where type = 'table' and name = 'document_types'`,
+    );
+    expect(tables.length).toBe(1);
+    const columns = await db.all<{ name: string }>(sql`pragma table_info(documents)`);
+    const names = columns.map((c) => c.name);
+    expect(names).toContain("document_type_id");
+    expect(names).toContain("document_type_source");
+  });
+
   it("holds a file database to a single pooled connection", async () => {
     // An in-memory database is always a single connection regardless of client config, so
     // this has to use a real file to exercise the pool. Without forcing `concurrency: 1`,

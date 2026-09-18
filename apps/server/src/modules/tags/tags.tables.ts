@@ -46,6 +46,25 @@ export const tagsTable = sqliteTable(
   (t) => [index("tags_user_idx").on(t.userId), uniqueIndex("tags_user_name_idx").on(t.userId, sql`${t.name} COLLATE NOCASE`)],
 );
 
+export const documentTypesTable = sqliteTable(
+  "document_types",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    color: text("color"),
+    confidenceThreshold: real("confidence_threshold").notNull().default(0.7),
+    autoApply: integer("auto_apply").notNull().default(1),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [
+    index("document_types_user_idx").on(t.userId),
+    uniqueIndex("document_types_user_name_idx").on(t.userId, sql`${t.name} COLLATE NOCASE`),
+  ],
+);
+
 export const documentTagsTable = sqliteTable(
   "document_tags",
   {

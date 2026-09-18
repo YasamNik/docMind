@@ -32,6 +32,8 @@ const listColumns = {
   summaryError: documentsTable.summaryError,
   categoryId: documentsTable.categoryId,
   categorySource: documentsTable.categorySource,
+  documentTypeId: documentsTable.documentTypeId,
+  documentTypeSource: documentsTable.documentTypeSource,
   documentDate: documentsTable.documentDate,
   triageStatus: documentsTable.triageStatus,
   deletedAt: documentsTable.deletedAt,
