@@ -104,8 +104,10 @@ describe("search service, hybrid search", () => {
     const results = await t.services.searchService.search({ userId, query: "apple" });
 
     expect(results[0]).toMatchObject({ documentId: appleDoc, documentName: "apple.txt", source: "hybrid" });
+    // The orange doc's vector is orthogonal to the query vector, so it exceeds the cosine
+    // distance threshold and does not appear in results.
     const orangeResult = results.find((r) => r.documentId === orangeDoc);
-    expect(orangeResult?.source).toBe("vector");
+    expect(orangeResult).toBeUndefined();
   });
 
   it("falls back to keyword-only search when no embedding model is configured", async () => {

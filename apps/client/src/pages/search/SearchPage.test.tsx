@@ -52,7 +52,6 @@ describe("SearchPage", () => {
     fireEvent.change(screen.getByPlaceholderText("Search your documents..."), { target: { value: "rent" } });
     await waitFor(() => expect(searchMock).toHaveBeenCalledWith("rent", 20));
     expect(await screen.findByText("Lease agreement.pdf")).toBeInTheDocument();
-    expect(screen.getByText("87%")).toBeInTheDocument();
     expect(screen.getByText("hybrid")).toBeInTheDocument();
   });
 

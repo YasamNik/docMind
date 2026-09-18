@@ -71,24 +71,26 @@ describe("search models", () => {
       const keyword = ["doc_b", "doc_a"];
       const fused = reciprocalRankFusion(vector, keyword, 60);
 
-      const expectedA = 1 / (60 + 1) + 1 / (60 + 2);
-      const expectedB = 1 / (60 + 2) + 1 / (60 + 1);
+      // Both documents appear in both lists at complementary ranks, so they have the
+      // same raw score and normalize to 1.0.
       expect(fused).toEqual([
-        { documentId: "doc_a", score: expectedA },
-        { documentId: "doc_b", score: expectedB },
+        { documentId: "doc_a", score: 1 },
+        { documentId: "doc_b", score: 1 },
       ]);
     });
 
     it("handles disjoint lists by keeping each document's single contribution", () => {
       const fused = reciprocalRankFusion(["doc_a"], ["doc_b"], 60);
-      expect(fused).toContainEqual({ documentId: "doc_a", score: 1 / 61 });
-      expect(fused).toContainEqual({ documentId: "doc_b", score: 1 / 61 });
+      // Both have the same raw score (1/61), so both normalize to 1.0.
+      expect(fused).toContainEqual({ documentId: "doc_a", score: 1 });
+      expect(fused).toContainEqual({ documentId: "doc_b", score: 1 });
     });
 
     it("handles empty lists without error", () => {
       expect(reciprocalRankFusion([], [], 60)).toEqual([]);
-      expect(reciprocalRankFusion(["doc_a"], [], 60)).toEqual([{ documentId: "doc_a", score: 1 / 61 }]);
-      expect(reciprocalRankFusion([], ["doc_a"], 60)).toEqual([{ documentId: "doc_a", score: 1 / 61 }]);
+      // Single item normalizes to 1.0.
+      expect(reciprocalRankFusion(["doc_a"], [], 60)).toEqual([{ documentId: "doc_a", score: 1 }]);
+      expect(reciprocalRankFusion([], ["doc_a"], 60)).toEqual([{ documentId: "doc_a", score: 1 }]);
     });
 
     it("sorts results by descending fused score", () => {
