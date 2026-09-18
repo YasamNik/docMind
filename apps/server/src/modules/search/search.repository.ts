@@ -75,7 +75,7 @@ export function createSearchRepository({ db }: { db: Database }) {
 
     // Brute-force cosine distance over the emb column using libsql's native vector
     // functions. vector() parses a JSON array string into the F32_BLOB representation.
-    async searchVector(embedding: number[], limit = DEFAULT_VECTOR_LIMIT): Promise<VectorSearchRow[]> {
+    async searchVector(embedding: number[], limit = DEFAULT_VECTOR_LIMIT, maxDistance = 0.35): Promise<VectorSearchRow[]> {
       const vectorJson = JSON.stringify(embedding);
       return db.all<VectorSearchRow>(sql`
         SELECT id AS chunkId,
@@ -85,6 +85,7 @@ export function createSearchRepository({ db }: { db: Database }) {
                vector_distance_cos(emb, vector(${vectorJson})) AS distance
         FROM document_chunks
         WHERE emb IS NOT NULL
+          AND vector_distance_cos(emb, vector(${vectorJson})) < ${maxDistance}
         ORDER BY distance ASC
         LIMIT ${limit}
       `);
