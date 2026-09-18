@@ -65,6 +65,11 @@ export function registerRulesRoutes({
     return c.json(result);
   });
 
+  app.post("/api/sort/suggest", async (c) => {
+    const result = await rulesService.suggestRules({ userId: getUserId(c) });
+    return c.json(result);
+  });
+
   app.get("/api/documents/:id/evaluations", async (c) => {
     const documentId = parseOrValidationError(documentIdSchema, c.req.param("id"));
     const evaluations = await rulesService.listEvaluationsForDocument({ userId: getUserId(c), documentId });

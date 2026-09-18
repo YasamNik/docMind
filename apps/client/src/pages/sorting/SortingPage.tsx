@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { categoriesApi, tagsApi, type CategoryRow, type TagRow } from "@/lib/tags-api";
 import { jobsApi, type JobRow } from "@/lib/jobs-api";
 import { documentsApi, type DocumentRow } from "@/lib/documents-api";
-import { sortApi, type ProposalRow, type SortScope } from "@/lib/sort-api";
+import { sortApi, type ProposalRow, type RuleSuggestion, type SortScope } from "@/lib/sort-api";
 
 type AutomaticItem = { targetType: "tag" | "category"; id: string; name: string; description: string };
 
@@ -230,6 +230,14 @@ export function SortingPage() {
   const [runningItem, setRunningItem] = useState<AutomaticItem | null>(null);
   const [currentBatchIds, setCurrentBatchIds] = useState<string[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [suggestions, setSuggestions] = useState<RuleSuggestion[]>([]);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+
+  const suggest = useMutation({
+    mutationFn: () => sortApi.suggest(),
+    onSuccess: (data) => { setSuggestions(data.suggestions); setSuggestOpen(true); },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   const items = automaticItemsFrom(tags, categories);
   const proposals = proposalsResult?.proposals ?? [];
@@ -259,7 +267,39 @@ export function SortingPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="font-heading text-2xl">Sorting</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="font-heading text-2xl">Sorting</h1>
+        <Button size="sm" variant="outline" onClick={() => suggest.mutate()} disabled={suggest.isPending}>
+          {suggest.isPending ? "Analyzing..." : "Suggest rules"}
+        </Button>
+      </div>
+
+      <Dialog open={suggestOpen} onOpenChange={setSuggestOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rule suggestions</DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[50vh] space-y-3 overflow-auto">
+            {suggestions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No suggestions. Upload more documents for better results.</p>
+            ) : (
+              suggestions.map((s, i) => (
+                <div key={i} className="rounded-lg border p-3 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-sm">{s.name}</span>
+                    <Badge variant="outline">{s.type}</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground">{s.description}</p>
+                  <p className="text-xs text-muted-foreground italic">{s.reasoning}</p>
+                </div>
+              ))
+            )}
+          </div>
+          <DialogFooter>
+            <p className="text-xs text-muted-foreground">Create these as tags or categories on the Tags page, then enable auto-sorting.</p>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Card>
         <CardHeader>

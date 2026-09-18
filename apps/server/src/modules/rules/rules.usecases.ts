@@ -26,7 +26,7 @@ import {
   resultsForItems,
 } from "./rules.models.js";
 import { createRulesRepository } from "./rules.repository.js";
-import { rulesJobPayloadSchema, rulesReplySchema } from "./rules.schemas.js";
+import { rulesJobPayloadSchema, rulesReplySchema, ruleSuggestionsSchema } from "./rules.schemas.js";
 import type { AutomaticItem, EvaluationResult, NewSortEvaluation, Proposal, ProposalKind, ReplyItem, RulesJobPayload, TargetType } from "./rules.types.js";
 
 export function createRulesService({
@@ -495,6 +495,37 @@ export function createRulesService({
     await repository.insertExample({ targetType, targetId, documentId, documentSnippet: snippet, signal });
   }
 
+  async function suggestRules({ userId }: { userId: string }): Promise<{ suggestions: { type: "tag" | "category"; name: string; description: string; reasoning: string }[] }> {
+    const docs = await documentsRepository.listByUser({ userId, view: "all" });
+    if (docs.length === 0) return { suggestions: [] };
+    const sample = docs.slice(0, 20);
+    const snippets = sample.map((d) => `- "${d.name}": ${((d as unknown as { summary?: string }).summary ?? "").slice(0, 150)}`).join("\n");
+    const { categories, tags } = await loadAutomaticItems(userId);
+    const existingNames = [...categories.map((c) => c.pathOrName), ...tags.map((t) => t.pathOrName)];
+    const existingList = existingNames.length > 0 ? `\nExisting rules: ${existingNames.join(", ")}` : "";
+
+    const { providerId, model } = await aiService.resolveSlot(userId, "rules");
+    const system = `You suggest tag and category rules for DocMind, a document manager. Given a sample of the user's documents, propose new tags or categories that would help organize them. Each suggestion needs a name and a plain language description that the sorting engine can evaluate against.
+
+Rules:
+- Do not suggest rules that duplicate existing ones.
+- Suggest 3 to 8 rules based on patterns you see in the documents.
+- Prefer specific, actionable descriptions over vague ones.
+- Reply with JSON only, matching the schema.`;
+
+    const input = `Sample of the user's documents:\n${snippets}${existingList}`;
+
+    const { data } = await aiService.generateStructured<{ suggestions: { type: "tag" | "category"; name: string; description: string; reasoning: string }[] }>({
+      userId,
+      task: "rules",
+      schema: ruleSuggestionsSchema,
+      schemaName: "rule_suggestions",
+      system,
+      input,
+    });
+    return data;
+  }
+
   return {
     handler,
     hasAutomaticItems,
@@ -507,6 +538,7 @@ export function createRulesService({
     listProposals,
     applyProposals,
     recordCorrection,
+    suggestRules,
   };
 }
 

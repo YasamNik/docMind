@@ -46,3 +46,12 @@ export const listProposalsQuerySchema = v.object({
   limit: v.optional(v.pipe(v.string(), v.transform(Number), v.integer(), v.minValue(1), v.maxValue(200))),
   cursor: v.optional(v.string()),
 });
+
+export const ruleSuggestionsSchema = v.object({
+  suggestions: v.array(v.object({
+    type: v.picklist(["tag", "category"]),
+    name: v.pipe(v.string(), v.minLength(1)),
+    description: v.pipe(v.string(), v.minLength(1)),
+    reasoning: v.pipe(v.string(), v.minLength(1)),
+  })),
+});

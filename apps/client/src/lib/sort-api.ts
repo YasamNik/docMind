@@ -52,4 +52,9 @@ export const sortApi = {
   apply(accept: string[], dismiss: string[]) {
     return api.json<{ appliedCount: number; dismissedCount: number }>("POST", "/api/proposals/apply", { accept, dismiss });
   },
+  suggest() {
+    return api.json<{ suggestions: RuleSuggestion[] }>("POST", "/api/sort/suggest", {});
+  },
 };
+
+export type RuleSuggestion = { type: "tag" | "category"; name: string; description: string; reasoning: string };
