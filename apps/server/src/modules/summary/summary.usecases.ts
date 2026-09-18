@@ -4,9 +4,12 @@ import { createError } from "../../shared/errors/errors.js";
 import { createLogger, type Logger } from "../../shared/logger/logger.js";
 import { parseOrValidationError } from "../../shared/http/validate.js";
 import type { AiService } from "../ai/ai.usecases.js";
-import type { Database } from "../database/database.js";
+import { asTxDb, type Database } from "../database/database.js";
 import { nowIso, sanitizeFilename } from "../documents/documents.models.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
+import { normalizeFieldRows } from "../fields/fields.models.js";
+import { createFieldsRepository } from "../fields/fields.repository.js";
+import { createJobsService } from "../jobs/jobs.usecases.js";
 import type { JobHandler } from "../jobs/jobs.runner.js";
 import { assembleSummaryPrompt } from "./summary.models.js";
 import { summaryJobPayloadSchema, summaryReplySchema } from "./summary.schemas.js";
@@ -26,6 +29,8 @@ export function createSummaryService({
   logger?: Logger;
 }) {
   const documentsRepository = createDocumentsRepository({ db });
+  const fieldsRepository = createFieldsRepository({ db });
+  const jobs = createJobsService({ db });
 
   function parseSummaryPayload(raw: string) {
     let value: unknown;
@@ -71,17 +76,27 @@ export function createSummaryService({
         system,
         input,
       });
-      await documentsRepository.update({
-        userId,
-        documentId,
-        patch: {
-          summary: data.summary,
-          suggestedTitle: data.suggestedTitle,
-          documentDate: data.documentDate,
-          summaryStatus: "done",
-          summaryError: null,
-          updatedAt: nowIso(),
-        },
+      const { fields, dropped } = normalizeFieldRows(data.fields ?? []);
+      if (dropped.length > 0) {
+        logger.debug({ userId, documentId, dropped }, "Dropped smart field rows the model got wrong");
+      }
+      // One transaction so a document is never seen with a new summary and stale fields.
+      await db.transaction(async (tx) => {
+        const txDb = asTxDb(tx);
+        await documentsRepository.update({
+          userId,
+          documentId,
+          patch: {
+            summary: data.summary,
+            suggestedTitle: data.suggestedTitle,
+            documentDate: data.documentDate,
+            summaryStatus: "done",
+            summaryError: null,
+            updatedAt: nowIso(),
+          },
+          tx: txDb,
+        });
+        await fieldsRepository.replaceForDocument({ userId, documentId, fields, tx: txDb });
       });
     } catch (error) {
       const message = ((error as Error).message ?? String(error)).slice(0, 2000);

@@ -5,6 +5,7 @@ import { createTestApp } from "../../shared/test/app.test-utils.js";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
 import { createJobRunner } from "../jobs/jobs.runner.js";
 import type { AiAdapter, ModelInfo, StructuredResult, TestResult } from "../ai/ai.types.js";
+import { createFieldsRepository } from "../fields/fields.repository.js";
 
 function fakeAdapter(replyRef: { current: unknown }): AiAdapter {
   return {
@@ -97,6 +98,73 @@ describe("summary service, summarize job", () => {
     const document = await t.services.documentsService.get({ userId, documentId });
     expect(document.summaryStatus).toBe("pending");
     expect(document.summaryError).toContain("provider is down");
+  });
+
+  it("writes the fields the model returned", async () => {
+    const { t, userId, runner, replyRef } = await setup();
+    replyRef.current = {
+      summary: "A bill from Acme.",
+      suggestedTitle: "Acme invoice",
+      documentDate: "2026-01-05",
+      fields: [
+        { key: "documentType", value: "invoice", confidence: 0.95 },
+        { key: "amountTotal", value: "120.50", currency: "USD", confidence: 0.9 },
+      ],
+    };
+    const documentId = await uploadWithText(t, userId, "Invoice from Acme for 120.50 USD.");
+    await t.services.jobsService.enqueue({ userId, type: "summarize", payload: { documentId, userId } });
+    expect(await runner.runOnce()).toBe(1);
+
+    const rows = await createFieldsRepository({ db: t.db }).listByDocument({ userId, documentId });
+    expect(rows.map((r) => r.key).sort()).toEqual(["amountTotal", "documentType"]);
+    expect(rows.find((r) => r.key === "amountTotal")?.valueNumber).toBe(120.5);
+    expect(rows.find((r) => r.key === "amountTotal")?.currency).toBe("USD");
+  });
+
+  it("keeps the good fields and still finishes when one row is bad", async () => {
+    const { t, userId, runner, replyRef } = await setup();
+    replyRef.current = {
+      summary: "A bill.",
+      suggestedTitle: "Bill",
+      documentDate: null,
+      fields: [
+        { key: "documentType", value: "not-a-real-type" },
+        { key: "counterparty", value: "Acme Ltd" },
+      ],
+    };
+    const documentId = await uploadWithText(t, userId, "Some bill text.");
+    await t.services.jobsService.enqueue({ userId, type: "summarize", payload: { documentId, userId } });
+    expect(await runner.runOnce()).toBe(1);
+
+    const document = await t.services.documentsService.get({ userId, documentId });
+    expect(document.summaryStatus).toBe("done");
+    const rows = await createFieldsRepository({ db: t.db }).listByDocument({ userId, documentId });
+    expect(rows.map((r) => r.key)).toEqual(["counterparty"]);
+  });
+
+  it("replaces fields rather than duplicating them when the summary runs again", async () => {
+    const { t, userId, runner, replyRef } = await setup();
+    replyRef.current = { summary: "s", suggestedTitle: "t", documentDate: null, fields: [{ key: "counterparty", value: "Acme" }] };
+    const documentId = await uploadWithText(t, userId, "text");
+    await t.services.jobsService.enqueue({ userId, type: "summarize", payload: { documentId, userId } });
+    expect(await runner.runOnce()).toBe(1);
+    await t.services.jobsService.enqueue({ userId, type: "summarize", payload: { documentId, userId } });
+    expect(await runner.runOnce()).toBe(1);
+
+    const rows = await createFieldsRepository({ db: t.db }).listByDocument({ userId, documentId });
+    expect(rows).toHaveLength(1);
+  });
+
+  it("finishes cleanly when the model returns no fields key at all", async () => {
+    const { t, userId, runner, replyRef } = await setup();
+    replyRef.current = { summary: "s", suggestedTitle: "t", documentDate: null };
+    const documentId = await uploadWithText(t, userId, "text");
+    await t.services.jobsService.enqueue({ userId, type: "summarize", payload: { documentId, userId } });
+    expect(await runner.runOnce()).toBe(1);
+
+    const document = await t.services.documentsService.get({ userId, documentId });
+    expect(document.summaryStatus).toBe("done");
+    expect(await createFieldsRepository({ db: t.db }).listByDocument({ userId, documentId })).toEqual([]);
   });
 });
 

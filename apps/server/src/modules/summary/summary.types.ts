@@ -7,4 +7,5 @@ export type SummaryResult = {
   summary: string;
   suggestedTitle: string;
   documentDate: string | null;
+  fields?: { key: string; value: string; currency?: string | null; confidence?: number | null }[];
 };
