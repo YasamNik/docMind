@@ -94,3 +94,68 @@ Before debugging anything, search this file for the symptom first.
 ### Regression Test
 - `apps/server/src/modules/ai/ai.usecases.test.ts`, "resolves the chat slot and delegates to streamChat" (covers the slot resolution path used by testSlot)
 
+---
+
+## pnpm dev never started the API server because tsx watch does not run under pnpm --parallel, 2026-09-18T14:06:08Z
+
+**Component:** server/build
+**Severity:** Blocker
+**Tags:** windows, dev-server, pnpm
+
+### Symptoms
+- On a fresh clone on a new Windows machine, `pnpm dev` brought up the Vite client on 5173 but the API server never bound port 4000 and printed no output
+- Every /api call through the Vite proxy returned 502 Bad Gateway
+- Sign-in page rendered blank with "Failed to load resource: 502" on /api/auth/status
+- No docmind.sqlite was created, so the server never reached migrations
+
+### Root Cause
+- The server dev script was `tsx watch --env-file=.env src/index.ts`
+- `tsx watch` supervises its own spawned child process and under pnpm's `--parallel` mode on Windows it never gets going
+- Evidence: `pnpm -r --filter @docmind/server run dev` (no --parallel) starts in seconds; the same command with `--parallel` never binds after 120s
+- `node --watch --import tsx --env-file=.env src/index.ts` under the same `--parallel` command binds in 10s and logs normally
+
+### Solution / Fix
+- Changed `apps/server/package.json` dev script to `node --watch --import tsx --env-file=.env src/index.ts`
+- `start` and `build` scripts unchanged, Docker image runs `node dist/index.js` directly, no impact
+- Node's --watch watches only the imported module graph, so writes to docmind.sqlite or the documents directory do not cause restart loops
+
+### Regression Test
+- None. A package manager script change cannot be covered by the vitest suite, and no such test exists.
+- Verified manually instead: `pnpm dev` from the repo root, then the API on 4000, the client on 5173, and the `/api` proxy through 5173 all answer 200 within five seconds.
+
+### Follow-up / Notes
+- If the dev server is ever silent again, run the server package's dev script alone without --parallel to surface the error that parallel mode hides
+
+---
+
+## database pool test failed on Windows with EBUSY because libsql releases the file handle on GC, not on close, 2026-09-18T14:06:08Z
+
+**Component:** database
+**Severity:** Major
+**Tags:** windows, libsql, test
+
+### Symptoms
+- `apps/server/src/modules/database/database.test.ts`, test "holds a file database to a single pooled connection", failed every run on Windows with `EBUSY: resource busy or locked, unlink 'C:\Users\...\AppData\Local\Temp\docmind-test-<uuid>.db'`
+- The assertion under test passed; the failure came from the cleanup in the finally block
+
+### Root Cause
+- The native libsql binding (libsql 0.5.29 under @libsql/client 0.18.0) marks the wrapper closed when `close()` returns but releases the OS file handle only when the native object is finalized by garbage collection
+- Proven by probe script: `close()` then unlink immediately gives EBUSY; `close()` plus delay still gives EBUSY; `close()` plus forced `global.gc()` plus delay unlinks successfully
+- POSIX allows unlinking a file that is still open, so this cleanup worked by platform luck on Linux and macOS; on Windows it fails deterministically
+
+### Solution / Fix
+- Cleanup is now best effort in `apps/server/src/modules/database/database.test.ts`
+- Temp databases go in a dedicated `docmind-db-tests` directory under the OS temp dir
+- Each run sweeps the previous run's leftovers on the way in (files from a finished process are unlocked)
+- Unlinks are wrapped so a failure cannot fail the test
+
+### Regression Test
+- `apps/server/src/modules/database/database.test.ts`, "holds a file database to a single pooled connection"
+
+### Scope Note
+- Test only: `client.close()` appears nowhere in production code
+- The server holds its database open for the life of the process
+
+### Follow-up / Notes
+- Two concurrent server suites on one machine are out of scope, since the sweep is best effort and every file name is unique
+
