@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Extract a small controlled set of facts from every document (type, counterparty, amount, due date, expiry date, reference number) and make them visible and filterable in the library.
+**Goal:** Extract a controlled set of fourteen generic facts from every document (type, counterparty, person, amounts, tax, payment method, status, account and reference numbers, due/expiry/period dates, location) and make them visible and filterable in the library. The keys are generic on purpose so one small set covers business, household, travel, bills, and receipts.
 
 **Architecture:** A new `fields` module owns a generic `document_fields` table and all pure logic for the key vocabulary. Extraction rides along on the existing summary LLM call rather than adding a second call. The summary usecase writes the document's summary columns and its field rows in one transaction. The library filters fields client-side against data already embedded in the list response.
 
@@ -117,8 +117,8 @@ export const documentFieldsTable = sqliteTable(
     value: text("value").notNull(),
     valueNumber: real("value_number"),
     valueDate: text("value_date"),
-    // Set only on the amountTotal row. One row carries the amount and its currency so
-    // per-row validation can never leave a currency with no amount beside it.
+    // Set on the amount rows only. Each amount carries its own currency, so per-row
+    // validation can never leave a currency with no amount beside it.
     currency: text("currency"),
     confidence: real("confidence"),
     source: text("source").notNull().default("llm"),
@@ -137,13 +137,26 @@ export const documentFieldsTable = sqliteTable(
 Create `apps/server/src/modules/fields/fields.types.ts`:
 
 ```ts
+// Deliberately generic rather than one branch per document domain. Vendor, merchant,
+// airline, landlord, and insurer are all the counterparty; invoice number, booking
+// reference, and policy number are all the reference number. Naming each variant would
+// put forty keys in the prompt of every document, so a grocery receipt would be asked
+// about lease terms.
 export const FIELD_KEYS = [
   "documentType",
   "counterparty",
+  "personName",
   "amountTotal",
+  "taxAmount",
+  "paymentMethod",
+  "status",
+  "accountNumber",
+  "referenceNumber",
   "dueDate",
   "expiryDate",
-  "referenceNumber",
+  "periodStart",
+  "periodEnd",
+  "location",
 ] as const;
 
 export type FieldKey = (typeof FIELD_KEYS)[number];
@@ -151,19 +164,45 @@ export type FieldKey = (typeof FIELD_KEYS)[number];
 export const DOCUMENT_TYPES = [
   "invoice",
   "receipt",
-  "contract",
+  "utility",
   "statement",
-  "letter",
-  "report",
+  "contract",
+  "lease",
+  "insurance",
   "identity",
   "medical",
-  "insurance",
   "tax",
+  "payslip",
+  "travel",
+  "warranty",
   "subscription",
+  "legal",
+  "vehicle",
+  "letter",
+  "report",
   "other",
 ] as const;
 
 export type DocumentType = (typeof DOCUMENT_TYPES)[number];
+
+export const FIELD_STATUSES = [
+  "paid",
+  "unpaid",
+  "overdue",
+  "confirmed",
+  "cancelled",
+  "active",
+  "expired",
+] as const;
+
+export type FieldStatus = (typeof FIELD_STATUSES)[number];
+
+// The keys whose value is also parsed into a typed column, so filtering and sorting do
+// not have to parse text in SQL.
+export const AMOUNT_KEYS: FieldKey[] = ["amountTotal", "taxAmount"];
+export const DATE_KEYS: FieldKey[] = ["dueDate", "expiryDate", "periodStart", "periodEnd"];
+// The keys that routinely hold personal data. The prompt requires the masked form.
+export const SENSITIVE_KEYS: FieldKey[] = ["personName", "accountNumber", "paymentMethod"];
 
 export type ExtractedField = {
   id: string;
@@ -236,7 +275,7 @@ Create `apps/server/src/modules/fields/fields.models.test.ts`:
 ```ts
 import { describe, expect, it } from "vitest";
 import { FIELDS_PROMPT_SECTION, normalizeFieldRow, normalizeFieldRows } from "./fields.models.js";
-import { DOCUMENT_TYPES, FIELD_KEYS } from "./fields.types.js";
+import { DOCUMENT_TYPES, FIELD_KEYS, FIELD_STATUSES } from "./fields.types.js";
 
 describe("normalizeFieldRow", () => {
   it("keeps a valid documentType", () => {
@@ -286,6 +325,38 @@ describe("normalizeFieldRow", () => {
       currency: null,
       confidence: null,
     });
+  });
+
+  it("keeps a valid status and lowercases it", () => {
+    expect(normalizeFieldRow({ key: "status", value: "Paid" })?.value).toBe("paid");
+  });
+
+  it("drops a status outside the enum, so an inferred guess never lands", () => {
+    expect(normalizeFieldRow({ key: "status", value: "probably unpaid" })).toBeNull();
+  });
+
+  it("parses taxAmount the same way as amountTotal, with its own currency", () => {
+    expect(normalizeFieldRow({ key: "taxAmount", value: "18.50", currency: "eur" })).toEqual({
+      key: "taxAmount",
+      value: "18.50",
+      valueNumber: 18.5,
+      valueDate: null,
+      currency: "EUR",
+      confidence: null,
+    });
+  });
+
+  it("treats periodStart and periodEnd as dates", () => {
+    expect(normalizeFieldRow({ key: "periodStart", value: "2026-01-01" })?.valueDate).toBe("2026-01-01");
+    expect(normalizeFieldRow({ key: "periodEnd", value: "2026-12-31" })?.valueDate).toBe("2026-12-31");
+    expect(normalizeFieldRow({ key: "periodEnd", value: "whenever" })).toBeNull();
+  });
+
+  it("keeps the new text keys as plain text", () => {
+    expect(normalizeFieldRow({ key: "personName", value: "Jane Doe" })?.value).toBe("Jane Doe");
+    expect(normalizeFieldRow({ key: "paymentMethod", value: "card ending 4821" })?.value).toBe("card ending 4821");
+    expect(normalizeFieldRow({ key: "accountNumber", value: "ACC-99120" })?.value).toBe("ACC-99120");
+    expect(normalizeFieldRow({ key: "location", value: "12 King St, Toronto" })?.value).toBe("12 King St, Toronto");
   });
 
   it("keeps a valid date and mirrors it into valueDate", () => {
@@ -360,6 +431,14 @@ describe("FIELDS_PROMPT_SECTION", () => {
     for (const type of DOCUMENT_TYPES) expect(FIELDS_PROMPT_SECTION).toContain(type);
   });
 
+  it("names every status", () => {
+    for (const status of FIELD_STATUSES) expect(FIELDS_PROMPT_SECTION).toContain(status);
+  });
+
+  it("tells the model not to write full card or identifier numbers", () => {
+    expect(FIELDS_PROMPT_SECTION).toContain("Never write a full card number");
+  });
+
   it("states the counterparty rule of thumb", () => {
     expect(FIELDS_PROMPT_SECTION.toLowerCase()).toContain("not the owner");
   });
@@ -376,28 +455,55 @@ Expected: FAIL, cannot resolve `./fields.models.js`.
 Create `apps/server/src/modules/fields/fields.models.ts`:
 
 ```ts
-import { DOCUMENT_TYPES, FIELD_KEYS, type FieldKey, type NormalizedField } from "./fields.types.js";
+import {
+  AMOUNT_KEYS,
+  DATE_KEYS,
+  DOCUMENT_TYPES,
+  FIELD_KEYS,
+  FIELD_STATUSES,
+  type FieldKey,
+  type NormalizedField,
+} from "./fields.types.js";
 
+// Also the ceiling that stops a model ignoring the masking instruction from dumping a
+// page of text into a personal data field.
 const TEXT_VALUE_LIMIT = 200;
-
-const DATE_KEYS: FieldKey[] = ["dueDate", "expiryDate"];
 
 // The model is told the vocabulary here. The reply schema deliberately does not enforce
 // any of it: generateStructured parses the whole reply as one object and throws on any
 // nested failure, so a single invented key would take the summary down with it. Every
 // rule below is checked after parsing instead, in normalizeFieldRow.
 export const FIELDS_PROMPT_SECTION = `Also extract the following facts, as a "fields" array. Include an entry only when the
-document actually states it. Omit anything you would have to guess at.
+document actually states it. Omit anything you would have to guess at. Most documents
+will fill only a few of these, which is expected.
 
 - documentType: one of ${DOCUMENT_TYPES.join(", ")}.
-- counterparty: the organisation or person who is not the owner of this collection. On a
-  document the owner received that is the sender, vendor, or issuer. On one the owner
-  wrote it is the addressee. Omit it when there is no second party.
-- amountTotal: the headline total, not a line item. Give the number as it appears, and put
+- counterparty: the organisation or person who is not the owner of this collection: the
+  vendor, merchant, airline, landlord, clinic, insurer, or employer. On a document the
+  owner received that is the sender or issuer. On one the owner wrote it is the
+  addressee. Omit it when there is no second party.
+- personName: the person the document is about, such as the patient, traveller, passport
+  holder, insured person, or employee. This is a person, not an organisation.
+- amountTotal: the headline total, not a line item. Give the number as it appears and put
   its ISO 4217 code in "currency", for example USD or EUR.
+- taxAmount: VAT, GST, or sales tax, only when stated separately from the total. Same
+  currency handling as amountTotal.
+- paymentMethod: how it was paid, in masked form only, for example "card ending 4821" or
+  "bank transfer".
+- status: one of ${FIELD_STATUSES.join(", ")}, only when the document states it. Do not
+  infer that a bill is unpaid just because it does not say paid.
+- accountNumber: an account that persists across documents, such as a utility or bank
+  account number. Not this document's own reference.
+- referenceNumber: this document's own identifier: invoice number, booking reference,
+  policy number, or passport number.
 - dueDate: when payment or action is due, as YYYY-MM-DD.
 - expiryDate: when the document or its cover stops being valid, as YYYY-MM-DD.
-- referenceNumber: the invoice, policy, or account number.
+- periodStart and periodEnd: the period the document covers, as YYYY-MM-DD. A billing
+  period, a hotel stay, a lease term, an insurance year, or a tax year.
+- location: the property address, travel destination, or place of service.
+
+Never write a full card number, a full social insurance or social security number, or a
+full national tax identifier. Give the masked or partial form, or omit the field.
 
 Each entry is { "key": ..., "value": ..., "currency": ... or null, "confidence": 0 to 1 }.`;
 
@@ -457,7 +563,13 @@ export function normalizeFieldRow(row: {
     return { ...base, value: lowered };
   }
 
-  if (key === "amountTotal") {
+  if (key === "status") {
+    const lowered = trimmed.toLowerCase();
+    if (!(FIELD_STATUSES as readonly string[]).includes(lowered)) return null;
+    return { ...base, value: lowered };
+  }
+
+  if (AMOUNT_KEYS.includes(key)) {
     const amount = parseAmount(trimmed);
     if (amount === null) return null;
     const rawCurrency = typeof row.currency === "string" ? row.currency.trim().toUpperCase() : "";

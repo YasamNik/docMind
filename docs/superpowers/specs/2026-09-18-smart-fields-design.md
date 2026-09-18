@@ -71,15 +71,51 @@ schema change.
 
 | Key | Meaning | Value shape |
 |-----|---------|-------------|
+The set is deliberately generic rather than per domain. Across business, household,
+travel, bills, and receipts the same fact wears different names: vendor, merchant,
+airline, landlord, clinic, and insurer are all the counterparty; invoice number, booking
+reference, policy number, and passport number are all the reference number; warranty end,
+coverage end, lease end, and passport expiry are all the expiry date. Naming each variant
+separately would put forty keys in the prompt of every document, so a grocery receipt
+would be asked about lease terms and flight numbers. Fourteen generic keys cover the same
+ground with a prompt that stays short and a filter menu that stays usable.
+
+| Key | Meaning | Value shape |
+|-----|---------|-------------|
 | `documentType` | What kind of document this is | one of the enum below |
-| `counterparty` | The other organisation or person, see the rule of thumb below | text |
+| `counterparty` | The other organisation or person: vendor, merchant, airline, landlord, clinic, insurer, employer. See the rule of thumb below | text |
+| `personName` | The person the document is about: patient, traveller, passport holder, insured, employee | text |
 | `amountTotal` | The headline amount, the total rather than a line item | number, plus `currency` on the same row |
+| `taxAmount` | VAT, GST, or sales tax, when stated separately from the total | number, plus `currency` on the same row |
+| `paymentMethod` | How it was paid, masked form only | text |
+| `status` | Only when the document states it | one of the status enum below |
+| `accountNumber` | An account that persists across documents, such as a utility or bank account | text |
+| `referenceNumber` | This document's own identifier: invoice number, booking reference, policy number, passport number | text |
 | `dueDate` | When payment or action is due | date |
 | `expiryDate` | When the document or its coverage stops being valid | date |
-| `referenceNumber` | Invoice number, policy number, account number | text |
+| `periodStart` | Start of the period the document covers | date |
+| `periodEnd` | End of the period the document covers | date |
+| `location` | Property address, travel destination, or place of service | text |
 
-`documentType` enum: `invoice`, `receipt`, `contract`, `statement`, `letter`, `report`,
-`identity`, `medical`, `insurance`, `tax`, `subscription`, `other`.
+`periodStart` and `periodEnd` are the pair that earns its keep across domains: a billing
+period, a hotel stay, a lease term, an insurance year, and a tax year are all the same
+shape.
+
+`documentType` enum: `invoice`, `receipt`, `utility`, `statement`, `contract`, `lease`,
+`insurance`, `identity`, `medical`, `tax`, `payslip`, `travel`, `warranty`,
+`subscription`, `legal`, `vehicle`, `letter`, `report`, `other`.
+
+`status` enum: `paid`, `unpaid`, `overdue`, `confirmed`, `cancelled`, `active`, `expired`.
+
+### Personal data in extracted fields
+
+`personName`, `accountNumber`, and `paymentMethod` are the keys that routinely hold
+personal data, which is why the prompt is explicit about masking: record `card ending
+4821`, never a full card number, and never a full social insurance, social security, or
+national tax identifier. Values are capped at 200 characters, so a model that ignores the
+instruction still cannot dump a page of text into the row. These fields live in the same
+database as the document text they came from, so the point is to avoid multiplying copies
+of a card number, not to defend a new trust boundary.
 
 Counterparty rule of thumb, stated in the prompt so the model is consistent: the party
 that is not the document's owner. For a received document that is the sender, vendor, or
@@ -92,12 +128,13 @@ gain. Smart fields adds the dates that are not "when was this written".
 
 ### Amount and currency are one row
 
-The `amountTotal` row carries a `currency` column. There is no separate `currency` key.
+An amount row carries its own `currency` column. There is no separate `currency` key.
 
 Reasoning: the table already gives typed columns to a subset of keys (`value_number`,
 `value_date`), so `currency` fits that established shape. The unique index on
-`(document_id, key)` means there is at most one `amountTotal` row, so the pairing is
-unambiguous. Two rows would risk an orphan currency with no amount when per-row
+`(document_id, key)` means there is at most one row per amount key, so the pairing is
+unambiguous and `amountTotal` and `taxAmount` can differ in currency without ambiguity.
+A separate currency key would risk an orphan currency with no amount when per-row
 validation drops one but not the other.
 
 ## Data model
@@ -111,9 +148,9 @@ New table `document_fields`:
 | `document_id` | text, not null | FK to `documents.id`, on delete cascade |
 | `key` | text, not null | one of the controlled keys |
 | `value` | text, not null | display form, always present |
-| `value_number` | real, nullable | set for `amountTotal` |
-| `value_date` | text, nullable | YYYY-MM-DD, set for `dueDate` and `expiryDate` |
-| `currency` | text, nullable | ISO 4217, set only on the `amountTotal` row |
+| `value_number` | real, nullable | set for `amountTotal` and `taxAmount` |
+| `value_date` | text, nullable | YYYY-MM-DD, set for `dueDate`, `expiryDate`, `periodStart`, `periodEnd` |
+| `currency` | text, nullable | ISO 4217, set on the amount rows |
 | `confidence` | real, nullable | 0 to 1 as reported by the model |
 | `source` | text, not null | `llm` now, `manual` later |
 | `created_at` | text, not null | |
@@ -260,6 +297,21 @@ accepted:
   `subscription` added to the enum, cascade citation corrected, `documentDate` excluded
   from the detail list, confidence surfaced as a tooltip, trashed documents excluded from
   the value menu, duplicate-job guard on backfill, manual quality spot-check added.
+
+## Vocabulary widened, 2026-09-18
+
+The user asked for more extracted data, covering business, household, travel, bills, and
+receipts. Two rulings came out of that:
+
+- The vocabulary went from six keys to fourteen, but stayed generic rather than growing a
+  branch per domain. The rejected alternatives were type-specific field groups in the same
+  prompt (around thirty keys, a longer prompt on every document) and a two stage classify
+  then extract pipeline (the most accurate and the richest, at two model calls per
+  document instead of one). The user chose the single generic set, so extraction still
+  costs nothing beyond the summary call that already runs.
+- Typed storage was confirmed: amounts also land in `value_number` and dates in
+  `value_date`, so totalling a year of bills or finding everything expiring within thirty
+  days does not mean parsing strings in SQL. Item #32 would otherwise have to add it back.
 
 ## Open question for the user, not blocking
 
