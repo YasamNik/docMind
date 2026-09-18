@@ -175,7 +175,7 @@ describe("documents service filters and enrichment", () => {
   });
 
   it("filters by documentTypeId and resolves the type name onto each row", async () => {
-    const tags = createTagsService({ db });
+    const tags = createTestTagsService({ db });
     const invoice = await tags.createType({ userId, name: "Invoice" });
     const receipt = await tags.createType({ userId, name: "Receipt" });
     const repository = createDocumentsRepository({ db });
@@ -197,7 +197,7 @@ describe("documents service filters and enrichment", () => {
   });
 
   it("get() resolves the document type name for a single document", async () => {
-    const tags = createTagsService({ db });
+    const tags = createTestTagsService({ db });
     const invoice = await tags.createType({ userId, name: "Invoice" });
     const repository = createDocumentsRepository({ db });
     const { document } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
