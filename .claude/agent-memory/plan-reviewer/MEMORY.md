@@ -10,3 +10,5 @@
 - [D4 Inbox triage spec review](review-spec-d4-inbox-triage.md) -- implementation already in tree before spec review, unflagged departure from Phase 2 decision 12, dead code and empty-state contradictions found
 - [Smart fields spec review](review-spec-smart-fields.md) -- backfill "rerun exists" claim was false, currency-merge ruling, module boundary gap
 - [LLM reply partial-tolerance lesson](lesson-llm-reply-partial-tolerance.md) -- generateStructured fails the whole reply on any bad array element; check the reply schema is loose where the spec claims per-row tolerance, mirror rules.schemas.ts
+- [Storage drivers spec review](review-spec-storage-drivers.md) -- scope claim false for chat/detail/download paths, OAuth loopback conflicts with tunnel workflow
+- [Storage S3/scope plan review](review-plan-storage-s3-scope.md) -- prior spec fixes verified real; storage.usecases.ts lacks documentsRepository, wrong test harness assumed, lib-storage Upload always multiparts streams
