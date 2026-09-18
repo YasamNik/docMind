@@ -30,7 +30,7 @@ function escapeFts5Query(query: string): string {
     .trim()
     .split(/\s+/)
     .filter((token) => token.length > 0)
-    .map((token) => `"${token.replace(/"/g, '""')}"`)
+    .map((token) => `"${token.replace(/"/g, '""')}"*`)
     .join(" ");
 }
 
@@ -75,7 +75,7 @@ export function createSearchRepository({ db }: { db: Database }) {
 
     // Brute-force cosine distance over the emb column using libsql's native vector
     // functions. vector() parses a JSON array string into the F32_BLOB representation.
-    async searchVector(embedding: number[], limit = DEFAULT_VECTOR_LIMIT, maxDistance = 0.35): Promise<VectorSearchRow[]> {
+    async searchVector(embedding: number[], limit = DEFAULT_VECTOR_LIMIT, maxDistance = 0.55): Promise<VectorSearchRow[]> {
       const vectorJson = JSON.stringify(embedding);
       return db.all<VectorSearchRow>(sql`
         SELECT id AS chunkId,
