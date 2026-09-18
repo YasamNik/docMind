@@ -37,6 +37,10 @@ the settings tab built here.
 - Conventional commits, one per task, each leaving the tree green.
 - Run from the repo root: `pnpm --filter @docmind/server test`,
   `pnpm --filter @docmind/client test`, `pnpm typecheck`.
+- To run one file's tests, use `pnpm --filter @docmind/server exec vitest run <pattern>`.
+  `pnpm --filter @docmind/server test -- <pattern>` does NOT filter: the argument never
+  reaches vitest and the whole suite runs, which wastes a minute per step and makes a
+  "watch it fail" step hard to read.
 
 ## File Structure
 
@@ -88,7 +92,7 @@ it("describes where a key lives as an absolute path", () => {
 
 - [ ] **Step 2: Run it and watch it fail**
 
-Run: `pnpm --filter @docmind/server test -- local.driver`
+Run: `pnpm --filter @docmind/server exec vitest run local.driver`
 Expected: FAIL, `describeLocation is not a function`.
 
 - [ ] **Step 3: Add the contract type**
@@ -134,7 +138,7 @@ In `driver-contract.test-utils.ts`, inside the shared describe:
 
 - [ ] **Step 6: Run the storage tests**
 
-Run: `pnpm --filter @docmind/server test -- storage`
+Run: `pnpm --filter @docmind/server exec vitest run storage`
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
@@ -213,7 +217,7 @@ scope did not leak into the maintenance jobs.
 
 - [ ] **Step 3: Run both and watch the right ones fail**
 
-Run: `pnpm --filter @docmind/server test -- "documents.usecases|search.usecases"`
+Run: `pnpm --filter @docmind/server exec vitest run "documents.usecases|search.usecases"`
 Expected: the two tests in Step 1 FAIL, the Step 2 test PASSES.
 
 - [ ] **Step 4: Add the optional filter to the repository**
@@ -245,7 +249,7 @@ calls. Change no other caller of either method.
 
 - [ ] **Step 6: Run the suites**
 
-Run: `pnpm --filter @docmind/server test -- "documents|search"`
+Run: `pnpm --filter @docmind/server exec vitest run "documents|search"`
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
@@ -286,7 +290,7 @@ Same hand-built harness as Task 2, and `expectAppError` is already imported in t
 
 - [ ] **Step 2: Run it and watch it fail**
 
-Run: `pnpm --filter @docmind/server test -- documents.usecases`
+Run: `pnpm --filter @docmind/server exec vitest run documents.usecases`
 Expected: FAIL, the call resolves instead of rejecting.
 
 - [ ] **Step 3: Add the guard**
@@ -315,7 +319,7 @@ it in `restore`, which only moves metadata.
 
 - [ ] **Step 4: Run the suite**
 
-Run: `pnpm --filter @docmind/server test -- documents`
+Run: `pnpm --filter @docmind/server exec vitest run documents`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -373,7 +377,7 @@ it("names the storage of a cited document that is not on the active storage", ()
 
 - [ ] **Step 2: Run them and watch them fail**
 
-Run: `pnpm --filter @docmind/server test -- "search.usecases|chat.models"`
+Run: `pnpm --filter @docmind/server exec vitest run "search.usecases|chat.models"`
 Expected: FAIL on the missing property.
 
 - [ ] **Step 3: Carry the driver through search**
@@ -406,7 +410,7 @@ from this page.
 
 - [ ] **Step 6: Run the suites**
 
-Run: `pnpm --filter @docmind/server test -- "search|chat"`
+Run: `pnpm --filter @docmind/server exec vitest run "search|chat"`
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
@@ -494,7 +498,7 @@ describe("storage routes", () => {
 
 - [ ] **Step 2: Run it and watch it fail**
 
-Run: `pnpm --filter @docmind/server test -- storage.routes`
+Run: `pnpm --filter @docmind/server exec vitest run storage.routes`
 Expected: FAIL, 404 on every route.
 
 - [ ] **Step 3: Thread `db` into the storage service**
@@ -607,7 +611,7 @@ it("refuses to switch while the health check fails", async () => { /* ... */ });
 
 - [ ] **Step 2: Run them and watch them fail**
 
-Run: `pnpm --filter @docmind/client test -- StorageTab`
+Run: `pnpm --filter @docmind/client exec vitest run StorageTab`
 Expected: FAIL, the elements do not exist.
 
 - [ ] **Step 3: Write the client api module**
@@ -623,7 +627,7 @@ confirmation naming both counts and the sentence about search and chat. Reuse
 
 - [ ] **Step 5: Run the suites**
 
-Run: `pnpm --filter @docmind/client test -- StorageTab` then `pnpm typecheck`
+Run: `pnpm --filter @docmind/client exec vitest run StorageTab` then `pnpm typecheck`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
@@ -745,7 +749,7 @@ it("round trips a body larger than one multipart chunk", async () => {
 });
 ```
 
-Run: `pnpm --filter @docmind/server test -- s3.driver`
+Run: `pnpm --filter @docmind/server exec vitest run s3.driver`
 Expected: FAIL, the module does not exist.
 
 - [ ] **Step 4: Implement the driver**
