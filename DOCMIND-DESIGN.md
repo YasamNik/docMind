@@ -332,10 +332,17 @@ redirects to settings. Drivers refresh access tokens themselves. A disconnect ac
 clears tokens. The form shows the exact redirect URI derived from the server base URL,
 with a copy button and a note that scheme, host, and port must match exactly.
 
-**Switching drivers.** Each document row records its driver. Changing the active driver
-affects new uploads only. Reads resolve the driver from the row. The UI shows how many
-documents each driver holds and refuses to clear credentials for a driver that holds
-any. A move-documents job is a later item.
+**Switching drivers.** Each document row records its driver. The active driver is the
+storage you are looking at: the documents list, the trash and their counts show only
+documents held there, and reading a file from any other driver is refused with a message
+naming that storage and the original's location. Search, chat, export and every background
+job stay unscoped, so knowledge is never hidden even when the file is: a chat answer can
+cite a document on an inactive storage, say which storage holds it, and point at it.
+Each driver answers `describeLocation(key)` without a network call so that pointer works
+while the driver is inactive. The UI shows how many documents each driver holds, asks for
+confirmation before a switch with those counts in the question, and refuses to clear
+credentials for a driver that holds any. A move-documents job is a later item.
+(Decided 2026-09-18, replacing "changing the active driver affects new uploads only".)
 
 **Errors** map to a small set: auth expired, not found, quota, network. Auth expired
 surfaces on the settings page as a Reconnect prompt.
