@@ -40,7 +40,20 @@ function highlightMatches(text: string, query: string) {
   );
 }
 
+function extractSnippet(text: string, query: string, maxLen = 200): string {
+  const tokens = query.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return text.slice(0, maxLen);
+  const pattern = new RegExp(tokens.map(escapeRegExp).join("|"), "i");
+  const match = pattern.exec(text);
+  if (!match) return text.slice(0, maxLen);
+  const start = Math.max(0, match.index - 80);
+  const end = Math.min(text.length, match.index + match[0].length + 120);
+  const snippet = (start > 0 ? "..." : "") + text.slice(start, end).trim() + (end < text.length ? "..." : "");
+  return snippet;
+}
+
 function ResultCard({ result, query }: { result: SearchResult; query: string }) {
+  const snippet = extractSnippet(result.chunkText, query);
   return (
     <Card>
       <CardContent className="space-y-2">
@@ -48,12 +61,9 @@ function ResultCard({ result, query }: { result: SearchResult; query: string }) 
           <Link to={`/documents/${result.documentId}`} className="font-heading text-base underline-offset-2 hover:underline">
             {result.documentName}
           </Link>
-          <div className="flex shrink-0 items-center gap-2">
-            <Badge variant="secondary">{Math.round(result.score * 100)}%</Badge>
-            <Badge variant={SOURCE_VARIANTS[result.source]}>{SOURCE_LABELS[result.source]}</Badge>
-          </div>
+          <Badge variant={SOURCE_VARIANTS[result.source]}>{SOURCE_LABELS[result.source]}</Badge>
         </div>
-        <p className="text-sm text-muted-foreground">{highlightMatches(result.chunkText, query)}</p>
+        <p className="text-sm text-muted-foreground">{highlightMatches(snippet, query)}</p>
       </CardContent>
     </Card>
   );

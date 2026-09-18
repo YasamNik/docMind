@@ -82,7 +82,11 @@ export function reciprocalRankFusion(
   addList(vectorResults);
   addList(keywordResults);
 
-  return Array.from(scores.entries())
+  const results = Array.from(scores.entries())
     .map(([documentId, score]) => ({ documentId, score }))
     .sort((a, b) => b.score - a.score);
+
+  if (results.length === 0) return results;
+  const maxScore = results[0]!.score;
+  return results.map((r) => ({ ...r, score: maxScore > 0 ? r.score / maxScore : 0 }));
 }

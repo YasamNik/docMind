@@ -175,7 +175,9 @@ export function createSearchService({
 
     const keywordIds = dedupeOrderedIds(keywordRows.map((r) => r.documentId));
     const vectorIds = dedupeOrderedIds(vectorRows.map((r) => r.documentId));
-    const fused = reciprocalRankFusion(vectorIds, keywordIds).slice(0, limit);
+    const fused = reciprocalRankFusion(vectorIds, keywordIds)
+      .filter((r) => r.score >= 0.1)
+      .slice(0, limit);
 
     const keywordByDocument = bestRowByDocument<KeywordSearchRow>(keywordRows);
     const vectorByDocument = bestRowByDocument<VectorSearchRow>(vectorRows);
