@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { allSettingDefinitions } from "../settings/settings.definitions.js";
+import { aiProviderIds } from "./providers/index.js";
 import { aiSettingDefinitions, aiSlotSettingDefinitions } from "./ai.settings.js";
 
 describe("ai settings", () => {
@@ -28,6 +29,17 @@ describe("ai settings", () => {
       secret: false,
       internal: false,
     });
+  });
+
+  it("defines an enabled flag for every provider, defaulting to false and not internal", () => {
+    const byKey = new Map(aiSettingDefinitions.map((d) => [d.key, d]));
+    for (const id of aiProviderIds) {
+      expect(byKey.get(`ai.${id}.enabled`)).toMatchObject({
+        default: false,
+        secret: false,
+        internal: false,
+      });
+    }
   });
 
   it("is registered in the global definitions", () => {

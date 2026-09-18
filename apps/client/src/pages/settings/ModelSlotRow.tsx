@@ -6,13 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { aiApi, type ProviderInfo, type SlotInfo, type ModelInfo } from "@/lib/ai-api";
 import { settingsApi } from "@/lib/settings-api";
-
-const SLOT_LABELS: Record<string, string> = {
-  rules: "Rules (sorting)",
-  chat: "Chat",
-  embedding: "Embedding",
-  vision: "Vision (OCR fallback)",
-};
+import { SLOT_LABELS } from "./ai-slot-labels";
 
 export function ModelSlotRow({
   slot,

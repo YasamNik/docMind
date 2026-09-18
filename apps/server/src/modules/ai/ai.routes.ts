@@ -31,6 +31,7 @@ export function registerAiRoutes({
         const baseUrlResolved = hasBaseUrlSetting
           ? await settingsService.getResolved(userId, `ai.${id}.baseUrl`)
           : null;
+        const enabledResolved = await settingsService.getResolved(userId, `ai.${id}.enabled`);
 
         return {
           id: def.id,
@@ -41,6 +42,7 @@ export function registerAiRoutes({
           capabilities: def.capabilities,
           suggestedModels: def.suggestedModels,
           guide: def.guide,
+          enabled: enabledResolved.value as boolean,
           keySet: keyResolved ? (keyResolved.value as { isSet: boolean }).isSet : false,
           keyLastFour: keyResolved ? (keyResolved.value as { lastFour?: string }).lastFour : undefined,
           baseUrl: baseUrlResolved

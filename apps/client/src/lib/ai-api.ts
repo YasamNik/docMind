@@ -9,10 +9,25 @@ export type ProviderInfo = {
   capabilities: { text: boolean; structured: boolean; embeddings: boolean; listModels: boolean };
   suggestedModels: { rules?: string; chat?: string; embedding?: string };
   guide: { title: string; intro: string; steps: { text: string; link?: string; copyValue?: string }[]; notes: string[] };
+  enabled: boolean;
   keySet: boolean;
   keyLastFour?: string;
   baseUrl: { value: string; source: string };
 };
+
+// A provider is "added" (shown as a card) when the user explicitly enabled it, or when
+// it already has a key set. The key-set clause is backward compatibility for providers
+// configured before the enabled flag existed, so they keep showing without a migration.
+// A provider counts as added when the user added it explicitly, when it already holds a
+// key, or when a model slot still points at it. The last two clauses are what keeps a
+// setup made before the enabled flag existed from vanishing off this page. The slot
+// clause carries Ollama and LM Studio in particular: they need no key, so keySet is
+// always false for them and they would otherwise disappear while a slot still used them.
+export function isProviderAdded(provider: ProviderInfo, slots?: Record<string, SlotInfo>): boolean {
+  if (provider.enabled || provider.keySet) return true;
+  if (!slots) return false;
+  return Object.values(slots).some((info) => info.value?.startsWith(`${provider.id}://`));
+}
 
 export type SlotInfo = {
   value: string;

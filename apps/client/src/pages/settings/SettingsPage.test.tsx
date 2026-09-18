@@ -6,34 +6,39 @@ import { SettingsPage } from "./SettingsPage";
 
 afterEach(() => cleanup());
 
-vi.mock("@/lib/ai-api", () => ({
-  aiApi: {
-    providers: vi.fn(async () => ({
-      providers: [
-        {
-          id: "openrouter",
-          label: "OpenRouter",
-          adapter: "openai-compatible",
-          defaultBaseUrl: "https://openrouter.ai/api/v1",
-          requiresKey: true,
-          capabilities: { text: true, structured: true, embeddings: true, listModels: true },
-          suggestedModels: { rules: "google/gemini-2.0-flash-001", chat: "anthropic/claude-sonnet-4" },
-          guide: { title: "Set up OpenRouter", intro: "Get started.", steps: [{ text: "Step 1" }], notes: [] },
-          keySet: true,
-          keyLastFour: "abcd",
-          baseUrl: { value: "https://openrouter.ai/api/v1", source: "default" },
+vi.mock("@/lib/ai-api", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/ai-api")>("@/lib/ai-api");
+  return {
+    ...actual,
+    aiApi: {
+      providers: vi.fn(async () => ({
+        providers: [
+          {
+            id: "openrouter",
+            label: "OpenRouter",
+            adapter: "openai-compatible",
+            defaultBaseUrl: "https://openrouter.ai/api/v1",
+            requiresKey: true,
+            capabilities: { text: true, structured: true, embeddings: true, listModels: true },
+            suggestedModels: { rules: "google/gemini-2.0-flash-001", chat: "anthropic/claude-sonnet-4" },
+            guide: { title: "Set up OpenRouter", intro: "Get started.", steps: [{ text: "Step 1" }], notes: [] },
+            enabled: true,
+            keySet: true,
+            keyLastFour: "abcd",
+            baseUrl: { value: "https://openrouter.ai/api/v1", source: "default" },
+          },
+        ],
+        slots: {
+          rules: { value: "", source: "default", suggestion: "openrouter://google/gemini-2.0-flash-001" },
+          chat: { value: "", source: "default", suggestion: "openrouter://anthropic/claude-sonnet-4" },
+          embedding: { value: "", source: "default" },
         },
-      ],
-      slots: {
-        rules: { value: "", source: "default", suggestion: "openrouter://google/gemini-2.0-flash-001" },
-        chat: { value: "", source: "default", suggestion: "openrouter://anthropic/claude-sonnet-4" },
-        embedding: { value: "", source: "default" },
-      },
-    })),
-    testProvider: vi.fn(async () => ({ ok: true, latencyMs: 42, message: "Connected." })),
-    models: vi.fn(async () => ({ models: [] })),
-  },
-}));
+      })),
+      testProvider: vi.fn(async () => ({ ok: true, latencyMs: 42, message: "Connected." })),
+      models: vi.fn(async () => ({ models: [] })),
+    },
+  };
+});
 
 vi.mock("@/lib/settings-api", () => ({
   settingsApi: {

@@ -7,17 +7,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { aiApi, type ProviderInfo, type TestResult } from "@/lib/ai-api";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { aiApi, type ProviderInfo, type SlotInfo, type TestResult } from "@/lib/ai-api";
 import { settingsApi } from "@/lib/settings-api";
+import { SLOT_LABELS } from "./ai-slot-labels";
 
 export function ProviderCard({
   provider,
   expanded,
   onExpand,
+  slots,
 }: {
   provider: ProviderInfo;
   expanded: boolean;
   onExpand: () => void;
+  slots: Record<string, Pick<SlotInfo, "value">>;
 }) {
   const queryClient = useQueryClient();
   const [keyInput, setKeyInput] = useState("");
@@ -25,6 +29,25 @@ export function ProviderCard({
   const [baseUrlInput, setBaseUrlInput] = useState("");
   const [showBaseUrlField, setShowBaseUrlField] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [removeOpen, setRemoveOpen] = useState(false);
+
+  const blockingSlots = Object.entries(slots)
+    .filter(([, info]) => typeof info.value === "string" && info.value.startsWith(`${provider.id}://`))
+    .map(([slot]) => SLOT_LABELS[slot] ?? slot);
+
+  const removeProvider = useMutation({
+    mutationFn: async () => {
+      const updates: Record<string, unknown> = { [`ai.${provider.id}.enabled`]: false };
+      if (provider.requiresKey) updates[`ai.${provider.id}.apiKey`] = null;
+      await settingsApi.update(updates);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ai-providers"] });
+      setRemoveOpen(false);
+      toast.success("Provider removed");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   const saveKey = useMutation({
     mutationFn: async () => {
@@ -97,10 +120,13 @@ export function ProviderCard({
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <button type="button" onClick={onExpand} className="text-left">
           <CardTitle>{provider.label}</CardTitle>
         </button>
+        <Button size="sm" variant="destructive" onClick={() => setRemoveOpen(true)}>
+          Remove
+        </Button>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-4 md:grid-cols-2">
@@ -211,6 +237,43 @@ export function ProviderCard({
           </div>
         </div>
       </CardContent>
+
+      <Dialog open={removeOpen} onOpenChange={setRemoveOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove {provider.label}?</DialogTitle>
+          </DialogHeader>
+          {blockingSlots.length > 0 ? (
+            <>
+              <p className="text-sm text-muted-foreground">
+                {provider.label} is still used by the {blockingSlots.join(", ")} model slot
+                {blockingSlots.length > 1 ? "s" : ""}. Change that slot to another provider before removing it.
+              </p>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setRemoveOpen(false)}>Close</Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground">
+                {provider.requiresKey
+                  ? "This deletes the saved API key. It cannot be recovered."
+                  : "This removes the provider's card from this page. Nothing is deleted, and you can add it back at any time."}
+              </p>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setRemoveOpen(false)}>Cancel</Button>
+                <Button
+                  variant="destructive"
+                  onClick={() => removeProvider.mutate()}
+                  disabled={removeProvider.isPending}
+                >
+                  Remove provider
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

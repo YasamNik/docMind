@@ -37,6 +37,7 @@ const providers: ProviderInfo[] = [
     capabilities: { text: true, structured: true, embeddings: true, listModels: true },
     suggestedModels: {},
     guide: { title: "", intro: "", steps: [], notes: [] },
+    enabled: true,
     keySet: true,
     baseUrl: { value: "https://openrouter.ai/api/v1", source: "default" },
   },

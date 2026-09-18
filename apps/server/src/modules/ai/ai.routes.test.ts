@@ -33,6 +33,22 @@ describe("ai routes", () => {
     });
   });
 
+  it("GET /api/ai/providers reports enabled as false by default and true after it is set", async () => {
+    const { app, signIn, services } = await createTestApp();
+    const { cookie, userId } = await signIn();
+    const before = await app.request("/api/ai/providers", { headers: { cookie } });
+    const beforeBody = await before.json();
+    const openaiBefore = beforeBody.providers.find((p: { id: string }) => p.id === "openai");
+    expect(openaiBefore.enabled).toBe(false);
+
+    await services.settingsService.set(userId, { "ai.openai.enabled": true });
+
+    const after = await app.request("/api/ai/providers", { headers: { cookie } });
+    const afterBody = await after.json();
+    const openaiAfter = afterBody.providers.find((p: { id: string }) => p.id === "openai");
+    expect(openaiAfter.enabled).toBe(true);
+  });
+
   it("GET /api/ai/providers never leaks the raw key", async () => {
     const { app, signIn, services } = await createTestApp();
     const { cookie, userId } = await signIn();

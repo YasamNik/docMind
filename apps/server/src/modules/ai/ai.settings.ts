@@ -2,7 +2,7 @@ import * as v from "valibot";
 import { defineSetting } from "../settings/settings.registry.js";
 import type { SettingDefinition } from "../settings/settings.types.js";
 import { modelUriSchema } from "./ai.schemas.js";
-import { aiProviderRegistry } from "./providers/index.js";
+import { aiProviderIds, aiProviderRegistry } from "./providers/index.js";
 
 export const aiSlotSettingDefinitions = [
   defineSetting({
@@ -45,9 +45,24 @@ export const aiVisionSettingDefinitions = [
   }),
 ];
 
+// One enabled flag per provider. This is the explicit "added" state shown in the AI
+// settings tab: the tab shows a card for a provider when this is true, or when the
+// provider already has an API key set (the backward compatibility path for providers
+// configured before this flag existed). Settings are a plain key/value store, so this
+// needs no migration.
+export const aiProviderEnabledSettingDefinitions: SettingDefinition[] = aiProviderIds.map((id) =>
+  defineSetting({
+    key: `ai.${id}.enabled`,
+    schema: v.boolean(),
+    default: false,
+    doc: `Whether the ${aiProviderRegistry[id]!.label} provider card is added in the AI settings tab.`,
+  }),
+);
+
 // Mirrors the storageSettingDefinitions pattern: import the registry and flatMap its settings.
 export const aiSettingDefinitions: SettingDefinition[] = [
   ...aiSlotSettingDefinitions,
   ...aiVisionSettingDefinitions,
+  ...aiProviderEnabledSettingDefinitions,
   ...Object.values(aiProviderRegistry).flatMap((d) => d.settings),
 ];

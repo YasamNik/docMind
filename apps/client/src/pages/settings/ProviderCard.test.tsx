@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProviderCard } from "./ProviderCard";
 import type { ProviderInfo } from "@/lib/ai-api";
@@ -31,17 +31,22 @@ function baseProvider(overrides: Partial<ProviderInfo> = {}): ProviderInfo {
     capabilities: { text: true, structured: true, embeddings: true, listModels: true },
     suggestedModels: {},
     guide: { title: "Set up OpenRouter", intro: "Get started.", steps: [], notes: [] },
+    enabled: true,
     keySet: false,
     baseUrl: { value: "https://openrouter.ai/api/v1", source: "default" },
     ...overrides,
   };
 }
 
-function renderCard(provider: ProviderInfo, expanded = true) {
+function renderCard(
+  provider: ProviderInfo,
+  expanded = true,
+  slots: Record<string, { value: string; source: string }> = {},
+) {
   const onExpand = vi.fn();
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <ProviderCard provider={provider} expanded={expanded} onExpand={onExpand} />
+      <ProviderCard provider={provider} expanded={expanded} onExpand={onExpand} slots={slots} />
     </QueryClientProvider>,
   );
   return { onExpand };
@@ -81,5 +86,28 @@ describe("ProviderCard", () => {
     expect(screen.getByText(/Key set, ends in/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /OpenRouter/ }));
     expect(onExpand).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks removal while a model slot references the provider and names the slot", () => {
+    renderCard(baseProvider({ keySet: true, keyLastFour: "abcd" }), true, {
+      chat: { value: "openrouter://gpt-4", source: "db" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(screen.getByText(/Chat/)).toBeInTheDocument();
+    // The dialog offers no destructive confirm action while blocked.
+    expect(screen.queryByRole("button", { name: "Remove provider" })).not.toBeInTheDocument();
+  });
+
+  it("clears the key after confirming removal", async () => {
+    renderCard(baseProvider({ keySet: true, keyLastFour: "abcd" }), true, {});
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(screen.getByText(/cannot be recovered/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove provider" }));
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith({
+        "ai.openrouter.enabled": false,
+        "ai.openrouter.apiKey": null,
+      }),
+    );
   });
 });
