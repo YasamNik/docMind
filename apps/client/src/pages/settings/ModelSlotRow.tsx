@@ -69,7 +69,10 @@ export function ModelSlotRow({
       if (result.ok) toast.success(result.message);
       else toast.error(result.message);
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: unknown) => {
+      const msg = e instanceof Error ? e.message : "Test failed";
+      toast.error(msg === "Request failed" ? "Could not reach the model. Check the model name and try saving first." : msg);
+    },
   });
 
   const clear = useMutation({
