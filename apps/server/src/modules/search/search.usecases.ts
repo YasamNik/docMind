@@ -160,6 +160,14 @@ export function createSearchService({
 
     const keywordRows = await repository.searchKeyword(trimmed, KEYWORD_RESULT_LIMIT);
 
+    // Also match document names (filenames often contain the best keywords).
+    const allDocs = await documentsRepository.listByUser({ userId });
+    const queryLower = trimmed.toLowerCase().replace(/[-_]/g, " ");
+    const nameMatches = allDocs.filter((d) => {
+      const nameLower = d.name.toLowerCase().replace(/[-_.]/g, " ");
+      return queryLower.split(/\s+/).every((token) => nameLower.includes(token));
+    });
+
     let vectorRows: VectorSearchRow[] = [];
     try {
       const { vectors } = await aiService.embed({ userId, task: "embedding", texts: [trimmed] });
@@ -225,6 +233,21 @@ export function createSearchService({
         source: entry.source,
       });
     });
+
+    // Add documents matching by filename that weren't already found
+    const foundIds = new Set(results.map((r) => r.documentId));
+    for (const doc of nameMatches) {
+      if (foundIds.has(doc.id)) continue;
+      results.push({
+        documentId: doc.id,
+        documentName: doc.name,
+        chunkText: doc.name,
+        chunkIndex: 0,
+        score: 0.8,
+        source: "keyword",
+      });
+    }
+
     return results;
   }
 
