@@ -17,6 +17,7 @@ export type DocumentRow = {
   summaryError: string | null;
   documentDate: string | null;
   triageStatus: "pending" | "reviewed";
+  deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -38,7 +39,7 @@ export type DocumentDetail = DocumentRow & { extractedText: string | null; categ
 
 export type UploadResult = { document: DocumentDetail; duplicateOf?: string };
 
-export type DocumentListFilters = { categoryId?: string; tagId?: string; view?: "inbox" | "needs_review" | "all" };
+export type DocumentListFilters = { categoryId?: string; tagId?: string; view?: "inbox" | "needs_review" | "all" | "trash" };
 
 export const documentsApi = {
   async list(filters: DocumentListFilters = {}) {
@@ -50,7 +51,7 @@ export const documentsApi = {
     return (await api.get<{ documents: DocumentRow[] }>(`/api/documents${qs ? `?${qs}` : ""}`)).documents;
   },
   async counts() {
-    return api.get<{ inbox: number; needsReview: number }>("/api/documents/counts");
+    return api.get<{ inbox: number; needsReview: number; trash: number }>("/api/documents/counts");
   },
   async get(id: string) {
     return (await api.get<{ document: DocumentDetail }>(`/api/documents/${id}`)).document;
@@ -69,6 +70,12 @@ export const documentsApi = {
   },
   fileUrl(id: string, download = false) {
     return `/api/documents/${id}/file${download ? "?download=1" : ""}`;
+  },
+  async restore(id: string) {
+    return (await api.json<{ document: DocumentDetail }>("POST", `/api/documents/${id}/restore`, {})).document;
+  },
+  async purge(id: string) {
+    return api.del(`/api/documents/${id}/permanent`);
   },
   async acceptTriage(id: string, acceptTitle = false) {
     return (await api.json<{ document: DocumentDetail }>("POST", `/api/documents/${id}/triage`, { action: "accept", acceptTitle })).document;

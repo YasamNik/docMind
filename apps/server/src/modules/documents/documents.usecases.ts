@@ -26,13 +26,13 @@ export function createDocumentsService({
 
   async function getOrThrow(userId: string, documentId: string): Promise<Document> {
     const document = await repository.findById({ userId, documentId });
-    if (!document) throw notFound(documentId);
+    if (!document || document.deletedAt) throw notFound(documentId);
     return document;
   }
 
   async function getEnrichedOrThrow(userId: string, documentId: string) {
     const row = await repository.findByIdWithExtras({ userId, documentId });
-    if (!row) throw notFound(documentId);
+    if (!row || row.deletedAt) throw notFound(documentId);
     return row;
   }
 
@@ -101,6 +101,7 @@ export function createDocumentsService({
         categorySource: null,
         documentDate: null,
         triageStatus: "pending",
+        deletedAt: null,
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -129,12 +130,13 @@ export function createDocumentsService({
       return getEnrichedOrThrow(userId, documentId);
     },
 
-    async counts({ userId }: { userId: string }): Promise<{ inbox: number; needsReview: number }> {
-      const [inbox, needsReview] = await Promise.all([
+    async counts({ userId }: { userId: string }): Promise<{ inbox: number; needsReview: number; trash: number }> {
+      const [inbox, needsReview, trash] = await Promise.all([
         repository.countByUser({ userId, view: "inbox" }),
         repository.countByUser({ userId, view: "needs_review" }),
+        repository.countByUser({ userId, view: "trash" }),
       ]);
-      return { inbox, needsReview };
+      return { inbox, needsReview, trash };
     },
 
     async rename({ userId, documentId, name }: { userId: string; documentId: string; name: string }) {
@@ -146,7 +148,21 @@ export function createDocumentsService({
     },
 
     async remove({ userId, documentId }: { userId: string; documentId: string }) {
-      const document = await getOrThrow(userId, documentId);
+      await getOrThrow(userId, documentId);
+      await repository.update({ userId, documentId, patch: { deletedAt: nowIso(), updatedAt: nowIso() } });
+    },
+
+    async restore({ userId, documentId }: { userId: string; documentId: string }) {
+      const document = await repository.findById({ userId, documentId });
+      if (!document) throw notFound(documentId);
+      if (!document.deletedAt) throw createError({ code: "documents.not_deleted", message: "Document is not in trash", status: 400 });
+      await repository.update({ userId, documentId, patch: { deletedAt: null, updatedAt: nowIso() } });
+      return getEnrichedOrThrow(userId, documentId);
+    },
+
+    async purge({ userId, documentId }: { userId: string; documentId: string }) {
+      const document = await repository.findById({ userId, documentId });
+      if (!document) throw notFound(documentId);
       const driver = await storageService.getDriver(userId, document.storageDriver);
       await driver.delete({ key: document.storageKey });
       await repository.remove({ userId, documentId });

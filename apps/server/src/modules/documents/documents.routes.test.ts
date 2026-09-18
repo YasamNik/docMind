@@ -105,6 +105,6 @@ describe("documents routes", () => {
   it("reports inbox and needs_review counts", async () => {
     await upload("a.txt", "hello");
     const counts = await (await app.request("/api/documents/counts", { headers: { cookie } })).json();
-    expect(counts).toEqual({ inbox: 1, needsReview: 0 });
+    expect(counts).toEqual({ inbox: 1, needsReview: 0, trash: 0 });
   });
 });

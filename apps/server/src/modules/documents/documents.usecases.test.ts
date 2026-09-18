@@ -147,8 +147,8 @@ describe("documents service filters and enrichment", () => {
     const repository = createDocumentsRepository({ db });
     await repository.update({ userId, documentId: reviewed.id, patch: { triageStatus: "reviewed", ruleStatus: "done" } });
 
-    expect(await documents.counts({ userId })).toEqual({ inbox: 1, needsReview: 1 });
-    expect(await documents.counts({ userId: "someone-else" })).toEqual({ inbox: 0, needsReview: 0 });
+    expect(await documents.counts({ userId })).toEqual({ inbox: 1, needsReview: 1, trash: 0 });
+    expect(await documents.counts({ userId: "someone-else" })).toEqual({ inbox: 0, needsReview: 0, trash: 0 });
   });
 
   it("filters by categoryId including descendants, and by tagId", async () => {

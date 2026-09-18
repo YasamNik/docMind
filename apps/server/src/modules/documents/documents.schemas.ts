@@ -11,7 +11,7 @@ export const renameBodySchema = v.object({
 
 export const documentIdSchema = v.pipe(v.string(), v.regex(/^doc_[0-9a-f]{16}$/));
 
-export const documentViewSchema = v.picklist(["inbox", "needs_review", "all"]);
+export const documentViewSchema = v.picklist(["inbox", "needs_review", "all", "trash"]);
 
 export const listDocumentsQuerySchema = v.object({
   categoryId: v.optional(categoryIdSchema),

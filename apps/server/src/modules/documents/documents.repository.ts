@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { Database } from "../database/database.js";
 import { buildCategoryPaths, collectDescendantIds } from "../tags/tags.models.js";
 import { sortEvaluationsTable } from "../rules/rules.tables.js";
@@ -30,6 +30,7 @@ const listColumns = {
   categorySource: documentsTable.categorySource,
   documentDate: documentsTable.documentDate,
   triageStatus: documentsTable.triageStatus,
+  deletedAt: documentsTable.deletedAt,
   createdAt: documentsTable.createdAt,
   updatedAt: documentsTable.updatedAt,
 };
@@ -44,6 +45,11 @@ export function createDocumentsRepository({ db }: { db: Database }) {
   // cannot drift between the row fetch and the count-only path.
   async function buildViewConditions(userId: string, view: DocumentView) {
     const conditions = [eq(documentsTable.userId, userId)];
+    if (view === "trash") {
+      conditions.push(isNotNull(documentsTable.deletedAt));
+      return conditions;
+    }
+    conditions.push(isNull(documentsTable.deletedAt));
     if (view === "inbox") conditions.push(eq(documentsTable.triageStatus, "pending"));
     if (view === "needs_review") {
       conditions.push(eq(documentsTable.ruleStatus, "done"));

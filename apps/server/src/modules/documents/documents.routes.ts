@@ -74,6 +74,18 @@ export function registerDocumentsRoutes({
     return c.body(null, 204);
   });
 
+  app.post("/api/documents/:id/restore", async (c) => {
+    const documentId = parseOrValidationError(documentIdSchema, c.req.param("id"));
+    const document = await documentsService.restore({ userId: getUserId(c), documentId });
+    return c.json({ document });
+  });
+
+  app.delete("/api/documents/:id/permanent", async (c) => {
+    const documentId = parseOrValidationError(documentIdSchema, c.req.param("id"));
+    await documentsService.purge({ userId: getUserId(c), documentId });
+    return c.body(null, 204);
+  });
+
   app.post("/api/documents/:id/triage", async (c) => {
     const documentId = parseOrValidationError(documentIdSchema, c.req.param("id"));
     const { acceptTitle } = await parseJsonBody(c, triageActionSchema);

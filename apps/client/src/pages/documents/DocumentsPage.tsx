@@ -1,7 +1,9 @@
-import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { UploadDropzone } from "@/components/documents/UploadDropzone";
 import { DATE_FILTER_OPTIONS, dateFilterBadgeLabel, matchesDateFilter, type DateFilterValue } from "@/lib/date-filter";
@@ -9,7 +11,7 @@ import { documentsApi, type DocumentListFilters, type DocumentRow } from "@/lib/
 import { formatBytes, formatDate, formatDocumentDate } from "@/lib/format";
 import { categoriesApi, tagsApi } from "@/lib/tags-api";
 
-const VIEW_LABELS: Record<string, string> = { needs_review: "Needs review" };
+const VIEW_LABELS: Record<string, string> = { needs_review: "Needs review", trash: "Trash" };
 
 const MIME_LABELS: Record<string, string> = {
   "application/pdf": "PDF",
@@ -50,6 +52,25 @@ function sortDocuments(docs: DocumentRow[], key: SortKey, dir: SortDir): Documen
     return dir === "asc" ? cmp : -cmp;
   });
   return sorted;
+}
+
+function TrashActions({ documentId, queryClient }: { documentId: string; queryClient: ReturnType<typeof useQueryClient> }) {
+  const restore = useMutation({
+    mutationFn: () => documentsApi.restore(documentId),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["documents"] }); toast.success("Restored"); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const purge = useMutation({
+    mutationFn: () => documentsApi.purge(documentId),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["documents"] }); toast.success("Permanently deleted"); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  return (
+    <div className="flex gap-1">
+      <Button size="sm" variant="outline" onClick={() => restore.mutate()} disabled={restore.isPending}>Restore</Button>
+      <Button size="sm" variant="destructive" onClick={() => purge.mutate()} disabled={purge.isPending}>Delete</Button>
+    </div>
+  );
 }
 
 // The category filter needs an option for "no category assigned" but categoryId in the
@@ -311,6 +332,7 @@ export function DocumentsPage() {
                 </div>
               </TableHead>
               <TableHead>Text</TableHead>
+              {filters.view === "trash" && <TableHead>Actions</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -340,6 +362,11 @@ export function DocumentsPage() {
                 <TableCell>
                   <Badge variant={d.extractionStatus === "failed" ? "destructive" : "secondary"}>{d.extractionStatus}</Badge>
                 </TableCell>
+                {filters.view === "trash" && (
+                  <TableCell>
+                    <TrashActions documentId={d.id} queryClient={queryClient} />
+                  </TableCell>
+                )}
               </TableRow>
             ))}
           </TableBody>
