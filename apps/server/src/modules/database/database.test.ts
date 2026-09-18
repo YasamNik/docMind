@@ -1,11 +1,27 @@
 import { randomUUID } from "node:crypto";
-import { rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { createTestDatabase } from "../../shared/test/database.test-utils.js";
 import { createDatabase } from "./database.js";
+
+const testDbDir = join(tmpdir(), "docmind-db-tests");
+
+async function removeQuietly(path: string) {
+  await rm(path, { force: true }).catch(() => {});
+}
+
+// Databases left by earlier runs are unlocked once their process is gone, so sweeping on
+// the way in keeps this directory from growing one file per run. Two server suites running
+// at the same time on one machine are out of scope: the sweep is best effort and every file
+// name is unique, so the worst case is a stale file left behind.
+async function prepareTestDbDir() {
+  await rm(testDbDir, { recursive: true, force: true }).catch(() => {});
+  await mkdir(testDbDir, { recursive: true });
+  return testDbDir;
+}
 
 describe("database", () => {
   it("applies migrations to an in-memory database", async () => {
@@ -88,7 +104,7 @@ describe("database", () => {
     // this has to use a real file to exercise the pool. Without forcing `concurrency: 1`,
     // a query issued while a transaction holds the only known connection would silently
     // open a second one instead of waiting for the first to be released.
-    const filePath = join(tmpdir(), `docmind-test-${randomUUID()}.db`);
+    const filePath = join(await prepareTestDbDir(), `pool-${randomUUID()}.db`);
     const { client } = await createDatabase({ url: `file:${filePath}` });
     try {
       const tx = await client.transaction();
@@ -99,9 +115,13 @@ describe("database", () => {
       }
     } finally {
       client.close();
-      await rm(filePath, { force: true });
-      await rm(`${filePath}-wal`, { force: true });
-      await rm(`${filePath}-shm`, { force: true });
+      // `close()` marks the driver handle closed, but the native binding only releases the
+      // OS file handle when its object is finalized, which cannot be forced from here.
+      // POSIX allows unlinking an open file, Windows answers EBUSY. Deleting is therefore
+      // best effort and the next run sweeps whatever was left behind.
+      await removeQuietly(filePath);
+      await removeQuietly(`${filePath}-wal`);
+      await removeQuietly(`${filePath}-shm`);
     }
   });
 });
