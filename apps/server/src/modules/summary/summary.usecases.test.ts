@@ -193,6 +193,49 @@ describe("summary service, summarize job", () => {
     expect(document.summaryStatus).toBe("done");
     expect(await createFieldsRepository({ db: t.db }).listByDocument({ userId, documentId })).toEqual([]);
   });
+
+  // The reply schema parses the whole object in one pass and throws on any nested
+  // failure, so asserting the shape of `fields` would let a malformed array take the
+  // summary, the title, and the document date down with it. A local model reached
+  // through Ollama or a custom endpoint can answer like this even in structured mode.
+  it("keeps the summary when the model sends fields as something other than an array", async () => {
+    const { t, userId, runner, replyRef } = await setup();
+    replyRef.current = {
+      summary: "A real summary.",
+      suggestedTitle: "A real title",
+      documentDate: "2026-03-01",
+      fields: "none",
+    };
+    const documentId = await uploadWithText(t, userId, "text");
+    await t.services.jobsService.enqueue({ userId, type: "summarize", payload: { documentId, userId } });
+    expect(await runner.runOnce()).toBe(1);
+
+    const document = await t.services.documentsService.get({ userId, documentId });
+    expect(document.summaryStatus).toBe("done");
+    expect(document.summary).toBe("A real summary.");
+    expect(document.suggestedTitle).toBe("A real title");
+    expect(document.documentDate).toBe("2026-03-01");
+    expect(await createFieldsRepository({ db: t.db }).listByDocument({ userId, documentId })).toEqual([]);
+  });
+
+  it("keeps the good rows when the fields array holds something that is not an object", async () => {
+    const { t, userId, runner, replyRef } = await setup();
+    replyRef.current = {
+      summary: "A real summary.",
+      suggestedTitle: "A real title",
+      documentDate: null,
+      fields: ["a bare string", { key: "counterparty", value: "Acme Ltd" }, null],
+    };
+    const documentId = await uploadWithText(t, userId, "text");
+    await t.services.jobsService.enqueue({ userId, type: "summarize", payload: { documentId, userId } });
+    expect(await runner.runOnce()).toBe(1);
+
+    const document = await t.services.documentsService.get({ userId, documentId });
+    expect(document.summaryStatus).toBe("done");
+    expect(document.summary).toBe("A real summary.");
+    const rows = await createFieldsRepository({ db: t.db }).listByDocument({ userId, documentId });
+    expect(rows.map((r) => r.key)).toEqual(["counterparty"]);
+  });
 });
 
 describe("summary service, enqueueBackfill", () => {

@@ -129,7 +129,7 @@ export function normalizeFieldRow(row: {
   return base;
 }
 
-export function normalizeFieldRows(rows: unknown[]): {
+export function normalizeFieldRows(rows: unknown): {
   fields: NormalizedField[];
   dropped: { key: string; reason: string }[];
 } {

@@ -76,7 +76,7 @@ export function createSummaryService({
         system,
         input,
       });
-      const { fields, dropped } = normalizeFieldRows(data.fields ?? []);
+      const { fields, dropped } = normalizeFieldRows(data.fields);
       if (dropped.length > 0) {
         logger.debug({ userId, documentId, dropped }, "Dropped smart field rows the model got wrong");
       }
