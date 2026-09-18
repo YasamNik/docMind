@@ -150,85 +150,109 @@ git commit -m "feat(server): drivers can say where a file lives without a networ
 
 **Files:**
 - Modify: `apps/server/src/modules/documents/documents.repository.ts:111-160`
-- Modify: `apps/server/src/modules/documents/documents.usecases.ts`
+- Modify: `apps/server/src/modules/documents/documents.usecases.ts` (`list`, `counts`)
 - Test: `apps/server/src/modules/documents/documents.usecases.test.ts`
+- Test: `apps/server/src/modules/search/search.usecases.test.ts` (the job stays unscoped)
+
+**Harness note.** `documents.usecases.test.ts` does not use `createTestApp`. It builds the
+services by hand in a `beforeEach` (`createTestDatabase`, `createSettingsService`,
+`createStorageService`, `createDocumentsService`) with a module level `const userId =
+"user-1"`, and uploads through `documents.upload({ userId, name, mimeType, body })`. Write
+the new tests in that style. The file does not import `sql` yet, so add
+`import { sql } from "drizzle-orm";` at the top. Do not introduce `createTestApp` into
+this file.
 
 **Interfaces:**
 - Consumes: `storageService.getActiveDriverId(userId)` (exists).
 - Produces: `listByUser`/`countByUser` accept an optional `storageDriver?: string`.
-  Absent means unscoped. Task 5 reads the same counts.
+  Absent means unscoped. Task 5 passes it explicitly to count per driver.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Write the failing list test**
 
 In `documents.usecases.test.ts`:
 
 ```ts
-it("lists only documents held on the active storage", async () => {
-  const t = await createTestApp();
-  const { userId } = await t.signIn();
-  const local = await uploadDocument(t, userId, "local.txt");
-  await t.db.run(sql`update documents set storage_driver = 's3' where id = ${local.id}`);
-  const onLocal = await uploadDocument(t, userId, "stays.txt");
+  it("lists only the documents held on the active storage", async () => {
+    const { document: elsewhere } = await documents.upload({ userId, name: "elsewhere.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    const { document: here } = await documents.upload({ userId, name: "here.txt", mimeType: "text/plain", body: Readable.from(["b"]) });
+    await db.run(sql`update documents set storage_driver = 's3' where id = ${elsewhere.id}`);
 
-  const listed = await t.services.documentsService.list({ userId });
+    const listed = await documents.list({ userId });
 
-  expect(listed.map((d) => d.id)).toEqual([onLocal.id]);
-});
+    expect(listed.map((d) => d.id)).toEqual([here.id]);
+  });
 
-it("keeps background jobs working on documents from every storage", async () => {
-  const t = await createTestApp();
-  const { userId } = await t.signIn();
-  const moved = await uploadDocument(t, userId, "elsewhere.txt");
-  await t.db.run(sql`update documents set storage_driver = 's3', extraction_status = 'done' where id = ${moved.id}`);
+  it("counts only the documents held on the active storage", async () => {
+    const { document } = await documents.upload({ userId, name: "gone.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    await db.run(sql`update documents set storage_driver = 's3', triage_status = 'pending' where id = ${document.id}`);
 
-  // reembedAll is the job path: it must not inherit the library's scope.
-  const result = await t.services.searchService.reembedAll({ userId });
-
-  expect(result.count).toBe(1);
-});
+    expect((await documents.counts({ userId })).inbox).toBe(0);
+  });
 ```
 
-- [ ] **Step 2: Run them and watch the first fail**
+The counts question the plan must answer rather than leave open: the sidebar badges are
+counts of the library you are looking at, so they follow the same scope. A badge reading
+"3 in inbox" over a list showing none would be a bug, not a feature.
 
-Run: `pnpm --filter @docmind/server test -- documents.usecases`
-Expected: the first test FAILS (both documents listed), the second PASSES already and is
-there to stay passing.
+- [ ] **Step 2: Write the failing job test**
 
-- [ ] **Step 3: Add the optional filter to the repository**
+In `search.usecases.test.ts`, which does use `createTestApp`:
 
-In `listByUser`, extend the parameter object with `storageDriver?: string` and after the
-`buildViewConditions` call:
+```ts
+  it("re-embeds documents whatever storage holds them", async () => {
+    const { t, userId } = await setupWithEmbedding();
+    const documentId = await uploadWithText(t, userId, "elsewhere.txt", "Fresh apple pie recipe.");
+    await t.db.run(sql`update documents set storage_driver = 's3' where id = ${documentId}`);
+
+    expect((await t.services.searchService.reembedAll({ userId })).count).toBe(1);
+  });
+```
+
+This one passes before the change and must keep passing after it. It is the guard that the
+scope did not leak into the maintenance jobs.
+
+- [ ] **Step 3: Run both and watch the right ones fail**
+
+Run: `pnpm --filter @docmind/server test -- "documents.usecases|search.usecases"`
+Expected: the two tests in Step 1 FAIL, the Step 2 test PASSES.
+
+- [ ] **Step 4: Add the optional filter to the repository**
+
+In `listByUser`, add `storageDriver?: string` to the parameter object and its type, then
+after the `buildViewConditions` call:
 
 ```ts
       // Applied here rather than inside buildViewConditions: that helper is shared with
-      // the rule rerun, the summary backfill and reembedAll, and those must keep seeing
-      // documents whatever storage holds them.
+      // the rule rerun (rules.usecases.ts), the summary backfill (summary.usecases.ts)
+      // and reembedAll (search.usecases.ts), and those must keep seeing every document
+      // whatever storage holds it.
       if (storageDriver) conditions.push(eq(documentsTable.storageDriver, storageDriver));
 ```
 
-Do the same in `countByUser`.
+Add the same parameter and the same two lines to `countByUser`.
 
-- [ ] **Step 4: Pass the active driver from the list usecases only**
+- [ ] **Step 5: Pass the active driver from the two library usecases**
 
-In `documents.usecases.ts`, in `list` and in the counts usecase:
+In `documents.usecases.ts`, in `list`:
 
 ```ts
       const storageDriver = await storageService.getActiveDriverId(userId);
       return repository.listByUser({ userId, categoryId, tagId, view, storageDriver });
 ```
 
-Leave every other caller of `listByUser` alone.
+and in `counts`, resolve `storageDriver` once and pass it to all three `countByUser`
+calls. Change no other caller of either method.
 
-- [ ] **Step 5: Run the suite**
+- [ ] **Step 6: Run the suites**
 
-Run: `pnpm --filter @docmind/server test -- documents`
+Run: `pnpm --filter @docmind/server test -- "documents|search"`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add apps/server/src/modules/documents
-git commit -m "feat(server): the library lists the active storage only"
+git add apps/server/src/modules/documents apps/server/src/modules/search
+git commit -m "feat(server): the library lists and counts the active storage only"
 ```
 
 ---
@@ -246,21 +270,18 @@ git commit -m "feat(server): the library lists the active storage only"
 
 - [ ] **Step 1: Write the failing test**
 
+Same hand-built harness as Task 2, and `expectAppError` is already imported in this file:
+
 ```ts
-it("refuses to open a file held on a storage that is not active, and says where it is", async () => {
-  const t = await createTestApp();
-  const { userId } = await t.signIn();
-  const doc = await uploadDocument(t, userId, "elsewhere.txt");
-  await t.db.run(sql`update documents set storage_driver = 's3' where id = ${doc.id}`);
+  it("refuses to open a file held on another storage, and says where it is", async () => {
+    const { document } = await documents.upload({ userId, name: "elsewhere.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    await db.run(sql`update documents set storage_driver = 's3' where id = ${document.id}`);
 
-  await expect(t.services.documentsService.openFile({ userId, documentId: doc.id })).rejects.toMatchObject({
-    code: "documents.storage_inactive",
+    await expectAppError(() => documents.openFile({ userId, documentId: document.id }), "documents.storage_inactive");
+
+    // The metadata is knowledge and stays reachable.
+    expect((await documents.get({ userId, documentId: document.id })).id).toBe(document.id);
   });
-
-  // The metadata is knowledge and stays reachable.
-  const still = await t.services.documentsService.get({ userId, documentId: doc.id });
-  expect(still.id).toBe(doc.id);
-});
 ```
 
 - [ ] **Step 2: Run it and watch it fail**
@@ -338,7 +359,8 @@ it("says which storage holds each result, whatever the active storage is", async
 });
 ```
 
-In `chat.models.test.ts`, extend the context block test:
+In `chat.models.test.ts`, extend the context block test. `buildContextBlock` is declared
+without `export` at `chat.models.ts:45`, so export it as part of this step:
 
 ```ts
 it("names the storage of a cited document that is not on the active storage", () => {
@@ -401,52 +423,119 @@ git commit -m "feat(server): search and chat name the storage holding each docum
 **Files:**
 - Create: `apps/server/src/modules/storage/storage.routes.ts`
 - Create: `apps/server/src/modules/storage/storage.routes.test.ts`
-- Modify: `apps/server/src/modules/storage/storage.usecases.ts`
-- Modify: `apps/server/src/server.ts` (register the routes beside the others)
+- Modify: `apps/server/src/modules/storage/storage.usecases.ts` (factory signature)
+- Modify: `apps/server/src/server.ts:146` (pass `db`) and the route registration block
+- Modify: `apps/server/src/modules/storage/storage.usecases.test.ts:30` (factory call)
+- Modify: `apps/server/src/modules/documents/documents.usecases.test.ts:32` (factory call)
+
+**Breaking change, handled in this task.** `createStorageService({ settingsService })` has
+to learn the document counts, so it becomes
+`createStorageService({ settingsService, db })` and builds
+`createDocumentsRepository({ db })` internally. There are exactly three call sites, all
+listed above, and all three must change in this commit or typecheck fails. Do not leave
+`db` optional: an optional dependency here would mean a summary that silently reports zero
+documents.
 
 **Interfaces:**
-- Consumes: the registry, `describeLocation`, `countByUser` from Task 2.
+- Consumes: the registry, `countByUser({ userId, view, storageDriver })` from Task 2.
 - Produces: `GET /api/storage/drivers` returning
   `{ drivers: { id, label, guide, configured, documentCount, active }[] }`, and
   `POST /api/storage/drivers/:id/test` returning `{ ok, message }`. Task 6 calls both.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
+
+`storage.routes.test.ts`, following `fields.routes.test.ts` exactly: `createTestApp()`,
+`t.signIn()` for the `cookie`, and `t.app.request(...)` with that cookie on every call.
+There is no `t.request`.
 
 ```ts
-it("lists every driver with its guide, whether it is configured, and what it holds", async () => {
-  const t = await createTestApp();
-  const { userId } = await t.signIn();
-  await uploadDocument(t, userId, "one.txt");
+import { Readable } from "node:stream";
+import { beforeEach, describe, expect, it } from "vitest";
+import { createTestApp } from "../../shared/test/app.test-utils.js";
 
-  const res = await t.request("/api/storage/drivers");
-  const body = await res.json();
+let t: Awaited<ReturnType<typeof createTestApp>>;
+let cookie: string;
+let userId: string;
 
-  expect(res.status).toBe(200);
-  const local = body.drivers.find((d: { id: string }) => d.id === "local");
-  expect(local).toMatchObject({ label: "Local filesystem", configured: true, documentCount: 1, active: true });
-  expect(local.guide.steps.length).toBeGreaterThan(0);
+beforeEach(async () => {
+  t = await createTestApp();
+  ({ cookie, userId } = await t.signIn());
 });
 
-it("runs a driver's health check on demand", async () => {
-  const t = await createTestApp();
-  await t.signIn();
-  const res = await t.request("/api/storage/drivers/local/test", { method: "POST" });
-  expect(await res.json()).toMatchObject({ ok: true });
+describe("storage routes", () => {
+  it("requires a session", async () => {
+    expect((await t.app.request("/api/storage/drivers")).status).toBe(401);
+  });
+
+  it("lists each driver with its guide, readiness and document count", async () => {
+    await t.services.documentsService.upload({ userId, name: "one.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+
+    const res = await t.app.request("/api/storage/drivers", { headers: { cookie } });
+    const body = (await res.json()) as { drivers: { id: string; label: string; configured: boolean; documentCount: number; active: boolean; guide: { steps: unknown[] } }[] };
+
+    expect(res.status).toBe(200);
+    const local = body.drivers.find((d) => d.id === "local")!;
+    expect(local).toMatchObject({ label: "Local filesystem", configured: true, documentCount: 1, active: true });
+    expect(local.guide.steps.length).toBeGreaterThan(0);
+  });
+
+  it("runs a driver's health check on demand", async () => {
+    const res = await t.app.request("/api/storage/drivers/local/test", { method: "POST", headers: { cookie } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true });
+  });
+
+  it("rejects an unknown driver id before it reaches the registry", async () => {
+    const res = await t.app.request("/api/storage/drivers/nope/test", { method: "POST", headers: { cookie } });
+    expect(res.status).toBe(400);
+  });
 });
 ```
 
 - [ ] **Step 2: Run it and watch it fail**
 
 Run: `pnpm --filter @docmind/server test -- storage.routes`
-Expected: FAIL with 404.
+Expected: FAIL, 404 on every route.
 
-- [ ] **Step 3: Add the usecase**
+- [ ] **Step 3: Thread `db` into the storage service**
 
 In `storage.usecases.ts`:
 
 ```ts
-    // The settings page needs one call to render the whole picker: what exists, what is
-    // ready to use, what it holds, and the guide that explains the fields.
+export function createStorageService({ settingsService, db }: { settingsService: SettingsService; db: Database }) {
+  const documentsRepository = createDocumentsRepository({ db });
+```
+
+Update `server.ts:146` to `createStorageService({ settingsService, db })`, and the two test
+call sites to pass the `db` each already has in scope.
+
+- [ ] **Step 4: Define what "configured" means, in code**
+
+`SettingDefinition` has no `required` flag, so readiness is derived: a driver is configured
+when every one of its settings that has no `default` and is not `internal` resolves to a
+non-empty value. Local's only setting has a default, so local is always ready. S3's
+bucket, region, access key and secret have no default, so S3 is ready only once they are
+filled. Add to `storage.usecases.ts`:
+
+```ts
+  // A driver is ready when nothing it cannot invent is missing. Settings that carry a
+  // default (prefix, path style) are never the reason a driver is unusable, so only the
+  // ones without one are checked.
+  async function isConfigured({ definition, userId }: { definition: StorageDriverDefinition; userId: string }) {
+    const required = definition.settings.filter((setting) => setting.default === undefined && !setting.internal);
+    for (const setting of required) {
+      const value = await settingsService.get<unknown>(userId, setting.key);
+      if (value === undefined || value === null || value === "") return false;
+    }
+    return true;
+  }
+```
+
+- [ ] **Step 5: Add the two usecases**
+
+```ts
+    // One call renders the whole picker: what exists, what is ready, what it holds, and
+    // the guide that explains the fields.
     async listDriverSummaries(userId: string) {
       const active = await this.getActiveDriverId(userId);
       return Promise.all(
@@ -462,29 +551,26 @@ In `storage.usecases.ts`:
     },
 
     async testDriver({ userId, driverId }: { userId: string; driverId: string }) {
-      const driver = await this.getDriver(userId, driverId);
-      return driver.healthCheck();
+      return (await this.getDriver(userId, driverId)).healthCheck();
     },
 ```
 
-`isConfigured` reads each of the definition's settings and returns false when a required
-one is empty.
+- [ ] **Step 6: Add the routes**
 
-- [ ] **Step 4: Add the routes**
+`storage.routes.ts` in the shape of `fields.routes.ts`, taking `{ app, storageService,
+getUserId }`. Parse `:id` with `v.picklist(storageDriverIds)` through
+`parseOrValidationError`, so an unknown id is a 400 and never reaches the registry.
 
-`storage.routes.ts`, following `fields.routes.ts` for shape, parsing `:id` with a valibot
-picklist of `storageDriverIds` so an unknown id is a 400 and never reaches the registry.
+- [ ] **Step 7: Register and run**
 
-- [ ] **Step 5: Register and run**
+Register in `server.ts` beside the other `register*Routes` calls.
+Run: `pnpm --filter @docmind/server test` then `pnpm typecheck`
+Expected: PASS, including the two edited test files.
 
-Register in `server.ts` next to the other route registrations.
-Run: `pnpm --filter @docmind/server test -- storage`
-Expected: PASS.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add apps/server/src/modules/storage apps/server/src/server.ts
+git add apps/server/src
 git commit -m "feat(server): expose the storage drivers, their guides and a health check"
 ```
 
@@ -495,7 +581,10 @@ git commit -m "feat(server): expose the storage drivers, their guides and a heal
 **Files:**
 - Create: `apps/client/src/lib/storage-api.ts`
 - Rewrite: `apps/client/src/pages/settings/StorageTab.tsx`
-- Test: `apps/client/src/pages/settings/StorageTab.test.tsx`
+- Rewrite: `apps/client/src/pages/settings/StorageTab.test.tsx` (the file exists and
+  asserts the old behavior: editing `storage.activeDriver` through a bare input and
+  `settingsApi.update`. Those assertions are replaced, not added to, because the rewrite
+  removes the input they drive.)
 
 **Interfaces:**
 - Consumes: both routes from Task 5, the settings API for writing driver settings.
@@ -564,20 +653,97 @@ git commit -m "feat(client): a storage tab with a driver picker, guides and a te
 pnpm --filter @docmind/server add @aws-sdk/client-s3 @aws-sdk/lib-storage
 ```
 
-- [ ] **Step 2: Write the failing contract test**
+- [ ] **Step 2: Build the fake S3, multipart aware**
 
-`s3.driver.test.ts` runs the shared suite against a driver built on a mocked
-`S3Client.send`, backed by an in-memory `Map` from key to Buffer, so put, get, delete,
-exists and describeLocation are all exercised with no network. Add one test of its own:
+This is the part that decides whether Task 7 is buildable, so it is specified rather than
+described. `lib-storage`'s `Upload` cannot know the length of a Node `Readable` up front,
+so it always runs the multipart sequence, even for eleven bytes. A fake that only answers
+PutObject would let `put` resolve while storing nothing, and the very next `get` in the
+contract suite would fail with a confusing 404. The fake therefore understands multipart.
+
+In `s3.driver.test.ts`:
 
 ```ts
+import { Readable } from "node:stream";
+import {
+  CompleteMultipartUploadCommand, CreateMultipartUploadCommand, DeleteObjectCommand,
+  GetObjectCommand, HeadBucketCommand, HeadObjectCommand, PutObjectCommand, UploadPartCommand,
+} from "@aws-sdk/client-s3";
+
+// An in-memory S3 that speaks the subset lib-storage actually uses. Keyed by the full
+// object key, so the driver's prefix handling is exercised rather than mocked away.
+function createFakeS3() {
+  const objects = new Map<string, Buffer>();
+  const uploads = new Map<string, Buffer[]>();
+  let nextUploadId = 1;
+
+  const send = async (command: unknown) => {
+    if (command instanceof CreateMultipartUploadCommand) {
+      const uploadId = `upload-${nextUploadId++}`;
+      uploads.set(uploadId, []);
+      return { UploadId: uploadId };
+    }
+    if (command instanceof UploadPartCommand) {
+      const { UploadId, PartNumber, Body } = command.input;
+      const parts = uploads.get(UploadId!)!;
+      parts[PartNumber! - 1] = Buffer.from(Body as Uint8Array);
+      return { ETag: `"etag-${PartNumber}"` };
+    }
+    if (command instanceof CompleteMultipartUploadCommand) {
+      const { UploadId, Key } = command.input;
+      objects.set(Key!, Buffer.concat(uploads.get(UploadId!)!));
+      uploads.delete(UploadId!);
+      return {};
+    }
+    if (command instanceof PutObjectCommand) {
+      const { Key, Body } = command.input;
+      objects.set(Key!, Buffer.from(Body as Uint8Array));
+      return {};
+    }
+    if (command instanceof GetObjectCommand) {
+      const body = objects.get(command.input.Key!);
+      if (!body) throw Object.assign(new Error("NoSuchKey"), { $metadata: { httpStatusCode: 404 } });
+      return { Body: Readable.from([body]) };
+    }
+    if (command instanceof HeadObjectCommand) {
+      if (!objects.has(command.input.Key!)) throw Object.assign(new Error("NotFound"), { $metadata: { httpStatusCode: 404 } });
+      return { ContentLength: objects.get(command.input.Key!)!.length };
+    }
+    if (command instanceof DeleteObjectCommand) {
+      objects.delete(command.input.Key!);
+      return {};
+    }
+    if (command instanceof HeadBucketCommand) return {};
+    throw new Error(`Fake S3 received an unhandled command: ${(command as object).constructor.name}`);
+  };
+
+  return { objects, client: { send, config: { region: async () => "auto" } } as never };
+}
+```
+
+The final `throw` matters: when a later change makes the driver send a command the fake
+does not know, the test says exactly which one instead of hanging or silently passing.
+
+- [ ] **Step 3: Write the failing tests**
+
+```ts
+const { client } = createFakeS3();
+runStorageDriverContract("s3", async () => createS3Driver({ bucket: "docs", region: "auto", prefix: "docmind/", client }));
+
 it("describes a key as an s3 url including the prefix", () => {
   const driver = createS3Driver({ bucket: "docs", region: "auto", prefix: "docmind/", client });
   expect(driver.describeLocation({ key: "user_1/a.pdf" }).label).toBe("s3://docs/docmind/user_1/a.pdf");
 });
-```
 
-- [ ] **Step 3: Run it and watch it fail**
+it("round trips a body larger than one multipart chunk", async () => {
+  const driver = createS3Driver({ bucket: "docs", region: "auto", prefix: "docmind/", client });
+  const big = Buffer.alloc(6 * 1024 * 1024, "x");
+  await driver.put({ key: "big.bin", body: Readable.from([big]) });
+  const chunks: Buffer[] = [];
+  for await (const c of await driver.get({ key: "big.bin" })) chunks.push(Buffer.from(c));
+  expect(Buffer.concat(chunks).length).toBe(big.length);
+});
+```
 
 Run: `pnpm --filter @docmind/server test -- s3.driver`
 Expected: FAIL, the module does not exist.
@@ -622,18 +788,31 @@ git commit -m "feat(server): S3 compatible storage driver"
 ## Self-review
 
 **Spec coverage.** Section 1 is Tasks 2 and 3, section 1a is Task 1, section 2 is Task 7,
-section 5 is Tasks 5 and 6, section 6's scope and guard tests are in Tasks 2, 3 and 4.
-Sections 3 and 4 (Google Drive, OAuth) are deliberately deferred to the second plan, as
-stated in the header. The spec's "search results carry the storage" requirement is Task 4,
-which the spec mentions inside section 1 rather than in its own section.
+section 5 is Tasks 5 and 6, and the scope and guard tests of section 6 are spread across
+Tasks 2, 3 and 4. Sections 3 and 4 (Google Drive, OAuth) are deferred to the second plan,
+as the header states. The spec's "results carry the storage that holds them" line sits
+inside section 1 and is implemented by Task 4.
 
-**Gap found and closed.** The spec's test list requires proving that a rule rerun, a
-summary backfill and a re-embed still process documents on an inactive storage. Only
-`reembedAll` is asserted in Task 2. The rule rerun and summary backfill call
-`listByUser` with no `storageDriver`, so they are unaffected by construction, and Task 2's
-repository comment records why. Adding two more near-identical tests would not earn their
-keep; the comment plus the `reembedAll` test is the guard.
+**Questions this plan answers rather than leaves open.**
 
-**Type consistency.** `StorageLocation`, `describeLocation`, `storageDriver` on
-`SearchResult` and `Citation`, and the `documentCount`/`configured`/`active` summary
-fields are named identically everywhere they appear.
+- The sidebar counts follow the library scope (Task 2, with a test). A badge counting
+  documents the list does not show would be a bug.
+- "Configured" is defined as every setting without a `default` having a non-empty value
+  (Task 5), because `SettingDefinition` carries no `required` flag to read.
+- `createStorageService` gains `db` as a required dependency, and all three call sites are
+  named in Task 5 so the change lands in one commit rather than breaking typecheck.
+- The S3 fake speaks multipart (Task 7), because `lib-storage` always takes the multipart
+  path for a stream body whatever its size.
+
+**Verified against the tree.** `documents.usecases.test.ts` hand-builds its services and
+has no `createTestApp` and no `uploadDocument` helper, so Tasks 2 and 3 are written in its
+own style. Route tests use `t.app.request` with the cookie from `t.signIn()`; there is no
+`t.request`. `buildContextBlock` is not exported today, so Task 4 exports it.
+`StorageTab.test.tsx` already exists and is rewritten, not extended.
+
+**No migration.** No task touches a `*.tables.ts` file or the shape of a stored column.
+`documents.storage_driver` and `documents.storage_key` already exist.
+
+**Type consistency.** `StorageLocation`, `describeLocation`, the `storageDriver` field on
+`SearchResult` and `Citation`, and the `configured`/`documentCount`/`active` summary
+fields are spelled identically in every task that mentions them.
