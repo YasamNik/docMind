@@ -20,4 +20,7 @@ export const jobsApi = {
   async retry(id: string) {
     return (await api.json<{ job: JobRow }>("POST", `/api/jobs/${id}/retry`, {})).job;
   },
+  async counts() {
+    return api.get<{ failed: number }>("/api/jobs/counts");
+  },
 };

@@ -44,6 +44,10 @@ export function createJobsService({ db }: { db: Database }) {
       return getOrThrow(userId, id);
     },
 
+    async countFailed({ userId }: { userId: string }) {
+      return repository.countFailed(userId);
+    },
+
     async retry({ userId, id }: { userId: string; id: string }) {
       const job = await getOrThrow(userId, id);
       if (job.status !== "failed") {

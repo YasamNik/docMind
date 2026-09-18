@@ -58,6 +58,11 @@ export function createJobsRepository({ db }: { db: Database }) {
       return row ?? null;
     },
 
+    async countFailed(userId: string): Promise<number> {
+      const [row] = await db.select({ count: sql<number>`count(*)` }).from(jobsTable).where(and(eq(jobsTable.userId, userId), eq(jobsTable.status, "failed")));
+      return row?.count ?? 0;
+    },
+
     async retry({ userId, id }: { userId: string; id: string }) {
       const now = new Date().toISOString();
       const rows = await db

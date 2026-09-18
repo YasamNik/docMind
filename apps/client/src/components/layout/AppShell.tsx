@@ -7,6 +7,7 @@ import type { LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { authClient } from "@/lib/auth-client";
 import { documentsApi } from "@/lib/documents-api";
+import { jobsApi } from "@/lib/jobs-api";
 import { savedSearchesApi } from "@/lib/saved-searches-api";
 import { useKeyboardShortcuts } from "@/lib/use-keyboard-shortcuts";
 import { categoriesApi, tagsApi, type CategoryRow, type TagRow } from "@/lib/tags-api";
@@ -91,7 +92,7 @@ function ThemeToggle() {
   );
 }
 
-function IconRail({ activeTab }: { activeTab: RailTab }) {
+function IconRail({ activeTab, failedJobCount }: { activeTab: RailTab; failedJobCount: number }) {
   return (
     <aside className="flex w-[60px] shrink-0 flex-col items-center gap-1 bg-card py-4">
       <span className="mb-4 h-[26px] w-[26px] shrink-0 rounded-full bg-primary" aria-hidden="true" />
@@ -101,11 +102,14 @@ function IconRail({ activeTab }: { activeTab: RailTab }) {
             key={tab}
             to={to}
             title={label}
-            className={`rounded-xl p-2 ${
+            className={`relative rounded-xl p-2 ${
               activeTab === tab ? "bg-primary text-primary-foreground" : "text-org-neutral-600 hover:text-foreground"
             }`}
           >
             <Icon className="h-5 w-5" />
+            {tab === "jobs" && failedJobCount > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-destructive" />
+            )}
             <span className="sr-only">{label}</span>
           </NavLink>
         ))}
@@ -222,7 +226,7 @@ function SettingsPanel() {
   );
 }
 
-function JobsPanel() {
+function JobsPanel({ failedCount }: { failedCount: number }) {
   return (
     <>
       <span className="font-heading text-lg">Jobs</span>
@@ -230,6 +234,9 @@ function JobsPanel() {
         <NavLink to="/jobs" className={navPillClass}>
           Background jobs
         </NavLink>
+        {failedCount > 0 && (
+          <CountRow to="/jobs" label="Failed" count={failedCount} />
+        )}
       </nav>
     </>
   );
@@ -245,12 +252,13 @@ export function AppShell() {
   }, [location.pathname]);
 
   const { data: counts = { inbox: 0, needsReview: 0, trash: 0 } } = useQuery({ queryKey: ["documents", "counts"], queryFn: () => documentsApi.counts() });
+  const { data: jobCounts = { failed: 0 } } = useQuery({ queryKey: ["jobs", "counts"], queryFn: () => jobsApi.counts(), refetchInterval: 15000 });
   const { data: categories = [] } = useQuery({ queryKey: ["categories"], queryFn: categoriesApi.list });
   const { data: tags = [] } = useQuery({ queryKey: ["tags"], queryFn: tagsApi.list });
 
   return (
     <div className="flex min-h-screen">
-      <IconRail activeTab={activeTab} />
+      <IconRail activeTab={activeTab} failedJobCount={jobCounts.failed} />
       <aside className="flex w-[220px] shrink-0 flex-col gap-6 overflow-y-auto border-r border-border bg-card p-6">
         {activeTab === "files" && <FilesPanel inboxCount={counts.inbox} needsReviewCount={counts.needsReview} trashCount={counts.trash} />}
         {activeTab === "search" && <SearchPanel />}
@@ -258,7 +266,7 @@ export function AppShell() {
         {activeTab === "sorting" && <SortingPanel automaticCount={countAutomaticItems(tags, categories)} />}
         {activeTab === "chat" && <ChatPanel />}
         {activeTab === "settings" && <SettingsPanel />}
-        {activeTab === "jobs" && <JobsPanel />}
+        {activeTab === "jobs" && <JobsPanel failedCount={jobCounts.failed} />}
       </aside>
       <main className="flex-1 p-8">
         <Outlet />

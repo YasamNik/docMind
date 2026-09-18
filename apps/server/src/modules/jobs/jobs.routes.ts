@@ -11,6 +11,11 @@ export function registerJobsRoutes({ app, jobsService, getUserId }: { app: Hono;
     return c.json({ jobs: jobs.map(present) });
   });
 
+  app.get("/api/jobs/counts", async (c) => {
+    const failed = await jobsService.countFailed({ userId: getUserId(c) });
+    return c.json({ failed });
+  });
+
   app.post("/api/jobs/:id/retry", async (c) => {
     const id = parseOrValidationError(jobIdSchema, c.req.param("id"));
     const job = await jobsService.retry({ userId: getUserId(c), id });
