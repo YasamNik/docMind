@@ -7,6 +7,7 @@ import type { LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { authClient } from "@/lib/auth-client";
 import { documentsApi } from "@/lib/documents-api";
+import { useKeyboardShortcuts } from "@/lib/use-keyboard-shortcuts";
 import { categoriesApi, tagsApi, type CategoryRow, type TagRow } from "@/lib/tags-api";
 
 // Two-level navigation: a thin icon rail selects a section, a context panel next to
@@ -228,6 +229,7 @@ function JobsPanel() {
 }
 
 export function AppShell() {
+  useKeyboardShortcuts();
   const location = useLocation();
   const [activeTab, setActiveTab] = useState<RailTab>(() => tabForPath(location.pathname));
 
