@@ -63,7 +63,7 @@ function ResultCard({ result, query }: { result: SearchResult; query: string }) 
           </Link>
           <Badge variant={SOURCE_VARIANTS[result.source]}>{SOURCE_LABELS[result.source]}</Badge>
         </div>
-        <p className="text-sm text-muted-foreground">{highlightMatches(snippet, query)}</p>
+        <p className="line-clamp-2 break-all text-sm text-muted-foreground">{highlightMatches(snippet, query)}</p>
       </CardContent>
     </Card>
   );
