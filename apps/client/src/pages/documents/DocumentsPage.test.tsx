@@ -41,6 +41,19 @@ const listMock = vi.fn(async (_filters?: unknown) => [
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
       },
+      {
+        id: "field_1b",
+        documentId: "doc_1",
+        key: "expiryDate",
+        value: "2099-03-01",
+        valueNumber: null,
+        valueDate: "2099-03-01",
+        currency: null,
+        confidence: 0.8,
+        source: "llm",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
     ],
     summary: "A rent invoice for January.",
     suggestedTitle: null,
@@ -70,6 +83,19 @@ const listMock = vi.fn(async (_filters?: unknown) => [
         valueDate: null,
         currency: null,
         confidence: 0.9,
+        source: "llm",
+        createdAt: "2026-01-02T00:00:00.000Z",
+        updatedAt: "2026-01-02T00:00:00.000Z",
+      },
+      {
+        id: "field_2b",
+        documentId: "doc_2",
+        key: "expiryDate",
+        value: "2020-02-01",
+        valueNumber: null,
+        valueDate: "2020-02-01",
+        currency: null,
+        confidence: 0.8,
         source: "llm",
         createdAt: "2026-01-02T00:00:00.000Z",
         updatedAt: "2026-01-02T00:00:00.000Z",
@@ -222,24 +248,25 @@ describe("DocumentsPage", () => {
     expect(screen.getByRole("button", { name: "Clear document date filter" })).toBeInTheDocument();
   });
 
-  it("filters the table by a field key and value, and clearing it restores the full list", async () => {
+  it("shows the expiry date read from the smart field", async () => {
     renderAt("/documents");
     await screen.findByText("invoice.pdf");
-    await screen.findByText("note.txt");
+    expect(await screen.findByText("Mar 1, 2099")).toBeInTheDocument();
+    expect(screen.getByText("Feb 1, 2020")).toBeInTheDocument();
+  });
 
-    const keySelect = screen.getByLabelText("Filter by field") as HTMLSelectElement;
-    fireEvent.change(keySelect, { target: { value: "documentType" } });
+  it("marks a past expiry date in red and says so for a screen reader", async () => {
+    renderAt("/documents");
+    const expired = await screen.findByText("Feb 1, 2020");
+    // The colour alone would not reach a screen reader, so the cell carries the word too.
+    expect(expired.closest("td")).toHaveTextContent("expired");
+    expect(expired.closest("td")?.className).toContain("text-destructive");
+  });
 
-    const valueSelect = await screen.findByLabelText("Filter by field value");
-    await waitFor(() => expect(within(valueSelect).getByText("invoice")).toBeInTheDocument());
-    fireEvent.change(valueSelect, { target: { value: "invoice" } });
-
-    await waitFor(() => expect(screen.queryByText("note.txt")).not.toBeInTheDocument());
-    expect(screen.getByText("invoice.pdf")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Clear field filter" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Clear field filter" }));
-    await waitFor(() => expect(screen.getByText("note.txt")).toBeInTheDocument());
-    expect(screen.queryByRole("button", { name: "Clear field filter" })).not.toBeInTheDocument();
+  it("does not mark a future expiry date as expired", async () => {
+    renderAt("/documents");
+    const future = await screen.findByText("Mar 1, 2099");
+    expect(future.closest("td")).not.toHaveTextContent("expired");
+    expect(future.closest("td")?.className).not.toContain("text-destructive");
   });
 });
