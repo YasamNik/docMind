@@ -1,5 +1,6 @@
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { documentsTable } from "../documents/documents.tables.js";
+import { newSearchId } from "./search.models.js";
 
 // The emb column (F32_BLOB, dimension depends on the configured embedding model) is
 // added at runtime via ALTER TABLE, not defined here: Drizzle has no F32_BLOB type and
@@ -19,4 +20,18 @@ export const documentChunksTable = sqliteTable(
     endChar: integer("end_char").notNull(),
   },
   (t) => [index("document_chunks_document_chunk_idx").on(t.documentId, t.chunkIndex)],
+);
+
+export const savedSearchesTable = sqliteTable(
+  "saved_searches",
+  {
+    id: text("id").primaryKey().$defaultFn(newSearchId),
+    userId: text("user_id").notNull(),
+    name: text("name").notNull(),
+    query: text("query").notNull().default(""),
+    filters: text("filters").notNull().default("{}"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [index("saved_searches_user_idx").on(t.userId)],
 );

@@ -7,6 +7,7 @@ import type { LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { authClient } from "@/lib/auth-client";
 import { documentsApi } from "@/lib/documents-api";
+import { savedSearchesApi } from "@/lib/saved-searches-api";
 import { useKeyboardShortcuts } from "@/lib/use-keyboard-shortcuts";
 import { categoriesApi, tagsApi, type CategoryRow, type TagRow } from "@/lib/tags-api";
 
@@ -154,6 +155,7 @@ function FilesPanel({ inboxCount, needsReviewCount, trashCount }: { inboxCount: 
 }
 
 function SearchPanel() {
+  const { data: saved = [] } = useQuery({ queryKey: ["saved-searches"], queryFn: savedSearchesApi.list });
   return (
     <>
       <span className="font-heading text-lg">Search</span>
@@ -161,6 +163,11 @@ function SearchPanel() {
         <NavLink to="/search" className={navPillClass}>
           Search documents
         </NavLink>
+        {saved.map((s) => (
+          <NavLink key={s.id} to={`/search?saved=${s.id}`} className={navPillClass}>
+            {s.name}
+          </NavLink>
+        ))}
       </nav>
     </>
   );

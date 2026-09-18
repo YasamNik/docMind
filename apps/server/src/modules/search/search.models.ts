@@ -1,3 +1,9 @@
+import { randomBytes } from "node:crypto";
+
+export function newSearchId() {
+  return `srch_${randomBytes(8).toString("hex")}`;
+}
+
 export type TextChunk = { text: string; startChar: number; endChar: number };
 
 const DEFAULT_MAX_CHARS = 2000;

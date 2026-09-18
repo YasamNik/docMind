@@ -7,7 +7,7 @@ import { createDocumentsRepository } from "../documents/documents.repository.js"
 import type { JobHandler } from "../jobs/jobs.runner.js";
 import { createJobsService } from "../jobs/jobs.usecases.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
-import { chunkText, estimateTokens, reciprocalRankFusion } from "./search.models.js";
+import { chunkText, estimateTokens, newSearchId, reciprocalRankFusion } from "./search.models.js";
 import { createSearchRepository, type KeywordSearchRow, type VectorSearchRow } from "./search.repository.js";
 import { embeddingJobPayloadSchema } from "./search.schemas.js";
 import type { NewDocumentChunk, SearchResult } from "./search.types.js";
@@ -262,7 +262,35 @@ export function createSearchService({
     return { count: jobIds.length, jobIds };
   }
 
-  return { handler, search, reembedAll };
+  async function createSavedSearch({ userId, name, query, filters }: { userId: string; name: string; query: string; filters: Record<string, unknown> }) {
+    const id = newSearchId();
+    const now = nowIso();
+    await repository.insertSavedSearch({ id, userId, name, query, filters: JSON.stringify(filters), createdAt: now, updatedAt: now });
+    return repository.findSavedSearch({ userId, id });
+  }
+
+  async function listSavedSearches({ userId }: { userId: string }) {
+    return repository.listSavedSearches(userId);
+  }
+
+  async function updateSavedSearch({ userId, id, name, query, filters }: { userId: string; id: string; name?: string; query?: string; filters?: Record<string, unknown> }) {
+    const existing = await repository.findSavedSearch({ userId, id });
+    if (!existing) throw createError({ code: "search.not_found", message: "Saved search not found", status: 404 });
+    const patch: Record<string, string> = { updatedAt: nowIso() };
+    if (name !== undefined) patch.name = name;
+    if (query !== undefined) patch.query = query;
+    if (filters !== undefined) patch.filters = JSON.stringify(filters);
+    await repository.updateSavedSearch({ userId, id, patch });
+    return repository.findSavedSearch({ userId, id });
+  }
+
+  async function deleteSavedSearch({ userId, id }: { userId: string; id: string }) {
+    const existing = await repository.findSavedSearch({ userId, id });
+    if (!existing) throw createError({ code: "search.not_found", message: "Saved search not found", status: 404 });
+    await repository.deleteSavedSearch({ userId, id });
+  }
+
+  return { handler, search, reembedAll, createSavedSearch, listSavedSearches, updateSavedSearch, deleteSavedSearch };
 }
 
 export type SearchService = ReturnType<typeof createSearchService>;

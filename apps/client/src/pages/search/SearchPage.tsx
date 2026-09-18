@@ -1,7 +1,8 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import { savedSearchesApi } from "@/lib/saved-searches-api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -70,8 +71,18 @@ function ResultCard({ result, query }: { result: SearchResult; query: string }) 
 }
 
 export function SearchPage() {
-  const [query, setQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const savedId = searchParams.get("saved");
+  const { data: savedSearches = [] } = useQuery({ queryKey: ["saved-searches"], queryFn: savedSearchesApi.list });
+  const savedSearch = savedId ? savedSearches.find((s) => s.id === savedId) : null;
+
+  const [query, setQuery] = useState(savedSearch?.query ?? "");
+  const [debouncedQuery, setDebouncedQuery] = useState(savedSearch?.query ?? "");
+
+  useEffect(() => {
+    if (savedSearch?.query) { setQuery(savedSearch.query); setDebouncedQuery(savedSearch.query); }
+  }, [savedSearch?.query]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query), 300);
@@ -93,13 +104,30 @@ export function SearchPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const saveSearch = useMutation({
+    mutationFn: () => {
+      const name = window.prompt("Name for this saved search:");
+      if (!name) throw new Error("Cancelled");
+      return savedSearchesApi.create(name, trimmedQuery);
+    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["saved-searches"] }); toast.success("Search saved"); },
+    onError: (e: Error) => { if (e.message !== "Cancelled") toast.error(e.message); },
+  });
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="font-heading text-2xl">Search</h1>
-        <Button size="sm" variant="outline" onClick={() => reembed.mutate()} disabled={reembed.isPending}>
-          {reembed.isPending ? "Embedding..." : "Embed all documents"}
-        </Button>
+        <div className="flex gap-2">
+          {trimmedQuery.length > 0 && (
+            <Button size="sm" variant="outline" onClick={() => saveSearch.mutate()} disabled={saveSearch.isPending}>
+              Save search
+            </Button>
+          )}
+          <Button size="sm" variant="outline" onClick={() => reembed.mutate()} disabled={reembed.isPending}>
+            {reembed.isPending ? "Embedding..." : "Embed all documents"}
+          </Button>
+        </div>
       </div>
       <Input
         autoFocus

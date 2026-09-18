@@ -78,6 +78,13 @@
       "when": 1789727231145,
       "tag": "0010_add_deleted_at",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1789727759175,
+      "tag": "0011_add_saved_searches",
+      "breakpoints": true
     }
   ]
 }

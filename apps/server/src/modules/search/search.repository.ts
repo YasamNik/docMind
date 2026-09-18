@@ -1,6 +1,6 @@
-import { asc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type { Database } from "../database/database.js";
-import { documentChunksTable } from "./search.tables.js";
+import { documentChunksTable, savedSearchesTable } from "./search.tables.js";
 import type { DocumentChunk, NewDocumentChunk } from "./search.types.js";
 
 const DEFAULT_KEYWORD_LIMIT = 10;
@@ -120,6 +120,27 @@ export function createSearchRepository({ db }: { db: Database }) {
       } catch {
         // Column does not exist, or this libsql version cannot drop it.
       }
+    },
+
+    async insertSavedSearch(search: typeof savedSearchesTable.$inferInsert) {
+      await db.insert(savedSearchesTable).values(search);
+    },
+
+    async listSavedSearches(userId: string) {
+      return db.select().from(savedSearchesTable).where(eq(savedSearchesTable.userId, userId)).orderBy(desc(savedSearchesTable.updatedAt));
+    },
+
+    async findSavedSearch({ userId, id }: { userId: string; id: string }) {
+      const [row] = await db.select().from(savedSearchesTable).where(and(eq(savedSearchesTable.userId, userId), eq(savedSearchesTable.id, id)));
+      return row ?? null;
+    },
+
+    async updateSavedSearch({ userId, id, patch }: { userId: string; id: string; patch: Partial<typeof savedSearchesTable.$inferInsert> }) {
+      await db.update(savedSearchesTable).set(patch).where(and(eq(savedSearchesTable.userId, userId), eq(savedSearchesTable.id, id)));
+    },
+
+    async deleteSavedSearch({ userId, id }: { userId: string; id: string }) {
+      await db.delete(savedSearchesTable).where(and(eq(savedSearchesTable.userId, userId), eq(savedSearchesTable.id, id)));
     },
   };
 }
