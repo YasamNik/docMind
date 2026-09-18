@@ -27,6 +27,21 @@ const listMock = vi.fn(async (_filters?: unknown) => [
       { id: "tag_1", name: "Rent", color: null, auto: false, manual: true },
       { id: "tag_2", name: "Bills", color: null, auto: true, manual: false },
     ],
+    fields: [
+      {
+        id: "field_1",
+        documentId: "doc_1",
+        key: "documentType",
+        value: "invoice",
+        valueNumber: null,
+        valueDate: null,
+        currency: null,
+        confidence: 0.9,
+        source: "llm",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ],
     summary: "A rent invoice for January.",
     suggestedTitle: null,
     summaryStatus: "done",
@@ -45,6 +60,21 @@ const listMock = vi.fn(async (_filters?: unknown) => [
     categoryId: null,
     categoryPath: null,
     tags: [],
+    fields: [
+      {
+        id: "field_2",
+        documentId: "doc_2",
+        key: "documentType",
+        value: "receipt",
+        valueNumber: null,
+        valueDate: null,
+        currency: null,
+        confidence: 0.9,
+        source: "llm",
+        createdAt: "2026-01-02T00:00:00.000Z",
+        updatedAt: "2026-01-02T00:00:00.000Z",
+      },
+    ],
     summary: null,
     suggestedTitle: null,
     summaryStatus: "done",
@@ -59,6 +89,10 @@ vi.mock("@/lib/documents-api", () => ({
   documentsApi: { list: (filters?: unknown) => listMock(filters) },
 }));
 vi.mock("@/components/documents/UploadDropzone", () => ({ UploadDropzone: () => null }));
+const fieldValuesMock = vi.fn(async (_key: string) => ["invoice", "receipt"]);
+vi.mock("@/lib/fields-api", () => ({
+  fieldsApi: { values: (key: string) => fieldValuesMock(key) },
+}));
 vi.mock("@/lib/tags-api", () => ({
   categoriesApi: { list: vi.fn(async () => [{ id: "cat_1", name: "Finance", parentId: null, path: "Finance / Tax", documentCount: 1 }]) },
   tagsApi: {
@@ -186,5 +220,26 @@ describe("DocumentsPage", () => {
     await waitFor(() => expect(screen.queryByText("note.txt")).not.toBeInTheDocument());
     expect(screen.getByText("invoice.pdf")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Clear document date filter" })).toBeInTheDocument();
+  });
+
+  it("filters the table by a field key and value, and clearing it restores the full list", async () => {
+    renderAt("/documents");
+    await screen.findByText("invoice.pdf");
+    await screen.findByText("note.txt");
+
+    const keySelect = screen.getByLabelText("Filter by field") as HTMLSelectElement;
+    fireEvent.change(keySelect, { target: { value: "documentType" } });
+
+    const valueSelect = await screen.findByLabelText("Filter by field value");
+    await waitFor(() => expect(within(valueSelect).getByText("invoice")).toBeInTheDocument());
+    fireEvent.change(valueSelect, { target: { value: "invoice" } });
+
+    await waitFor(() => expect(screen.queryByText("note.txt")).not.toBeInTheDocument());
+    expect(screen.getByText("invoice.pdf")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear field filter" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear field filter" }));
+    await waitFor(() => expect(screen.getByText("note.txt")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Clear field filter" })).not.toBeInTheDocument();
   });
 });

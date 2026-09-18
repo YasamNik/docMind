@@ -18,6 +18,19 @@ const documentDetail = {
   categoryPath: null,
   categorySource: null,
   tags: [{ id: "tag_1", name: "Rent", color: null, auto: false, manual: true }],
+  fields: [] as {
+    id: string;
+    documentId: string;
+    key: string;
+    value: string;
+    valueNumber: number | null;
+    valueDate: string | null;
+    currency: string | null;
+    confidence: number | null;
+    source: "llm" | "manual";
+    createdAt: string;
+    updatedAt: string;
+  }[],
   summary: null as string | null,
   suggestedTitle: null as string | null,
   summaryStatus: "done" as "pending" | "processing" | "done" | "failed",
@@ -222,5 +235,95 @@ describe("DocumentDetailPage summary", () => {
     renderPage();
     await screen.findByText("Rent");
     expect(screen.queryByText("Suggested title")).not.toBeInTheDocument();
+  });
+});
+
+describe("DocumentDetailPage extracted fields", () => {
+  afterEach(() => {
+    getMock.mockImplementation(async () => documentDetail);
+  });
+
+  it("shows the extracted fields that are present", async () => {
+    getMock.mockImplementationOnce(async () => ({
+      ...documentDetail,
+      fields: [
+        {
+          id: "f_1",
+          documentId: "doc_1",
+          key: "documentType",
+          value: "invoice",
+          valueNumber: null,
+          valueDate: null,
+          currency: null,
+          confidence: 0.95,
+          source: "llm" as const,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "f_2",
+          documentId: "doc_1",
+          key: "amountTotal",
+          value: "120.50",
+          valueNumber: 120.5,
+          valueDate: null,
+          currency: "USD",
+          confidence: 0.9,
+          source: "llm" as const,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "f_3",
+          documentId: "doc_1",
+          key: "counterparty",
+          value: "Acme",
+          valueNumber: null,
+          valueDate: null,
+          currency: null,
+          confidence: null,
+          source: "llm" as const,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    }));
+    renderPage();
+    expect(await screen.findByText("Invoice")).toBeInTheDocument();
+    expect(screen.getByText("120.50")).toBeInTheDocument();
+    expect(screen.getByText("USD")).toBeInTheDocument();
+    expect(screen.getByText("Acme")).toBeInTheDocument();
+  });
+
+  it("does not show the document date among the extracted fields, since it has its own line", async () => {
+    getMock.mockImplementationOnce(async () => ({
+      ...documentDetail,
+      documentDate: "2026-02-14",
+      fields: [
+        {
+          id: "f_1",
+          documentId: "doc_1",
+          key: "dueDate",
+          value: "2026-03-01",
+          valueNumber: null,
+          valueDate: "2026-03-01",
+          currency: null,
+          confidence: null,
+          source: "llm" as const,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    }));
+    renderPage();
+    expect(await screen.findByText(/document date Feb 14, 2026/)).toBeInTheDocument();
+    expect(screen.getByText("Due")).toBeInTheDocument();
+    expect(screen.getAllByText(/Feb 14, 2026/)).toHaveLength(1);
+  });
+
+  it("shows nothing at all when the document has no extracted fields", async () => {
+    renderPage();
+    await screen.findByText("Rent");
+    expect(screen.queryByText("Extracted details")).not.toBeInTheDocument();
   });
 });

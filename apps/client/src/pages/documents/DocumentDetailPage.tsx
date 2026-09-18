@@ -7,11 +7,41 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { documentsApi, type DocumentDetail } from "@/lib/documents-api";
+import { documentsApi, type DocumentDetail, type ExtractedField } from "@/lib/documents-api";
+import { fieldLabel, formatFieldValue, isAmountFieldKey } from "@/lib/fields-format";
 import { formatBytes, formatDate, formatDocumentDate } from "@/lib/format";
 import { jobsApi } from "@/lib/jobs-api";
 import { sortApi, type ProposalRow } from "@/lib/sort-api";
 import { categoriesApi, documentCategorizationApi, tagsApi } from "@/lib/tags-api";
+
+// documentDate stays out of this list: the page already shows it on its own line, next
+// to the added date, so listing it a second time under a different label would read as
+// a duplicate rather than a second fact.
+function ExtractedFieldsCard({ fields }: { fields: ExtractedField[] }) {
+  const present = fields.filter((f) => f.key !== "documentDate");
+  if (present.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Extracted details</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-3">
+          {present.map((f) => (
+            <div key={f.key}>
+              <dt className="text-xs text-muted-foreground">{fieldLabel(f.key)}</dt>
+              <dd title={f.confidence != null ? `Model confidence ${Math.round(f.confidence * 100)}%` : undefined}>
+                <span>{formatFieldValue(f)}</span>
+                {isAmountFieldKey(f.key) && f.currency && <span className="ml-1 text-xs text-muted-foreground">{f.currency}</span>}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </CardContent>
+    </Card>
+  );
+}
 
 function Preview({ id, mimeType }: { id: string; mimeType: string | null }) {
   const url = documentsApi.fileUrl(id);
@@ -367,6 +397,8 @@ export function DocumentDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      <ExtractedFieldsCard fields={document.fields} />
 
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
         <DialogContent>

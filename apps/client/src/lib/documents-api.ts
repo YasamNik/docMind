@@ -1,6 +1,22 @@
 import { api, ApiError } from "./api";
 import type { TagChip } from "./tags-api";
 
+// Mirrors the server's ExtractedField (fields.types.ts). One row per extracted key
+// per document, embedded on the document payload the same way tags are.
+export type ExtractedField = {
+  id: string;
+  documentId: string;
+  key: string;
+  value: string;
+  valueNumber: number | null;
+  valueDate: string | null;
+  currency: string | null;
+  confidence: number | null;
+  source: "llm" | "manual";
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type DocumentRow = {
   id: string;
   name: string;
@@ -11,6 +27,7 @@ export type DocumentRow = {
   categoryId: string | null;
   categoryPath: string | null;
   tags: TagChip[];
+  fields: ExtractedField[];
   summary: string | null;
   suggestedTitle: string | null;
   summaryStatus: "pending" | "processing" | "done" | "failed";

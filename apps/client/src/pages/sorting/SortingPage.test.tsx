@@ -28,6 +28,9 @@ vi.mock("@/lib/jobs-api", () => ({ jobsApi: { list: () => listJobsFn() } }));
 
 vi.mock("@/lib/documents-api", () => ({ documentsApi: { list: () => listDocumentsFn() } }));
 
+const backfillFn = vi.fn(async () => ({ enqueued: 2, skipped: 1 }));
+vi.mock("@/lib/fields-api", () => ({ fieldsApi: { backfill: () => backfillFn() } }));
+
 vi.mock("@/lib/sort-api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/sort-api")>("@/lib/sort-api");
   return {
@@ -106,6 +109,35 @@ describe("SortingPage", () => {
     const runButtons = screen.getAllByRole("button", { name: "Run" });
     fireEvent.click(runButtons[runButtons.length - 1]!);
     await waitFor(() => expect(runFn).toHaveBeenCalled());
+  });
+
+  it("confirms before posting a fields backfill and states the document count and model call cost", async () => {
+    listDocumentsFn.mockResolvedValue([
+      { id: "doc_1", name: "a.pdf", extractionStatus: "done", tags: [], categoryId: null, fields: [] },
+      { id: "doc_2", name: "b.pdf", extractionStatus: "done", tags: [], categoryId: null, fields: [{ key: "documentType" }] },
+    ]);
+    renderPage();
+    fireEvent.click(await screen.findByText("Extract fields for all documents"));
+    expect(await screen.findByText(/1 document/)).toBeInTheDocument();
+    expect(screen.getByText(/one model call/)).toBeInTheDocument();
+    expect(backfillFn).not.toHaveBeenCalled();
+  });
+
+  it("does not post the backfill when the confirmation is dismissed", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByText("Extract fields for all documents"));
+    await screen.findByText(/model call/);
+    fireEvent.click(screen.getByText("Cancel"));
+    await waitFor(() => expect(screen.queryByText(/model call/)).not.toBeInTheDocument());
+    expect(backfillFn).not.toHaveBeenCalled();
+  });
+
+  it("posts the backfill after confirming and reports the enqueued and skipped counts", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByText("Extract fields for all documents"));
+    await screen.findByText(/model call/);
+    fireEvent.click(screen.getByRole("button", { name: "Extract fields" }));
+    await waitFor(() => expect(backfillFn).toHaveBeenCalled());
   });
 
   it("accepts a selected proposal", async () => {

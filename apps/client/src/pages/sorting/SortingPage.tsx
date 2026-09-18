@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { categoriesApi, tagsApi, type CategoryRow, type TagRow } from "@/lib/tags-api";
 import { jobsApi, type JobRow } from "@/lib/jobs-api";
 import { documentsApi, type DocumentRow } from "@/lib/documents-api";
+import { fieldsApi } from "@/lib/fields-api";
 import { sortApi, type ProposalRow, type RuleSuggestion, type SortScope } from "@/lib/sort-api";
 
 type AutomaticItem = { targetType: "tag" | "category"; id: string; name: string; description: string };
@@ -191,6 +192,50 @@ function RunDialog({ item, onClose, onQueued }: { item: AutomaticItem; onClose: 
   );
 }
 
+// A document counts as a backfill candidate once its extraction is done and it has not
+// been through smart field extraction yet, the same rule enqueueBackfill applies on the
+// server. The count here is only for stating the cost before confirming; the server
+// makes the real decision when the request lands.
+function countBackfillCandidates(documents: DocumentRow[]): number {
+  return documents.filter((d) => d.extractionStatus === "done" && (d.fields?.length ?? 0) === 0).length;
+}
+
+function FieldsBackfillDialog({ count, onClose, onQueued }: { count: number; onClose: () => void; onQueued: (result: { enqueued: number; skipped: number }) => void }) {
+  const queryClient = useQueryClient();
+  const backfill = useMutation({
+    mutationFn: () => fieldsApi.backfill(),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      onQueued(result);
+      onClose();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Extract fields for all documents?</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          This will run one model call for each of {count} document{count === 1 ? "" : "s"} that has not been through
+          smart field extraction yet. Documents already extracted are skipped.
+        </p>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={() => backfill.mutate()} disabled={backfill.isPending}>
+            Extract fields
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ProposalRowView({ proposal, checked, onToggle }: { proposal: ProposalRow; checked: boolean; onToggle: () => void }) {
   const kindLabel = proposal.kind === "add_tag" ? "Add tag" : proposal.kind === "remove_tag" ? "Remove tag" : "Set category";
   return (
@@ -227,11 +272,16 @@ export function SortingPage() {
     enabled: rulesJobs.length > 0,
     refetchInterval: rulesJobsPending ? 3000 : false,
   });
+  const { data: allDocuments = [] } = useQuery({
+    queryKey: ["documents", "fields-backfill-candidates"],
+    queryFn: () => documentsApi.list(),
+  });
   const [runningItem, setRunningItem] = useState<AutomaticItem | null>(null);
   const [currentBatchIds, setCurrentBatchIds] = useState<string[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [suggestions, setSuggestions] = useState<RuleSuggestion[]>([]);
   const [suggestOpen, setSuggestOpen] = useState(false);
+  const [backfillOpen, setBackfillOpen] = useState(false);
 
   const suggest = useMutation({
     mutationFn: () => sortApi.suggest(),
@@ -269,9 +319,14 @@ export function SortingPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="font-heading text-2xl">Sorting</h1>
-        <Button size="sm" variant="outline" onClick={() => suggest.mutate()} disabled={suggest.isPending}>
-          {suggest.isPending ? "Analyzing..." : "Suggest rules"}
-        </Button>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => setBackfillOpen(true)}>
+            Extract fields for all documents
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => suggest.mutate()} disabled={suggest.isPending}>
+            {suggest.isPending ? "Analyzing..." : "Suggest rules"}
+          </Button>
+        </div>
       </div>
 
       <Dialog open={suggestOpen} onOpenChange={setSuggestOpen}>
@@ -360,6 +415,15 @@ export function SortingPage() {
       </Card>
 
       {runningItem && <RunDialog item={runningItem} onClose={() => setRunningItem(null)} onQueued={setCurrentBatchIds} />}
+      {backfillOpen && (
+        <FieldsBackfillDialog
+          count={countBackfillCandidates(allDocuments)}
+          onClose={() => setBackfillOpen(false)}
+          onQueued={(result) =>
+            toast.success(`Queued ${result.enqueued} document${result.enqueued === 1 ? "" : "s"} for field extraction${result.skipped > 0 ? `, skipped ${result.skipped} already running` : ""}`)
+          }
+        />
+      )}
     </div>
   );
 }

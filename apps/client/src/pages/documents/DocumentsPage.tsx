@@ -8,6 +8,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { UploadDropzone } from "@/components/documents/UploadDropzone";
 import { DATE_FILTER_OPTIONS, dateFilterBadgeLabel, matchesDateFilter, type DateFilterValue } from "@/lib/date-filter";
 import { documentsApi, type DocumentListFilters, type DocumentRow } from "@/lib/documents-api";
+import { fieldsApi } from "@/lib/fields-api";
+import { FIELD_KEYS, fieldLabel, formatFieldValue, isAmountFieldKey } from "@/lib/fields-format";
 import { formatBytes, formatDate, formatDocumentDate } from "@/lib/format";
 import { categoriesApi, tagsApi } from "@/lib/tags-api";
 
@@ -198,13 +200,21 @@ export function DocumentsPage() {
   });
   const addedFilter = readDateFilter(searchParams, "added");
   const docDateFilter = readDateFilter(searchParams, "docDate");
+  const fieldKeyParam = searchParams.get("fieldKey") ?? "";
+  const fieldValueParam = searchParams.get("fieldValue") ?? "";
+  const { data: fieldValues = [] } = useQuery({
+    queryKey: ["fieldValues", fieldKeyParam],
+    queryFn: () => fieldsApi.values(fieldKeyParam),
+    enabled: Boolean(fieldKeyParam),
+  });
   const [sortKey, setSortKey] = useState<SortKey>("createdAt");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const filtered = rawDocuments
     .filter((d) => !isUncategorized || d.categoryId === null)
     .filter((d) => matchesDateFilter(d.createdAt, addedFilter))
-    .filter((d) => matchesDateFilter(d.documentDate, docDateFilter));
+    .filter((d) => matchesDateFilter(d.documentDate, docDateFilter))
+    .filter((d) => !fieldKeyParam || !fieldValueParam || d.fields.some((f) => f.key === fieldKeyParam && f.value === fieldValueParam));
   const documents = sortDocuments(filtered, sortKey, sortDir);
 
   function toggleSort(key: SortKey) {
@@ -247,13 +257,29 @@ export function DocumentsPage() {
     setSearchParams(next);
   }
 
+  function setFieldKeyParam(key: string) {
+    const next = new URLSearchParams(searchParams);
+    if (key) next.set("fieldKey", key);
+    else next.delete("fieldKey");
+    next.delete("fieldValue");
+    setSearchParams(next);
+  }
+
+  function setFieldValueParam(value: string) {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set("fieldValue", value);
+    else next.delete("fieldValue");
+    setSearchParams(next);
+  }
+
   const categoryFilterLabel = isUncategorized ? "None" : (categories.find((c) => c.id === categoryParam)?.name ?? null);
   const tagFilterLabel = tags.find((t) => t.id === tagParam)?.name ?? null;
   const addedFilterLabel = dateFilterBadgeLabel(addedFilter);
   const docDateFilterLabel = dateFilterBadgeLabel(docDateFilter);
+  const fieldFilterLabel = fieldKeyParam && fieldValueParam ? `${fieldLabel(fieldKeyParam)}: ${fieldValueParam}` : null;
 
   const filterLabel = filters.view && filters.view !== "all" ? VIEW_LABELS[filters.view] : null;
-  const hasFilter = Boolean(filterLabel || categoryParam || tagParam || addedFilterLabel || docDateFilterLabel);
+  const hasFilter = Boolean(filterLabel || categoryParam || tagParam || addedFilterLabel || docDateFilterLabel || fieldFilterLabel);
 
   return (
     <div className="space-y-6">
@@ -340,6 +366,33 @@ export function DocumentsPage() {
                   )}
                 </div>
               </TableHead>
+              <TableHead>
+                <div className="flex flex-wrap items-center gap-1.5 normal-case tracking-normal">
+                  <span>Fields</span>
+                  <ColumnFilter
+                    label="Filter by field"
+                    value={fieldKeyParam}
+                    onChange={setFieldKeyParam}
+                    options={[{ value: "", label: "All fields" }, ...FIELD_KEYS.map((k) => ({ value: k, label: fieldLabel(k) }))]}
+                  />
+                  {fieldKeyParam && (
+                    <ColumnFilter
+                      label="Filter by field value"
+                      value={fieldValueParam}
+                      onChange={setFieldValueParam}
+                      options={[{ value: "", label: "Any value" }, ...fieldValues.map((v) => ({ value: v, label: v }))]}
+                    />
+                  )}
+                  {fieldFilterLabel && (
+                    <ActiveFilterBadge
+                      label={fieldFilterLabel}
+                      variant="neutral"
+                      clearLabel="Clear field filter"
+                      onClear={() => setFieldValueParam("")}
+                    />
+                  )}
+                </div>
+              </TableHead>
               <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("type")}>Type{sortIndicator("type")}</TableHead>
               <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("size")}>Size{sortIndicator("size")}</TableHead>
               <TableHead>
@@ -393,6 +446,16 @@ export function DocumentsPage() {
                       <Badge key={t.id} variant={t.auto ? "accent2" : "accent"} className="gap-1">
                         {t.name}
                         {t.auto && <span className="text-xs opacity-70">(auto)</span>}
+                      </Badge>
+                    ))}
+                  </div>
+                </TableCell>
+                <TableCell className="max-w-[200px]">
+                  <div className="flex flex-wrap gap-1">
+                    {d.fields.map((f) => (
+                      <Badge key={f.key} variant="neutral" className="gap-1">
+                        {fieldLabel(f.key)}: {formatFieldValue(f)}
+                        {isAmountFieldKey(f.key) && f.currency ? ` ${f.currency}` : ""}
                       </Badge>
                     ))}
                   </div>
