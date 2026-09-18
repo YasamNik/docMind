@@ -173,33 +173,56 @@ export function createSearchService({
       logger.info("Vector search unavailable, falling back to keyword-only");
     }
 
-    const keywordIds = dedupeOrderedIds(keywordRows.map((r) => r.documentId));
-    const vectorIds = dedupeOrderedIds(vectorRows.map((r) => r.documentId));
-    const fused = reciprocalRankFusion(vectorIds, keywordIds)
-      .filter((r) => r.score >= 0.3)
-      .slice(0, limit);
-
+    const hasVector = vectorRows.length > 0;
     const keywordByDocument = bestRowByDocument<KeywordSearchRow>(keywordRows);
     const vectorByDocument = bestRowByDocument<VectorSearchRow>(vectorRows);
 
-    const documents = await Promise.all(fused.map((f) => documentsRepository.findById({ userId, documentId: f.documentId })));
+    // When both sources exist, merge with RRF. When keyword-only, use FTS5 rank
+    // directly (more negative = better match, normalized to 0-1).
+    type ScoredEntry = { documentId: string; score: number; source: SearchResult["source"] };
+    let scored: ScoredEntry[];
+
+    if (hasVector) {
+      const keywordIds = dedupeOrderedIds(keywordRows.map((r) => r.documentId));
+      const vectorIds = dedupeOrderedIds(vectorRows.map((r) => r.documentId));
+      scored = reciprocalRankFusion(vectorIds, keywordIds).map((entry) => {
+        const source: SearchResult["source"] = keywordByDocument.has(entry.documentId) && vectorByDocument.has(entry.documentId) ? "hybrid" : keywordByDocument.has(entry.documentId) ? "keyword" : "vector";
+        return { ...entry, source };
+      });
+    } else {
+      // FTS5 rank: more negative = better. Normalize: best rank -> 1.0, worst -> lower.
+      const deduped = new Map<string, KeywordSearchRow>();
+      for (const row of keywordRows) {
+        if (!deduped.has(row.documentId)) deduped.set(row.documentId, row);
+      }
+      const rows = Array.from(deduped.values());
+      if (rows.length === 0) return [];
+      const bestRank = rows[0]!.rank; // most negative
+      const worstRank = rows[rows.length - 1]?.rank ?? bestRank;
+      const range = worstRank - bestRank;
+      scored = rows.map((r) => ({
+        documentId: r.documentId,
+        score: range > 0 ? 1 - (r.rank - bestRank) / range : 1,
+        source: "keyword" as const,
+      }));
+    }
+
+    const filtered = scored.filter((r) => r.score >= 0.2).slice(0, limit);
+    const documents = await Promise.all(filtered.map((f) => documentsRepository.findById({ userId, documentId: f.documentId })));
 
     const results: SearchResult[] = [];
-    fused.forEach((entry, index) => {
+    filtered.forEach((entry, index) => {
       const document = documents[index];
-      if (!document) return; // Deleted since it was chunked.
-      const keywordHit = keywordByDocument.get(entry.documentId);
-      const vectorHit = vectorByDocument.get(entry.documentId);
-      const chosen = keywordHit ?? vectorHit;
+      if (!document) return;
+      const chosen = keywordByDocument.get(entry.documentId) ?? vectorByDocument.get(entry.documentId);
       if (!chosen) return;
-      const source: SearchResult["source"] = keywordHit && vectorHit ? "hybrid" : keywordHit ? "keyword" : "vector";
       results.push({
         documentId: entry.documentId,
         documentName: document.name,
         chunkText: chosen.chunkText,
         chunkIndex: chosen.chunkIndex,
         score: entry.score,
-        source,
+        source: entry.source,
       });
     });
     return results;
