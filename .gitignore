@@ -35,3 +35,6 @@ chats/
 
 # subagent-driven-development scratch
 .superpowers/
+
+# Agent worktrees, never committed
+.claude/worktrees/
