@@ -172,7 +172,7 @@ export function ProviderCard({
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
         <button type="button" onClick={onExpand} className="text-left">
           <CardTitle>{provider.label}</CardTitle>
         </button>
@@ -181,7 +181,7 @@ export function ProviderCard({
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div className="space-y-3">
             {/* API Key */}
             {provider.requiresKey && (

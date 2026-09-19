@@ -23,7 +23,7 @@ function TagForm({ initial, onSubmit, submitting }: { initial: TagInput; onSubmi
         <Input id="tag-name" value={form.name} maxLength={60} onChange={(e) => setForm({ ...form, name: e.target.value })} />
       </div>
       <div>
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <Label htmlFor="tag-description">Description (the rule)</Label>
           <DescriptionAssistant
             targetType="tag"
@@ -34,7 +34,7 @@ function TagForm({ initial, onSubmit, submitting }: { initial: TagInput; onSubmi
         </div>
         <textarea
           id="tag-description"
-          className="w-full min-h-24 rounded-[1.75rem] border bg-secondary px-4 py-3 text-sm"
+          className="w-full min-h-24 rounded-[1.75rem] border bg-secondary px-4 py-3 text-base md:text-sm"
           maxLength={300}
           value={form.description ?? ""}
           onChange={(e) => setForm({ ...form, description: e.target.value })}
@@ -113,7 +113,7 @@ export function TagsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="font-heading text-2xl">Tags</h1>
         <Button onClick={() => setCreateOpen(true)}>New tag</Button>
       </div>
@@ -124,7 +124,7 @@ export function TagsPage() {
         <div className="grid gap-3">
           {tags.map((t) => (
             <Card key={t.id}>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0">
+              <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
                 <CardTitle className="text-base flex items-center gap-2">
                   {t.color && <span className="inline-block h-[7px] w-[7px] rounded-full" style={{ backgroundColor: t.color }} />}
                   {t.name}

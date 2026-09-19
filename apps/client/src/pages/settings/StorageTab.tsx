@@ -90,7 +90,7 @@ export function StorageTab() {
   const selectedTestResult = selected ? testResults[selected.id] : undefined;
 
   return (
-    <div className="grid gap-4 md:grid-cols-[280px_1fr]">
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-[280px_1fr]">
       <Card>
         <CardHeader>
           <CardTitle>Storage drivers</CardTitle>
@@ -117,7 +117,7 @@ export function StorageTab() {
 
       {selected && (
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
             <CardTitle>{selected.label}</CardTitle>
             {!selected.active && (
               <Button
@@ -131,7 +131,7 @@ export function StorageTab() {
             )}
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div className="space-y-3">
                 {selected.redirectUri && <RedirectUriNotice redirectUri={selected.redirectUri} />}
 

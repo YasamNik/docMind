@@ -79,4 +79,22 @@ describe("SettingsPage", () => {
     expect(screen.getByText("Chat")).toBeInTheDocument();
     expect(screen.getByText("Embedding")).toBeInTheDocument();
   });
+
+  it("scrolls the tab strip sideways instead of wrapping or overflowing the page", async () => {
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={new QueryClient()}>
+          <SettingsPage />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    await screen.findAllByText("OpenRouter");
+    const tabStrip = screen.getByRole("tablist");
+    expect(tabStrip.className).toContain("overflow-x-auto");
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs).toHaveLength(5);
+    for (const tab of tabs) {
+      expect(tab.className).toContain("shrink-0");
+    }
+  });
 });

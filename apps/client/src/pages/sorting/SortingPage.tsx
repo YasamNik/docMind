@@ -122,7 +122,7 @@ function SortingActivityCard({
             const badge = activityBadge(job.status);
             return (
               <div key={job.id} className="flex items-center justify-between gap-2 border-b py-1 last:border-b-0">
-                <span className="truncate text-sm">{name}</span>
+                <span className="min-w-0 flex-1 truncate text-sm">{name}</span>
                 <Badge variant={badge.variant} className={badge.pulse ? "animate-pulse" : undefined}>
                   {badge.label}
                 </Badge>
@@ -172,7 +172,7 @@ function RunDialog({ item, onClose, onQueued }: { item: AutomaticItem; onClose: 
         <DialogHeader>
           <DialogTitle>Run &quot;{item.name}&quot; over</DialogTitle>
         </DialogHeader>
-        <select className="w-full rounded border bg-transparent p-2 text-sm" value={scope} onChange={(e) => setScope(e.target.value as SortScope)}>
+        <select className="w-full rounded border bg-transparent p-2 text-base md:text-sm" value={scope} onChange={(e) => setScope(e.target.value as SortScope)}>
           <option value="needs_review">Needs review</option>
           <option value="all">All documents</option>
         </select>
@@ -317,9 +317,9 @@ export function SortingPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="font-heading text-2xl">Sorting</h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" onClick={() => setBackfillOpen(true)}>
             Extract fields for all documents
           </Button>
@@ -389,10 +389,10 @@ export function SortingPage() {
       <SortingActivityCard rulesJobs={rulesJobs} batch={batch} documents={documents} proposals={proposals} />
 
       <Card id="proposed-changes">
-        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
           <CardTitle className="text-base">Proposed changes</CardTitle>
           {proposals.length > 0 && (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="outline" onClick={() => apply.mutate({ accept: [...selected], dismiss: [] })} disabled={selected.size === 0 || apply.isPending}>
                 Accept selected
               </Button>

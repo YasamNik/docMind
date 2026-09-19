@@ -42,12 +42,14 @@ export function SettingsPage() {
     <div className="space-y-4">
       <h1 className="font-heading text-2xl">Settings</h1>
       <TabsNav defaultValue="ai">
-        <TabsNavList>
-          <TabsNavTab value="ai">AI</TabsNavTab>
-          <TabsNavTab value="storage">Storage</TabsNavTab>
-          <TabsNavTab value="telegram">Telegram</TabsNavTab>
-          <TabsNavTab value="email">Email</TabsNavTab>
-          <TabsNavTab value="data">Data</TabsNavTab>
+        {/* Five tabs do not fit one line below md. Scrolling sideways beats wrapping or
+            pushing the page wider, and the cut off last tab makes the scroll discoverable. */}
+        <TabsNavList className="w-full flex-nowrap overflow-x-auto">
+          <TabsNavTab value="ai" className="shrink-0">AI</TabsNavTab>
+          <TabsNavTab value="storage" className="shrink-0">Storage</TabsNavTab>
+          <TabsNavTab value="telegram" className="shrink-0">Telegram</TabsNavTab>
+          <TabsNavTab value="email" className="shrink-0">Email</TabsNavTab>
+          <TabsNavTab value="data" className="shrink-0">Data</TabsNavTab>
         </TabsNavList>
         <TabsNavPanel value="ai">
           <AiTab />
