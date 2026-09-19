@@ -219,6 +219,15 @@ describe("EmailTab, Gmail connected", () => {
     expect(screen.getByText(/mailbox address to sign in as/i)).not.toBeVisible();
   });
 
+  it("never tells a connected mailbox to go and create an app password", async () => {
+    // The guide used to fall back to the IMAP one for any mode but unconfigured, so a
+    // mailbox signed in over OAuth was told to make an app password and type a host.
+    renderEmailTab();
+    expect(await screen.findByText(/Gmail is connected/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Create an app password/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Enter the host, port, mailbox address/i)).not.toBeInTheDocument();
+  });
+
   it("disconnects Gmail through the settings api after confirming", async () => {
     renderEmailTab();
     await screen.findByText(/me@gmail\.com/);

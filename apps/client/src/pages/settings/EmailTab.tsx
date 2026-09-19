@@ -73,6 +73,21 @@ const gmailGuide: SetupGuide = {
   ],
 };
 
+// Shown once Gmail is connected. The setup steps are done, so repeating them, or worse
+// falling back to the app password guide, only tells a signed in user to go and do
+// something they do not need.
+const gmailConnectedGuide: SetupGuide = {
+  title: "Gmail is connected",
+  intro: "DocMind checks the folder below for new mail and turns each message into documents.",
+  steps: [],
+  notes: [
+    "DocMind only reads the folder named below. It never touches your inbox.",
+    "A handled message moves to the done folder. DocMind never deletes a message.",
+    "A message that keeps failing moves to the failed folder instead of being retried forever.",
+    "While this Google app is in Testing, Google expires the connection about once a week. The banner here will say when that happens.",
+  ],
+};
+
 // Turns a camelCase settings key into a short label: pollSeconds becomes Poll Seconds.
 function fieldLabel(setting: ResolvedSetting) {
   const shortKey = setting.key.split(".").slice(2).join(".");
@@ -119,7 +134,14 @@ export function EmailTab() {
   // Redirecting to Google is only ever relevant while a connect or a reconnect is on
   // offer: an already healthy connection has nothing to register again.
   const showsRedirectUri = status.needsReconnect || (status.mode === "unconfigured" && status.googleAppAvailable);
-  const guide = status.mode === "unconfigured" && status.googleAppAvailable ? gmailGuide : imapGuide;
+  // A connected Gmail mailbox must never be shown the app password guide: it is wrong
+  // for that mode, and it is the text the user could not follow in the first place.
+  const guide =
+    status.mode === "gmail"
+      ? gmailConnectedGuide
+      : status.mode === "unconfigured" && status.googleAppAvailable
+        ? gmailGuide
+        : imapGuide;
 
   return (
     <Card>
