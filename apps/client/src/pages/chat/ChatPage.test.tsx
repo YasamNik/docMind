@@ -185,4 +185,38 @@ describe("ChatPage", () => {
     expect(fetchSpy.mock.calls[0]?.[0]).toBe("/api/chat/sessions/sess_1/messages");
     expect(screen.getByRole("button", { name: "1" })).toBeInTheDocument();
   });
+
+  it("keeps the composer's input element across keystrokes and types characters in order", async () => {
+    listSessionsMock.mockResolvedValueOnce([
+      { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+    ]);
+    getSessionMock.mockResolvedValueOnce({
+      session: { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+      messages: [],
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByText("Lease question"));
+    await screen.findByPlaceholderText("Ask about your documents...");
+
+    // Simulates real typing: each keystroke inserts at the current caret rather than
+    // replacing the whole value, and the caret is read from whatever input element is
+    // live in the DOM right now. If the composer got remounted between keystrokes, the
+    // fresh element would not carry the previous caret position forward, and this loop
+    // would catch it as a changed element identity rather than a silently wrong caret.
+    let previousElement: Element | null = null;
+    let expected = "";
+    for (const char of "What licence") {
+      const live = screen.getByPlaceholderText("Ask about your documents...") as HTMLInputElement;
+      if (previousElement) expect(live).toBe(previousElement);
+      const caret = live.selectionStart ?? expected.length;
+      expected = expected.slice(0, caret) + char + expected.slice(caret);
+      fireEvent.change(live, { target: { value: expected } });
+      const afterChange = screen.getByPlaceholderText("Ask about your documents...") as HTMLInputElement;
+      afterChange.setSelectionRange(caret + 1, caret + 1);
+      previousElement = afterChange;
+    }
+
+    expect((screen.getByPlaceholderText("Ask about your documents...") as HTMLInputElement).value).toBe("What licence");
+  });
 });
