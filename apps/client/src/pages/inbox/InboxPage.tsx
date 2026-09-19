@@ -37,7 +37,7 @@ export function InboxPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="font-heading text-2xl">Inbox</h1>
         {readyCount > 1 && (
           <Button size="sm" variant="outline" onClick={() => batchAccept.mutate()} disabled={batchAccept.isPending}>

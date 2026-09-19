@@ -4,7 +4,23 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DocumentsPage } from "./DocumentsPage";
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  // @ts-expect-error test-only cleanup of a browser API jsdom does not implement by default
+  delete window.matchMedia;
+});
+
+// Simulates the phone breakpoint so DocumentsPage renders its card list instead of the
+// table. Without this, window.matchMedia does not exist in jsdom and the page reads as
+// desktop, same as every test above that never calls this.
+function mockMobileViewport() {
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    matches: query === "(max-width: 767px)",
+    media: query,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+}
 
 // Local noon on purpose: the date filter reasons about local calendar days, so fixture
 // timestamps are built from local time instead of literal UTC "Z" strings to land on the
@@ -291,5 +307,63 @@ describe("DocumentsPage", () => {
     renderAt("/documents");
     expect(await screen.findByText("Showing documents on Local filesystem")).toBeInTheDocument();
     expect(screen.queryByText(/on other storages/)).not.toBeInTheDocument();
+  });
+});
+
+describe("DocumentsPage on a phone", () => {
+  it("renders a card per document instead of the table", async () => {
+    mockMobileViewport();
+    const { container } = renderAt("/documents");
+    await screen.findByText("invoice.pdf");
+    expect(container.querySelector("table")).not.toBeInTheDocument();
+    expect(screen.getByText("invoice.pdf")).toBeInTheDocument();
+    expect(screen.getByText("note.txt")).toBeInTheDocument();
+  });
+
+  it("keeps the row as a link to the document", async () => {
+    mockMobileViewport();
+    renderAt("/documents");
+    const link = (await screen.findByText("invoice.pdf")).closest("a");
+    expect(link).toHaveAttribute("href", "/documents/doc_1");
+  });
+
+  it("keeps the checkbox for bulk selection on the card", async () => {
+    mockMobileViewport();
+    renderAt("/documents");
+    await screen.findByText("invoice.pdf");
+    fireEvent.click(screen.getByLabelText("Select invoice.pdf"));
+    expect(await screen.findByText("1 selected")).toBeInTheDocument();
+  });
+
+  it("shows the sort and filter control with the count of active filters", async () => {
+    mockMobileViewport();
+    renderAt("/documents?categoryId=cat_1");
+    await screen.findByText("invoice.pdf");
+    expect(screen.getByText("Sort and filter (1)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear category filter" })).toBeInTheDocument();
+  });
+
+  it("still lets a phone filter by category", async () => {
+    mockMobileViewport();
+    renderAt("/documents");
+    await screen.findByText("invoice.pdf");
+    fireEvent.change(screen.getByLabelText("Filter by category"), { target: { value: "cat_1" } });
+    await waitFor(() => expect(listMock).toHaveBeenLastCalledWith({ categoryId: "cat_1", tagId: undefined, view: "all" }));
+  });
+
+  it("still lets a phone sort the list", async () => {
+    mockMobileViewport();
+    const { container } = renderAt("/documents");
+    await screen.findByText("invoice.pdf");
+    fireEvent.change(screen.getByLabelText("Sort by"), { target: { value: "name" } });
+    const names = [...container.querySelectorAll("p[title]")].map((p) => p.getAttribute("title"));
+    expect(names).toEqual(["invoice.pdf", "note.txt"]);
+  });
+
+  it("does not render the card list at a normal viewport", async () => {
+    const { container } = renderAt("/documents");
+    await screen.findByText("invoice.pdf");
+    expect(screen.queryByText("Sort and filter")).not.toBeInTheDocument();
+    expect(container.querySelector("table")).toBeInTheDocument();
   });
 });

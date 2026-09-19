@@ -4,9 +4,11 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { jobsApi, type JobRow } from "@/lib/jobs-api";
 import { formatDate } from "@/lib/format";
+import { useIsMobile } from "@/lib/use-media-query";
 
 const FILTERS: { label: string; value?: JobRow["status"] }[] = [
   { label: "All" },
@@ -20,6 +22,36 @@ function statusVariant(status: JobRow["status"]) {
   if (status === "failed") return "destructive" as const;
   if (status === "done") return "accent2" as const;
   return "accent" as const;
+}
+
+// One card per job below the breakpoint. The seven table columns fold into a heading line,
+// a status badge, a quiet line of the facts that matter, and the error text a failed job
+// needs to explain itself, with the retry button the table row already carried.
+function JobCard({ job, onRetry, retryPending }: { job: JobRow; onRetry: () => void; retryPending: boolean }) {
+  return (
+    <Card>
+      <CardContent className="space-y-2">
+        <div className="flex items-start justify-between gap-2">
+          <p className="font-heading text-base">{job.type}</p>
+          <Badge variant={statusVariant(job.status)}>{job.status}</Badge>
+        </div>
+        {job.payload.documentId && (
+          <Link className="block truncate text-xs underline-offset-2 hover:underline" to={`/documents/${job.payload.documentId}`}>
+            {job.payload.documentId}
+          </Link>
+        )}
+        <p className="text-xs text-muted-foreground">
+          Attempt {job.attempts} · {formatDate(job.createdAt)}
+        </p>
+        {job.error && <p className="whitespace-pre-wrap break-words text-sm text-muted-foreground">{job.error}</p>}
+        {job.status === "failed" && (
+          <Button size="sm" variant="outline" onClick={onRetry} disabled={retryPending}>
+            Retry
+          </Button>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export function JobsPage() {
@@ -39,6 +71,7 @@ export function JobsPage() {
     },
     onError: (e: Error) => toast.error(e.message),
   });
+  const isMobile = useIsMobile();
 
   return (
     <div className="space-y-4">
@@ -54,6 +87,12 @@ export function JobsPage() {
         <p className="text-sm text-muted-foreground">Loading</p>
       ) : jobs.length === 0 ? (
         <p className="text-sm text-muted-foreground">No jobs yet. Upload a document and its extraction shows up here.</p>
+      ) : isMobile ? (
+        <div className="space-y-3">
+          {jobs.map((j) => (
+            <JobCard key={j.id} job={j} onRetry={() => retry.mutate(j.id)} retryPending={retry.isPending} />
+          ))}
+        </div>
       ) : (
         <Table>
           <TableHeader>
