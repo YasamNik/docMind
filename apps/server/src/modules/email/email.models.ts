@@ -1,4 +1,5 @@
 import type { AddressObject, Attachment, ParsedMail } from "mailparser";
+import { isAppError } from "../../shared/errors/errors.js";
 import { sanitizeFilename } from "../documents/documents.models.js";
 
 // Turns mailparser's parsed output into what the intake loop should file: the mail
@@ -79,4 +80,67 @@ export function documentsFromMail(parsed: ParsedMail): {
     }));
 
   return { mail: { name: mailDocumentName(parsed), text }, attachments };
+}
+
+export type EmailMode = "gmail" | "password" | "unconfigured";
+
+// Which credentials the loop connects with this cycle, resolved fresh from the
+// settings values every time rather than cached, the same way the credentials
+// themselves already are. Gmail wins when both a connection and an app password
+// exist: connecting an account is a deliberate, recent act, while an app password is
+// usually a leftover from before. A half configured Gmail connection, missing either
+// the refresh token or the account email, counts as no connection at all.
+export function resolveEmailMode({
+  gmailRefreshToken,
+  gmailAccountEmail,
+  imapHost,
+  imapPassword,
+}: {
+  gmailRefreshToken?: string;
+  gmailAccountEmail?: string;
+  imapHost?: string;
+  imapPassword?: string;
+}): EmailMode {
+  if (gmailRefreshToken && gmailAccountEmail) return "gmail";
+  if (imapHost && imapPassword) return "password";
+  return "unconfigured";
+}
+
+export type EmailFailureCode = "reauth_required" | "auth_failed" | "folder_missing" | "network" | "unknown";
+export type EmailFailure = { code: EmailFailureCode; message: string };
+
+// The reason a cycle or a Test attempt failed, read back off email.client.ts's own
+// rebuilt error the same narrow way imapFailureReason does in the usecases file.
+const IMAP_REASON_CODES: Record<string, EmailFailureCode> = {
+  "authentication failed": "auth_failed",
+  "the folder does not exist": "folder_missing",
+  "could not resolve the host": "network",
+  "the connection was refused": "network",
+  "timed out": "network",
+};
+
+const UNKNOWN_FAILURE: EmailFailure = { code: "unknown", message: "the mailbox could not be checked" };
+
+// The one function that turns any failure from either family the intake cycle can
+// throw, an imap error or a Google auth error, into a fixed code and a short curated
+// message. Called from the loop's own catch and from testConnection, so the two can
+// never disagree about what the reconnect banner should say. Reads only structured
+// fields off an AppError, never an underlying message, response body or stack, which
+// for a Google failure can carry the refresh token and for an imap failure can carry
+// the password.
+export function classifyEmailFailure(error: unknown): EmailFailure {
+  if (isAppError(error)) {
+    if (error.code === "google.reauth_required") {
+      return { code: "reauth_required", message: "Gmail access has expired or been revoked. Reconnect the account." };
+    }
+    if (error.code === "google.auth_failed") {
+      return { code: "auth_failed", message: "Could not sign in to Gmail." };
+    }
+    if (error.code === "email.imap_error") {
+      const reason = error.message.split(": ").pop() ?? "";
+      const code = IMAP_REASON_CODES[reason];
+      if (code) return { code, message: reason };
+    }
+  }
+  return UNKNOWN_FAILURE;
 }

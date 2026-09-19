@@ -67,7 +67,7 @@ export const emailSettingDefinitions: SettingDefinition[] = [
     schema: v.string(),
     internal: true,
     default: "",
-    doc: "The reason the last cycle failed, if it did. Kept for diagnosis only; nothing surfaces it yet.",
+    doc: "The reason the last cycle failed, if it did. Read by GET /api/email/status.",
   }),
   // Gmail over OAuth, in the shape storage's Google Drive driver settings established:
   // secret where it matters, not internal, so Disconnect is an ordinary settings write
@@ -94,8 +94,10 @@ export const emailSettingDefinitions: SettingDefinition[] = [
     secret: true,
     doc: "Optional override client secret for Gmail. Required if the client id above is set.",
   }),
-  // Read by the loop and the Test button once they classify a cycle's failure. Not
-  // written yet: that lands with the loop change this settings addition prepares for.
+  // Written by the loop's own catch and by testConnection, both through the one
+  // classifyEmailFailure function in email.models.ts, so the two can never disagree
+  // about what the reconnect banner should say. Cleared, not written empty, on a
+  // successful cycle or Test: this schema has no empty value of its own.
   defineSetting({
     key: "email.imap.lastErrorCode",
     schema: v.picklist(["reauth_required", "auth_failed", "folder_missing", "network", "unknown"]),

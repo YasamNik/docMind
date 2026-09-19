@@ -19,7 +19,7 @@ import { createStorageService } from "../storage/storage.usecases.js";
 import type { ImapClient } from "./email.client.js";
 import { documentsFromMail } from "./email.models.js";
 import { emailSettingDefinitions } from "./email.settings.js";
-import { createEmailService, type EmailClientFactory } from "./email.usecases.js";
+import { createEmailService, type EmailClientFactory, type GoogleTokenProviderFactory } from "./email.usecases.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = join(here, "fixtures");
@@ -715,5 +715,239 @@ describe("gmail connect completion", () => {
     expect((caught as { code?: string } | undefined)?.code).toBe("google.reauth_required");
     expect(JSON.stringify(caught)).not.toContain("leaked-client-secret");
     expect(JSON.stringify(caught)).not.toContain("leaked-auth-code");
+  });
+});
+
+async function configureGmail(overrides: Record<string, unknown> = {}) {
+  await settingsService.set(userId, {
+    "email.gmail.refreshToken": "refresh-token-1",
+    "email.gmail.accountEmail": "me@gmail.com",
+    ...overrides,
+  });
+}
+
+// A fake at the same seam the loop's clientFactory already uses: getAccessToken is
+// whatever the test wants, and every call to the factory itself (standing in for
+// createGoogleAccessTokenProvider) is recorded, which is what proves the loop
+// memoizes one provider per client id and refresh token rather than minting a fresh
+// one every cycle.
+function fakeTokenProviderFactory(getAccessToken: () => Promise<string>) {
+  const calls: { clientId: string; clientSecret: string; refreshToken: string }[] = [];
+  const factory: GoogleTokenProviderFactory = (args) => {
+    calls.push(args);
+    return { getAccessToken };
+  };
+  return { factory, calls };
+}
+
+describe("gmail loop mode", () => {
+  it("connects with an access token, at Gmail's own host and port, never a password", async () => {
+    await configureGmail();
+    const mailbox = createFakeMailbox();
+    mailbox.seed("DocMind", []);
+    let receivedConfig: unknown;
+    const { factory } = fakeTokenProviderFactory(async () => "gmail-access-token");
+    const email = buildService(
+      async (config) => {
+        receivedConfig = config;
+        return mailbox.client;
+      },
+      { getSharedGoogleApp: async () => ({ clientId: "shared-id", clientSecret: "shared-secret" }), createTokenProvider: factory },
+    );
+
+    await email.runOnce();
+
+    expect(receivedConfig).toEqual({ host: "imap.gmail.com", port: 993, user: "me@gmail.com", accessToken: "gmail-access-token" });
+    expect((receivedConfig as { password?: string }).password).toBeUndefined();
+  });
+
+  it("prefers gmail over a configured app password when both are set", async () => {
+    await configureImap();
+    await configureGmail();
+    const mailbox = createFakeMailbox();
+    mailbox.seed("DocMind", []);
+    let receivedConfig: unknown;
+    const { factory } = fakeTokenProviderFactory(async () => "gmail-access-token");
+    const email = buildService(
+      async (config) => {
+        receivedConfig = config;
+        return mailbox.client;
+      },
+      { getSharedGoogleApp: async () => ({ clientId: "shared-id", clientSecret: "shared-secret" }), createTokenProvider: factory },
+    );
+
+    await email.runOnce();
+
+    expect((receivedConfig as { host: string }).host).toBe("imap.gmail.com");
+  });
+
+  it("reuses the same token provider across many cycles with unchanged gmail settings", async () => {
+    await configureGmail();
+    const mailbox = createFakeMailbox();
+    mailbox.seed("DocMind", []);
+    let accessTokenCalls = 0;
+    const { factory, calls } = fakeTokenProviderFactory(async () => {
+      accessTokenCalls += 1;
+      return "gmail-access-token";
+    });
+    const email = buildService(async () => mailbox.client, {
+      getSharedGoogleApp: async () => ({ clientId: "shared-id", clientSecret: "shared-secret" }),
+      createTokenProvider: factory,
+    });
+
+    await email.runOnce();
+    await email.runOnce();
+    await email.runOnce();
+
+    expect(calls).toHaveLength(1);
+    expect(accessTokenCalls).toBe(3);
+  });
+
+  it("mints a new provider when the refresh token changes", async () => {
+    await configureGmail();
+    const mailbox = createFakeMailbox();
+    mailbox.seed("DocMind", []);
+    const { factory, calls } = fakeTokenProviderFactory(async () => "gmail-access-token");
+    const email = buildService(async () => mailbox.client, {
+      getSharedGoogleApp: async () => ({ clientId: "shared-id", clientSecret: "shared-secret" }),
+      createTokenProvider: factory,
+    });
+
+    await email.runOnce();
+    await configureGmail({ "email.gmail.refreshToken": "refresh-token-2" });
+    await email.runOnce();
+
+    expect(calls).toHaveLength(2);
+  });
+
+  it("shares the same token provider between the loop and testConnection, so pressing Test repeatedly cannot hammer Google", async () => {
+    await configureGmail();
+    const mailbox = createFakeMailbox();
+    mailbox.seed("DocMind", []);
+    const { factory, calls } = fakeTokenProviderFactory(async () => "gmail-access-token");
+    const email = buildService(async () => mailbox.client, {
+      getSharedGoogleApp: async () => ({ clientId: "shared-id", clientSecret: "shared-secret" }),
+      createTokenProvider: factory,
+    });
+
+    await email.runOnce();
+    await email.testConnection({ userId });
+    await email.testConnection({ userId });
+
+    expect(calls).toHaveLength(1);
+  });
+
+  it("classifies a revoked grant as reauth_required and makes it visible on the status", async () => {
+    await configureGmail();
+    const { factory } = fakeTokenProviderFactory(async () => {
+      throw createError({ code: "google.reauth_required", message: "Google access has expired or been revoked.", status: 401 });
+    });
+    const email = buildService(async () => createFakeMailbox().client, {
+      getSharedGoogleApp: async () => ({ clientId: "shared-id", clientSecret: "shared-secret" }),
+      createTokenProvider: factory,
+      buildRedirectUri: gmailRedirectUri,
+    });
+
+    await expect(email.runOnce()).rejects.toThrow();
+
+    expect(await settingsService.get(userId, "email.imap.lastErrorCode")).toBe("reauth_required");
+    const status = await email.getStatus({ userId, origin: "https://example.com" });
+    expect(status.needsReconnect).toBe(true);
+  });
+
+  it("testConnection clears needsReconnect on success and sets it on failure, immediately, without waiting on the loop", async () => {
+    await configureGmail();
+    let shouldFail = true;
+    const { factory } = fakeTokenProviderFactory(async () => {
+      if (shouldFail) throw createError({ code: "google.reauth_required", message: "revoked", status: 401 });
+      return "gmail-access-token";
+    });
+    const mailbox = createFakeMailbox();
+    mailbox.seed("DocMind", []);
+    const email = buildService(async () => mailbox.client, {
+      getSharedGoogleApp: async () => ({ clientId: "shared-id", clientSecret: "shared-secret" }),
+      createTokenProvider: factory,
+      buildRedirectUri: gmailRedirectUri,
+    });
+
+    const failed = await email.testConnection({ userId });
+    expect(failed.ok).toBe(false);
+    expect((await email.getStatus({ userId, origin: "https://example.com" })).needsReconnect).toBe(true);
+
+    shouldFail = false;
+    const succeeded = await email.testConnection({ userId });
+    expect(succeeded.ok).toBe(true);
+    expect((await email.getStatus({ userId, origin: "https://example.com" })).needsReconnect).toBe(false);
+  });
+
+  it("never tells a gmail user to make an app password when the IMAP sign-in itself is refused", async () => {
+    await configureGmail();
+    const { factory } = fakeTokenProviderFactory(async () => "gmail-access-token");
+    const email = buildService(
+      async () => {
+        throw createError({ code: "email.imap_error", message: "IMAP connect to imap.gmail.com: authentication failed", status: 502 });
+      },
+      { getSharedGoogleApp: async () => ({ clientId: "shared-id", clientSecret: "shared-secret" }), createTokenProvider: factory },
+    );
+
+    const result = await email.testConnection({ userId });
+
+    expect(result.ok).toBe(false);
+    expect(result.message.toLowerCase()).not.toContain("app password");
+    expect(result.message).toMatch(/workspace/i);
+  });
+});
+
+describe("email status", () => {
+  it("reports unconfigured with no google app and the redirect uri to register", async () => {
+    const email = buildService(unusedClientFactory(), { buildRedirectUri: gmailRedirectUri });
+
+    const status = await email.getStatus({ userId, origin: "https://example.com" });
+
+    expect(status).toEqual({
+      mode: "unconfigured",
+      connectedAs: undefined,
+      googleAppAvailable: false,
+      redirectUri: "https://example.com/api/storage/drivers/googleDrive/callback",
+      needsReconnect: false,
+      lastError: undefined,
+    });
+  });
+
+  it("reports gmail mode, connected as the gmail address, with a google app available", async () => {
+    await configureGmail();
+    const email = buildService(unusedClientFactory(), {
+      buildRedirectUri: gmailRedirectUri,
+      getSharedGoogleApp: async () => ({ clientId: "shared-id", clientSecret: "shared-secret" }),
+    });
+
+    const status = await email.getStatus({ userId, origin: "https://example.com" });
+
+    expect(status.mode).toBe("gmail");
+    expect(status.connectedAs).toBe("me@gmail.com");
+    expect(status.googleAppAvailable).toBe(true);
+  });
+
+  it("reports password mode, connected as the imap user", async () => {
+    await configureImap();
+    const email = buildService(unusedClientFactory(), { buildRedirectUri: gmailRedirectUri });
+
+    const status = await email.getStatus({ userId, origin: "https://example.com" });
+
+    expect(status.mode).toBe("password");
+    expect(status.connectedAs).toBe("me@example.com");
+  });
+
+  it("never includes a secret, a password or a token anywhere in the response", async () => {
+    await configureGmail({ "email.gmail.clientId": "override-id", "email.gmail.clientSecret": "leaked-client-secret" });
+    await settingsService.set(userId, { "email.imap.password": "leaked-app-password" });
+    const email = buildService(unusedClientFactory(), { buildRedirectUri: gmailRedirectUri });
+
+    const status = await email.getStatus({ userId, origin: "https://example.com" });
+
+    const serialized = JSON.stringify(status);
+    expect(serialized).not.toContain("leaked-client-secret");
+    expect(serialized).not.toContain("leaked-app-password");
+    expect(serialized).not.toContain("refresh-token-1");
   });
 });

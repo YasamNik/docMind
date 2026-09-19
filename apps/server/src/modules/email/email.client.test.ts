@@ -38,6 +38,56 @@ describe("createImapClient", () => {
     expect(connection.connect).toHaveBeenCalledTimes(1);
   });
 
+  it("connects with an access token instead of a password when one is given", async () => {
+    const connection = createFakeConnection();
+    const connectionFactory: ImapConnectionFactory = vi.fn().mockReturnValue(connection);
+
+    await createImapClient({ host: HOST, port: 993, user: "me@gmail.com", accessToken: "gmail-access-token", connectionFactory });
+
+    const call = (connectionFactory as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(call.auth).toEqual({ user: "me@gmail.com", accessToken: "gmail-access-token" });
+    expect(call.auth.pass).toBeUndefined();
+    expect("pass" in call.auth).toBe(false);
+  });
+
+  it("refuses to connect with both a password and an access token", async () => {
+    const connectionFactory: ImapConnectionFactory = vi.fn().mockReturnValue(createFakeConnection());
+
+    await expectAppError(
+      () => createImapClient({ host: HOST, port: 993, user: "u", password: "p", accessToken: "t", connectionFactory }),
+      "email.imap_invalid_auth",
+    );
+    expect(connectionFactory).not.toHaveBeenCalled();
+  });
+
+  it("refuses to connect with neither a password nor an access token", async () => {
+    const connectionFactory: ImapConnectionFactory = vi.fn().mockReturnValue(createFakeConnection());
+
+    await expectAppError(() => createImapClient({ host: HOST, port: 993, user: "u", connectionFactory }), "email.imap_invalid_auth");
+    expect(connectionFactory).not.toHaveBeenCalled();
+  });
+
+  it("keeps the access token out of a connection failure's error, exactly as it does the password", async () => {
+    const accessToken = "gmail-access-token-do-not-leak";
+    const connection = createFakeConnection({
+      connect: vi.fn().mockRejectedValue(
+        Object.assign(new Error(`Authentication failed for user "me@gmail.com" with token "${accessToken}"`), {
+          authenticationFailed: true,
+        }),
+      ),
+    });
+
+    const attempt = createImapClient({ host: HOST, port: 993, user: "me@gmail.com", accessToken, connectionFactory: () => connection });
+
+    await expectAppError(() => attempt, "email.imap_error");
+    await attempt.catch((error: Error) => {
+      expect(error.message).toContain(HOST);
+      expect(error.message).toMatch(/authentication failed/i);
+      expect(error.message).not.toContain(accessToken);
+      expect(error.stack ?? "").not.toContain(accessToken);
+    });
+  });
+
   it("keeps the password out of a connection failure's error, but keeps the host and the reason", async () => {
     const password = "correct-horse-battery-staple";
     const connection = createFakeConnection({

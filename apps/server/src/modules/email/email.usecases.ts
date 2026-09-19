@@ -1,13 +1,19 @@
 import { Readable } from "node:stream";
 import { simpleParser } from "mailparser";
 import { createError, isAppError } from "../../shared/errors/errors.js";
-import { buildGoogleAuthorizeUrl, exchangeGoogleAuthCode, verifyGoogleIdToken } from "../../shared/google-oauth.js";
+import {
+  buildGoogleAuthorizeUrl,
+  createGoogleAccessTokenProvider,
+  exchangeGoogleAuthCode,
+  verifyGoogleIdToken,
+  type GoogleAccessTokenProvider,
+} from "../../shared/google-oauth.js";
 import { createLogger, type Logger } from "../../shared/logger/logger.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
 import { signState, verifyState } from "../storage/storage.models.js";
 import { createImapClient, type ImapClient } from "./email.client.js";
-import { documentsFromMail } from "./email.models.js";
+import { classifyEmailFailure, documentsFromMail, resolveEmailMode, type EmailMode } from "./email.models.js";
 
 // Own loop in the shape telegram.usecases.ts established: re-reads its settings each
 // cycle rather than reacting to a settings write, connects fresh every time rather
@@ -25,25 +31,31 @@ const BYTES_PER_MB = 1024 * 1024;
 // processing-sized slice of it, so it asks listFolder for everything rather than the
 // batchSize the loop itself uses.
 const TEST_FOLDER_LIMIT = Number.MAX_SAFE_INTEGER;
-// What email.imap.lastError gets when a cycle fails for a reason imapFailureReason
-// cannot name, so that setting never ends up holding an arbitrary error's own text.
-const GENERIC_CYCLE_FAILURE_REASON = "the mailbox could not be checked";
 
 // Gmail over OAuth. mail.google.com is the only IMAP scope Google offers; openid and
 // the email scope exist only so the exchange returns an id token this module can read
 // an address out of, which is what lets Connect Gmail ask for nothing but a click.
 const GMAIL_OAUTH_PURPOSE = "email:gmail";
 const GMAIL_SCOPES = ["https://mail.google.com/", "openid", "https://www.googleapis.com/auth/userinfo.email"];
+// Facts, not settings: imap.gmail.com and 993 never change, and a field that can hold
+// only one correct value is a field that can be typed wrong.
+const GMAIL_IMAP_HOST = "imap.gmail.com";
+const GMAIL_IMAP_PORT = 993;
 
-export type EmailClientFactory = (config: { host: string; port: number; user: string; password: string }) => Promise<ImapClient>;
+export type EmailClientFactory = (config: { host: string; port: number; user: string; password?: string; accessToken?: string }) => Promise<ImapClient>;
 export type EmailTestResult = { ok: boolean; message: string };
 export type GoogleAppCredentials = { clientId: string; clientSecret: string };
+export type GoogleTokenProviderFactory = (args: { clientId: string; clientSecret: string; refreshToken: string }) => GoogleAccessTokenProvider;
+export type EmailStatus = {
+  mode: EmailMode;
+  connectedAs?: string;
+  googleAppAvailable: boolean;
+  redirectUri: string;
+  needsReconnect: boolean;
+  lastError?: string;
+};
 
-type ConnectionConfig = {
-  host: string;
-  port: number;
-  user: string;
-  password: string;
+type MailboxSettings = {
   folder: string;
   doneFolder: string;
   failedFolder: string;
@@ -122,6 +134,12 @@ export function createEmailService({
   // undefined when nothing is saved, the same outcome resolveGoogleApp gives when no
   // override is set either.
   getSharedGoogleApp,
+  // Mints an access token from a Google refresh token. Defaults to the real
+  // implementation; a test injects a fake here the same way it injects clientFactory,
+  // so no test ever reaches Google. This module memoizes one provider per client id
+  // and refresh token identity, below, so a test can also assert that memoization
+  // rather than only the provider's own internal cache.
+  createTokenProvider = createGoogleAccessTokenProvider,
 }: {
   settingsService: SettingsService;
   documentsService: DocumentsService;
@@ -141,6 +159,7 @@ export function createEmailService({
   shutdownTimeoutMs?: number;
   buildRedirectUri?: (args: { origin: string }) => string;
   getSharedGoogleApp?: (userId: string) => Promise<GoogleAppCredentials | undefined>;
+  createTokenProvider?: GoogleTokenProviderFactory;
 }) {
   let running = false;
   let loop: Promise<void> | null = null;
@@ -150,17 +169,87 @@ export function createEmailService({
   // Failed, so it never grows without bound.
   const messageAttempts = new Map<number, number>();
 
-  async function resolveConnectionConfig(userId: string): Promise<ConnectionConfig | undefined> {
-    const host = await settingsService.get<string>(userId, "email.imap.host");
-    const password = await settingsService.get<string>(userId, "email.imap.password");
-    if (!host || !password) return undefined;
-    const port = (await settingsService.get<number>(userId, "email.imap.port")) ?? 993;
-    const user = (await settingsService.get<string>(userId, "email.imap.user")) ?? "";
+  // The access token lasts about an hour and the loop connects every minute, so
+  // minting one per cycle would be sixty pointless round trips an hour. This holds
+  // one provider, which carries its own cached token, per client id and refresh
+  // token identity: a cycle whose Gmail settings have not changed reuses the same
+  // provider, and both the loop and testConnection call this same function, so
+  // pressing Test repeatedly cannot hammer Google either.
+  let gmailTokenProviderCache: { clientId: string; refreshToken: string; provider: GoogleAccessTokenProvider } | undefined;
+
+  function gmailTokenProviderFor({ clientId, clientSecret, refreshToken }: { clientId: string; clientSecret: string; refreshToken: string }): GoogleAccessTokenProvider {
+    if (gmailTokenProviderCache && gmailTokenProviderCache.clientId === clientId && gmailTokenProviderCache.refreshToken === refreshToken) {
+      return gmailTokenProviderCache.provider;
+    }
+    const provider = createTokenProvider({ clientId, clientSecret, refreshToken });
+    gmailTokenProviderCache = { clientId, refreshToken, provider };
+    return provider;
+  }
+
+  async function resolveMode(userId: string): Promise<EmailMode> {
+    const gmailRefreshToken = await settingsService.get<string>(userId, "email.gmail.refreshToken");
+    const gmailAccountEmail = await settingsService.get<string>(userId, "email.gmail.accountEmail");
+    const imapHost = await settingsService.get<string>(userId, "email.imap.host");
+    const imapPassword = await settingsService.get<string>(userId, "email.imap.password");
+    return resolveEmailMode({ gmailRefreshToken, gmailAccountEmail, imapHost, imapPassword });
+  }
+
+  async function resolveMailboxSettings(userId: string): Promise<MailboxSettings> {
     const folder = (await settingsService.get<string>(userId, "email.imap.folder")) ?? "DocMind";
     const doneFolder = (await settingsService.get<string>(userId, "email.imap.doneFolder")) ?? "DocMind/Done";
     const failedFolder = (await settingsService.get<string>(userId, "email.imap.failedFolder")) ?? "DocMind/Failed";
     const maxMessageSizeMb = (await settingsService.get<number>(userId, "email.imap.maxMessageSizeMb")) ?? 25;
-    return { host, port, user, password, folder, doneFolder, failedFolder, maxMessageSizeBytes: maxMessageSizeMb * BYTES_PER_MB };
+    return { folder, doneFolder, failedFolder, maxMessageSizeBytes: maxMessageSizeMb * BYTES_PER_MB };
+  }
+
+  // The credentials for password mode, unchanged from what resolveConnectionConfig
+  // used to read: host and password are required, port and user fall back to their
+  // usual defaults.
+  async function resolvePasswordCredentials(userId: string): Promise<{ host: string; port: number; user: string; password: string }> {
+    const host = await settingsService.get<string>(userId, "email.imap.host");
+    const password = await settingsService.get<string>(userId, "email.imap.password");
+    if (!host || !password) {
+      throw createError({ code: "email.imap_not_configured", message: "The mailbox host and app password are not both set.", status: 400 });
+    }
+    const port = (await settingsService.get<number>(userId, "email.imap.port")) ?? 993;
+    const user = (await settingsService.get<string>(userId, "email.imap.user")) ?? "";
+    return { host, port, user, password };
+  }
+
+  // The credentials for Gmail mode. Mints the access token here, before the caller
+  // opens the IMAP connection, so a dead grant fails first and fast rather than after
+  // a socket is already open.
+  async function resolveGmailCredentials(userId: string): Promise<{ host: string; port: number; user: string; accessToken: string }> {
+    const accountEmail = await settingsService.get<string>(userId, "email.gmail.accountEmail");
+    const refreshToken = await settingsService.get<string>(userId, "email.gmail.refreshToken");
+    if (!accountEmail || !refreshToken) {
+      throw createError({ code: "email.gmail_not_configured", message: "Gmail is not fully connected. Connect it again.", status: 400 });
+    }
+    const app = await resolveGoogleApp(userId);
+    if (!app) {
+      throw createError({
+        code: "email.gmail_not_configured",
+        message: "Connect Google Drive first so Gmail can reuse its app, or set a Gmail-specific client id and secret, before connecting.",
+        status: 400,
+      });
+    }
+    const provider = gmailTokenProviderFor({ clientId: app.clientId, clientSecret: app.clientSecret, refreshToken });
+    const accessToken = await provider.getAccessToken();
+    return { host: GMAIL_IMAP_HOST, port: GMAIL_IMAP_PORT, user: accountEmail, accessToken };
+  }
+
+  // Persists the outcome of a cycle or a Test attempt through the one classifier both
+  // paths share, so the reconnect banner and the button's own last word on the
+  // connection can never disagree.
+  async function clearEmailFailure(userId: string): Promise<void> {
+    await settingsService.setInternal(userId, "email.imap.lastError", "");
+    await settingsService.removeInternal(userId, "email.imap.lastErrorCode");
+  }
+
+  async function recordEmailFailure(userId: string, error: unknown): Promise<void> {
+    const classified = classifyEmailFailure(error);
+    await settingsService.setInternal(userId, "email.imap.lastError", classified.message);
+    await settingsService.setInternal(userId, "email.imap.lastErrorCode", classified.code);
   }
 
   // Everything mailparser needs to know about one message, then the upload path takes
@@ -291,31 +380,42 @@ export function createEmailService({
     const pollSeconds = await settingsService.get<number>(userId, "email.imap.pollSeconds");
     if (typeof pollSeconds === "number" && pollSeconds > 0) idleWaitMs = pollSeconds * 1000;
 
-    const connection = await resolveConnectionConfig(userId);
-    if (!connection) return;
-
-    const { folder, doneFolder, failedFolder, maxMessageSizeBytes, ...credentials } = connection;
     // Declared outside the try so the finally block below can tell "the client was
     // never created" apart from "the client was created and something after it
     // failed", and only close a connection that actually exists.
     let client: ImapClient | undefined;
     try {
-      client = await clientFactory(credentials);
-      await client.ensureFolder({ folder: doneFolder });
-      await client.ensureFolder({ folder: failedFolder });
+      const mode = await resolveMode(userId);
+      if (mode === "unconfigured") return;
 
-      const messages = await client.listFolder({ folder, limit: batchSize });
+      const mailbox = await resolveMailboxSettings(userId);
+      // Minted before the client factory ever opens a socket, so a dead Gmail grant
+      // fails here, fast, rather than after a connection is already open.
+      const credentials = mode === "gmail" ? await resolveGmailCredentials(userId) : await resolvePasswordCredentials(userId);
+
+      client = await clientFactory(credentials);
+      await client.ensureFolder({ folder: mailbox.doneFolder });
+      await client.ensureFolder({ folder: mailbox.failedFolder });
+
+      const messages = await client.listFolder({ folder: mailbox.folder, limit: batchSize });
       for (const { uid } of messages) {
-        await handleMessage({ userId, client, folder, doneFolder, failedFolder, maxMessageSizeBytes, uid });
+        await handleMessage({
+          userId,
+          client,
+          folder: mailbox.folder,
+          doneFolder: mailbox.doneFolder,
+          failedFolder: mailbox.failedFolder,
+          maxMessageSizeBytes: mailbox.maxMessageSizeBytes,
+          uid,
+        });
       }
-      await settingsService.setInternal(userId, "email.imap.lastError", "");
+      await clearEmailFailure(userId);
     } catch (error) {
-      // email.imap.lastError is a plain, non-secret settings row meant for a person
-      // to read, not a log. imapFailureReason picks a short, curated reason back out
-      // of the client's own sanitized error; anything else, including a clientFactory
-      // that is not email.client.ts's own createImapClient, only ever contributes a
-      // short fixed string here, never its own message text.
-      await settingsService.setInternal(userId, "email.imap.lastError", imapFailureReason(error) ?? GENERIC_CYCLE_FAILURE_REASON);
+      // email.imap.lastError and email.imap.lastErrorCode are plain, non-secret
+      // settings rows meant for a person and the reconnect banner to read, not a log.
+      // classifyEmailFailure reads only structured fields off an AppError, imap or
+      // Google, never an underlying message that could carry a password or a token.
+      await recordEmailFailure(userId, error);
       throw error;
     } finally {
       if (client) await client.close();
@@ -354,12 +454,53 @@ export function createEmailService({
     loop = runLoop();
   }
 
+  // Gmail's own Test path. Mints a token through the same memoized provider the loop
+  // uses, connects, and reports what it finds. Unlike the password path's wording,
+  // an authentication failure here must never suggest an app password: that is a
+  // password-mode fix and is wrong advice for an account that connected through
+  // Google.
+  async function testGmailConnection(userId: string): Promise<EmailTestResult> {
+    const folder = (await settingsService.get<string>(userId, "email.imap.folder")) ?? "DocMind";
+    let client: ImapClient | undefined;
+    try {
+      const credentials = await resolveGmailCredentials(userId);
+      client = await clientFactory(credentials);
+      const messages = await client.listFolder({ folder, limit: TEST_FOLDER_LIMIT });
+      const count = messages.length;
+      await clearEmailFailure(userId);
+      return { ok: true, message: `Connected to Gmail as ${credentials.user}. ${count} message${count === 1 ? "" : "s"} waiting.` };
+    } catch (error) {
+      await recordEmailFailure(userId, error);
+      if (isAppError(error) && error.code === "google.reauth_required") {
+        return { ok: false, message: "Gmail access has expired or been revoked. Press Reconnect." };
+      }
+      if (isAppError(error) && error.code === "google.auth_failed") {
+        return { ok: false, message: "Could not sign in to Gmail. Try again in a moment." };
+      }
+      if (imapFailureReason(error) === "authentication failed") {
+        return {
+          ok: false,
+          message: "Google accepted the account but Gmail refused the connection. If this is a Workspace account, check that your administrator allows IMAP.",
+        };
+      }
+      return { ok: false, message: testFailureMessage({ error, host: GMAIL_IMAP_HOST, port: GMAIL_IMAP_PORT, folder }) };
+    } finally {
+      if (client) await client.close();
+    }
+  }
+
   // What the settings page's Test button calls. Unlike runOnce, this speaks for a
   // signed-in request rather than the loop's own resolved user, so the caller supplies
   // userId directly instead of going through getUserId. It never moves a message and
   // never uploads anything: it only proves the credentials sign in and the watched
-  // folder opens, and says how many messages are sitting there.
+  // folder opens, and says how many messages are sitting there. Writes lastError and
+  // lastErrorCode through the same classifier runOnce uses, so the reconnect banner
+  // reflects whatever this button just said immediately, not on the loop's own
+  // schedule.
   async function testConnection({ userId }: { userId: string }): Promise<EmailTestResult> {
+    const mode = await resolveMode(userId);
+    if (mode === "gmail") return testGmailConnection(userId);
+
     const host = await settingsService.get<string>(userId, "email.imap.host");
     const user = await settingsService.get<string>(userId, "email.imap.user");
     const password = await settingsService.get<string>(userId, "email.imap.password");
@@ -379,8 +520,10 @@ export function createEmailService({
       client = await clientFactory({ host, port, user, password });
       const messages = await client.listFolder({ folder, limit: TEST_FOLDER_LIMIT });
       const count = messages.length;
+      await clearEmailFailure(userId);
       return { ok: true, message: `Connected. ${count} message${count === 1 ? "" : "s"} waiting.` };
     } catch (error) {
+      await recordEmailFailure(userId, error);
       return { ok: false, message: testFailureMessage({ error, host, port, folder }) };
     } finally {
       if (client) await client.close();
@@ -496,7 +639,39 @@ export function createEmailService({
     return { redirectTo: "/settings?tab=email&connected=gmail" };
   }
 
-  return { runOnce, start, stop, testConnection, buildGmailAuthorizeUrl, completeGmailConnection };
+  // What the Email tab reads to render itself: the resolved mode, who is connected,
+  // whether a Google app exists to reuse, the address to register if not, and whether
+  // the last cycle or Test needs a reconnect. Never a secret, a password or a token:
+  // googleAppAvailable is a plain boolean, never the client id or secret it is
+  // computed from.
+  async function getStatus({ userId, origin }: { userId: string; origin: string }): Promise<EmailStatus> {
+    const mode = await resolveMode(userId);
+    const lastErrorCode = await settingsService.get<string>(userId, "email.imap.lastErrorCode");
+    const lastError = await settingsService.get<string>(userId, "email.imap.lastError");
+
+    let connectedAs: string | undefined;
+    if (mode === "gmail") {
+      connectedAs = await settingsService.get<string>(userId, "email.gmail.accountEmail");
+    } else if (mode === "password") {
+      connectedAs = await settingsService.get<string>(userId, "email.imap.user");
+    }
+
+    // A half set client id and secret override throws from resolveGoogleApp; the
+    // status page only needs to know a usable app is not currently available, not
+    // reject the whole request over it.
+    const googleApp = await resolveGoogleApp(userId).catch(() => undefined);
+
+    return {
+      mode,
+      connectedAs: connectedAs || undefined,
+      googleAppAvailable: Boolean(googleApp),
+      redirectUri: redirectUriFor(origin),
+      needsReconnect: lastErrorCode === "reauth_required",
+      lastError: lastError || undefined,
+    };
+  }
+
+  return { runOnce, start, stop, testConnection, buildGmailAuthorizeUrl, completeGmailConnection, getStatus };
 }
 
 export type EmailService = ReturnType<typeof createEmailService>;

@@ -29,6 +29,15 @@ export function registerEmailRoutes({
     return c.json(result);
   });
 
+  // What the Email tab reads to render itself: the resolved mode, who is connected,
+  // whether a Google app exists to reuse, the redirect uri to register, and whether a
+  // reconnect is needed. Never a secret, a password or a token.
+  app.get("/api/email/status", async (c) => {
+    const userId = getUserId(c);
+    const status = await emailService.getStatus({ userId, origin: requestOrigin(c) });
+    return c.json(status);
+  });
+
   // Sends the browser to Google's consent screen. Requires a session, since this is
   // where the app learns which user is connecting. The address Google returns to is
   // storage's shared one; this button is email's own.

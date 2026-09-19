@@ -3,7 +3,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { simpleParser } from "mailparser";
 import { describe, expect, it } from "vitest";
-import { documentsFromMail } from "./email.models.js";
+import { createError } from "../../shared/errors/errors.js";
+import { classifyEmailFailure, documentsFromMail, resolveEmailMode } from "./email.models.js";
 
 // These fixtures are real .eml files parsed with the real mailparser, not objects
 // this test assumes mailparser would return. That is the point of this module: the
@@ -115,5 +116,88 @@ describe("documentsFromMail", () => {
     expect(attachments).toHaveLength(2);
     expect(attachments.map((attachment) => attachment.name)).toEqual(["receipt.pdf", "receipt.pdf"]);
     expect(attachments[0]!.content.equals(attachments[1]!.content)).toBe(false);
+  });
+});
+
+describe("resolveEmailMode", () => {
+  it("resolves gmail when both the refresh token and the account email are set", () => {
+    expect(resolveEmailMode({ gmailRefreshToken: "rt", gmailAccountEmail: "me@gmail.com" })).toBe("gmail");
+  });
+
+  it("resolves gmail over a configured app password when both are present", () => {
+    expect(
+      resolveEmailMode({ gmailRefreshToken: "rt", gmailAccountEmail: "me@gmail.com", imapHost: "imap.example.com", imapPassword: "pw" }),
+    ).toBe("gmail");
+  });
+
+  it("does not resolve gmail with only the refresh token set", () => {
+    expect(resolveEmailMode({ gmailRefreshToken: "rt" })).toBe("unconfigured");
+  });
+
+  it("does not resolve gmail with only the account email set", () => {
+    expect(resolveEmailMode({ gmailAccountEmail: "me@gmail.com" })).toBe("unconfigured");
+  });
+
+  it("falls back to password mode when gmail is half configured and a password is set", () => {
+    expect(resolveEmailMode({ gmailRefreshToken: "rt", imapHost: "imap.example.com", imapPassword: "pw" })).toBe("password");
+  });
+
+  it("resolves password mode when host and password are set", () => {
+    expect(resolveEmailMode({ imapHost: "imap.example.com", imapPassword: "pw" })).toBe("password");
+  });
+
+  it("does not resolve password mode with only the host set", () => {
+    expect(resolveEmailMode({ imapHost: "imap.example.com" })).toBe("unconfigured");
+  });
+
+  it("does not resolve password mode with only the password set", () => {
+    expect(resolveEmailMode({ imapPassword: "pw" })).toBe("unconfigured");
+  });
+
+  it("resolves unconfigured when nothing is set", () => {
+    expect(resolveEmailMode({})).toBe("unconfigured");
+  });
+});
+
+describe("classifyEmailFailure", () => {
+  it("maps a revoked google grant to reauth_required", () => {
+    const error = createError({ code: "google.reauth_required", message: "Google access has expired or been revoked.", status: 401 });
+    expect(classifyEmailFailure(error)).toEqual({ code: "reauth_required", message: expect.any(String) });
+  });
+
+  it("maps a generic google auth failure to auth_failed", () => {
+    const error = createError({ code: "google.auth_failed", message: "Could not mint a Google access token.", status: 502 });
+    expect(classifyEmailFailure(error).code).toBe("auth_failed");
+  });
+
+  it("maps an imap authentication failure to auth_failed", () => {
+    const error = createError({ code: "email.imap_error", message: "IMAP connect to imap.example.com: authentication failed", status: 502 });
+    expect(classifyEmailFailure(error).code).toBe("auth_failed");
+  });
+
+  it("maps a missing watched folder to folder_missing", () => {
+    const error = createError({ code: "email.imap_error", message: "IMAP mailboxOpen to imap.example.com: the folder does not exist", status: 502 });
+    expect(classifyEmailFailure(error).code).toBe("folder_missing");
+  });
+
+  it("maps a host, refusal or timeout failure to network", () => {
+    const host = createError({ code: "email.imap_error", message: "IMAP connect to typo.example.com: could not resolve the host", status: 502 });
+    const refused = createError({ code: "email.imap_error", message: "IMAP connect to imap.example.com: the connection was refused", status: 502 });
+    const timeout = createError({ code: "email.imap_error", message: "IMAP connect to imap.example.com: timed out", status: 502 });
+    expect(classifyEmailFailure(host).code).toBe("network");
+    expect(classifyEmailFailure(refused).code).toBe("network");
+    expect(classifyEmailFailure(timeout).code).toBe("network");
+  });
+
+  it("maps anything else, including a plain Error, to unknown", () => {
+    expect(classifyEmailFailure(new Error("smtp said: LOGIN user hunter2 failed")).code).toBe("unknown");
+    expect(classifyEmailFailure("a string is not even an error").code).toBe("unknown");
+  });
+
+  it("never puts a raw error message in the classified message", () => {
+    const secret = "hunter2-the-real-password";
+    const error = new Error(`login failed for password ${secret}`);
+    const classified = classifyEmailFailure(error);
+    expect(classified.message).not.toContain(secret);
   });
 });

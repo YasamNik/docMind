@@ -218,3 +218,39 @@ describe("gmail connect route", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("email status route", () => {
+  it("reports the resolved mode and the redirect uri, with no secret anywhere in the body", async () => {
+    const { app, settingsService } = await makeApp(async () => fakeClient(), { buildRedirectUri: gmailRedirectUri });
+    await settingsService.set(userId, {
+      "email.gmail.clientId": "override-id",
+      "email.gmail.clientSecret": "leaked-client-secret",
+      "email.gmail.refreshToken": "leaked-refresh-token",
+      "email.gmail.accountEmail": "me@gmail.com",
+    });
+
+    const res = await app.request("/api/email/status");
+    const text = await res.text();
+    const body = JSON.parse(text) as Record<string, unknown>;
+
+    expect(res.status).toBe(200);
+    expect(body.mode).toBe("gmail");
+    expect(body.connectedAs).toBe("me@gmail.com");
+    expect(body.redirectUri).toBe("http://localhost/api/storage/drivers/googleDrive/callback");
+    expect(body.needsReconnect).toBe(false);
+    expect(text).not.toContain("leaked-client-secret");
+    expect(text).not.toContain("leaked-refresh-token");
+    expect(Object.keys(body)).not.toContain("clientSecret");
+    expect(Object.keys(body)).not.toContain("refreshToken");
+  });
+
+  it("reports unconfigured with no google app available when nothing is set", async () => {
+    const { app } = await makeApp(async () => fakeClient(), { buildRedirectUri: gmailRedirectUri });
+
+    const res = await app.request("/api/email/status");
+    const body = (await res.json()) as Record<string, unknown>;
+
+    expect(body.mode).toBe("unconfigured");
+    expect(body.googleAppAvailable).toBe(false);
+  });
+});

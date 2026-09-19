@@ -31,13 +31,13 @@ type ImapConnectOptions = {
   host: string;
   port: number;
   secure: boolean;
-  auth: { user: string; pass: string };
+  auth: { user: string; pass: string } | { user: string; accessToken: string };
   connectionTimeout: number;
   greetingTimeout: number;
   socketTimeout: number;
   // Disabled outright rather than pointed at DocMind's own logger: imapflow's default
   // logger otherwise writes protocol traffic on its own, and the one command that
-  // opens this connection carries the password.
+  // opens this connection carries the password or the access token.
   logger: false;
 };
 
@@ -105,6 +105,7 @@ export async function createImapClient({
   port,
   user,
   password,
+  accessToken,
   connectTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
   commandTimeoutMs = DEFAULT_COMMAND_TIMEOUT_MS,
   connectionFactory = defaultConnectionFactory,
@@ -112,18 +113,33 @@ export async function createImapClient({
   host: string;
   port: number;
   user: string;
-  password: string;
+  // Exactly one of these two. A password signs in the way every non-Google mailbox
+  // still expects; an access token is Gmail's XOAUTH2, minted by the caller from a
+  // Google refresh token and handed in as a plain string, so this file stays a dumb
+  // transport with no knowledge of Google or of how the token was obtained.
+  password?: string;
+  accessToken?: string;
   connectTimeoutMs?: number;
   commandTimeoutMs?: number;
   connectionFactory?: ImapConnectionFactory;
 }) {
+  if (Boolean(password) === Boolean(accessToken)) {
+    throw createError({
+      code: "email.imap_invalid_auth",
+      message: "Provide exactly one of a password or an access token to sign in.",
+      status: 500,
+    });
+  }
+
   let connection: ImapConnection;
   try {
     connection = connectionFactory({
       host,
       port,
       secure: true,
-      auth: { user, pass: password },
+      // password is guaranteed set here: the check above already rejected the only
+      // other case this branch can be in, neither credential given.
+      auth: accessToken ? { user, accessToken } : { user, pass: password as string },
       connectionTimeout: connectTimeoutMs,
       greetingTimeout: connectTimeoutMs,
       socketTimeout: commandTimeoutMs,
