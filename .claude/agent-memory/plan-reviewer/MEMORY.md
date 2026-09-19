@@ -10,4 +10,5 @@
 - [D4 Inbox triage spec review](review-spec-d4-inbox-triage.md) -- implementation already in tree before spec review, unflagged departure from Phase 2 decision 12, dead code and empty-state contradictions found
 - [Smart fields spec review](review-spec-smart-fields.md) -- backfill "rerun exists" claim was false, currency-merge ruling, module boundary gap
 - [LLM reply partial-tolerance lesson](lesson-llm-reply-partial-tolerance.md) -- generateStructured fails the whole reply on any bad array element; check the reply schema is loose where the spec claims per-row tolerance, mirror rules.schemas.ts
+- [Storage drivers spec review](review-spec-storage-drivers.md) -- soft-delete vs purge confusion, storage has no db, setInternal/beforeSet bypass, contract-suite chunk gap
 - [Document types spec review](review-spec-document-types.md) -- "seed at server start" has no valid trigger for a fresh single-user install; settingsRepository has no tx support
