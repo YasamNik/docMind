@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MessageCircle, MessagesSquare, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -228,39 +228,52 @@ function MessageThread({
   );
 }
 
+// Uncontrolled on purpose. A report on 2026-09-19 (13:30Z) found a phone chat message
+// stored reversed, character by character, which only happens if every keystroke lands
+// at position 0 instead of after the previous one. A controlled input asks React to
+// write the DOM value back on every render and then restore whatever selection range it
+// captured before the commit; if that captured range is stale, the caret gets pinned to
+// the start and each new character is prepended. An uncontrolled field removes the
+// mechanism outright: nothing writes the value back, so there is no selection to
+// restore. Do not add `value={...}` back here without re-reading that report.
 function Composer({
-  input,
-  onInputChange,
   sending,
   onSubmit,
   formClassName,
   inputClassName = "flex-1",
   sendButtonClassName = "",
 }: {
-  input: string;
-  onInputChange: (value: string) => void;
   sending: boolean;
-  onSubmit: () => void;
+  onSubmit: (content: string, clearInput: () => void) => void;
   formClassName: string;
   inputClassName?: string;
   sendButtonClassName?: string;
 }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [hasText, setHasText] = useState(false);
+
+  function clearInput() {
+    if (inputRef.current) inputRef.current.value = "";
+    setHasText(false);
+  }
+
   return (
     <form
       className={formClassName}
       onSubmit={(e) => {
         e.preventDefault();
-        onSubmit();
+        onSubmit(inputRef.current?.value ?? "", clearInput);
       }}
     >
       <Input
+        ref={inputRef}
         placeholder="Ask about your documents..."
-        value={input}
-        onChange={(e) => onInputChange(e.target.value)}
+        defaultValue=""
+        onChange={(e) => setHasText(e.target.value.trim().length > 0)}
         disabled={sending}
         className={inputClassName}
       />
-      <Button type="submit" disabled={sending || input.trim().length === 0} className={sendButtonClassName}>
+      <Button type="submit" disabled={sending || !hasText} className={sendButtonClassName}>
         Send
       </Button>
     </form>
@@ -304,7 +317,6 @@ export function ChatPage() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<UiMessage[]>([]);
-  const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [deleting, setDeleting] = useState<ChatSession | null>(null);
 
@@ -324,12 +336,23 @@ export function ChatPage() {
     enabled: selectedId !== null,
   });
 
+  // Tracks whether a message has already been sent in the currently selected session,
+  // so a `getSession` fetch that resolves after that send (a slow historical load
+  // racing a fast reply) does not wipe the optimistic message back out. Reset whenever
+  // the selected session itself changes, so revisiting a session still syncs fresh data.
+  const selectedSessionForSyncRef = useRef<string | null>(null);
+  const sentInSelectedSessionRef = useRef(false);
+
   useEffect(() => {
+    if (selectedSessionForSyncRef.current !== selectedId) {
+      selectedSessionForSyncRef.current = selectedId;
+      sentInSelectedSessionRef.current = false;
+    }
     if (selectedId === null) {
       setMessages([]);
       return;
     }
-    if (sessionData && sessionData.session.id === selectedId) {
+    if (sessionData && sessionData.session.id === selectedId && !sentInSelectedSessionRef.current) {
       setMessages(sessionData.messages);
     }
   }, [selectedId, sessionData]);
@@ -354,11 +377,13 @@ export function ChatPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  async function sendMessage() {
-    const content = input.trim();
+  async function sendMessage(rawContent: string, clearInput: () => void) {
+    const content = rawContent.trim();
     if (!content || !selectedId || sending) return;
 
-    setInput("");
+    sentInSelectedSessionRef.current = true;
+
+    clearInput();
     setSending(true);
 
     const userMessage: UiMessage = {
@@ -508,10 +533,8 @@ export function ChatPage() {
               className={`flex-1 space-y-4 overflow-y-auto ${isMobile ? "p-4" : "p-6"}`}
             />
             <Composer
-              input={input}
-              onInputChange={setInput}
               sending={sending}
-              onSubmit={() => void sendMessage()}
+              onSubmit={(content, clearInput) => void sendMessage(content, clearInput)}
               formClassName={
                 isMobile
                   ? "flex items-center gap-2 border-t border-border p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"

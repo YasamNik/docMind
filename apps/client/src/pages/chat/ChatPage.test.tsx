@@ -255,6 +255,39 @@ describe("ChatPage", () => {
 
     expect((screen.getByPlaceholderText("Ask about your documents...") as HTMLInputElement).value).toBe("What licence");
   });
+
+  // Regression test for the reversed-text report on 2026-09-19: a phone chat message was
+  // stored as "ebAH i Od scOd ecnIl WhatW", which reversed reads "What licence docs do i
+  // have". That only happens if every keystroke lands at position 0 instead of after the
+  // one before it, which is what a stale caret pinned to the start of the field looks
+  // like. This test forces the caret to 0 after every keystroke, the observable symptom
+  // from the report, and checks the field still ends up holding the typed characters in
+  // order rather than reversed.
+  it("keeps typed characters in order even when the caret is forced back to the start between keystrokes", async () => {
+    listSessionsMock.mockResolvedValueOnce([
+      { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+    ]);
+    getSessionMock.mockResolvedValueOnce({
+      session: { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+      messages: [],
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByText("Lease question"));
+    const input = (await screen.findByPlaceholderText("Ask about your documents...")) as HTMLInputElement;
+    input.focus();
+
+    let typed = "";
+    for (const char of "What licence") {
+      typed += char;
+      fireEvent.change(input, { target: { value: typed } });
+      // Mirrors the report: right after the keystroke commits, the caret is back at the
+      // very start of the field instead of sitting after the character just typed.
+      input.setSelectionRange(0, 0);
+    }
+
+    expect((screen.getByPlaceholderText("Ask about your documents...") as HTMLInputElement).value).toBe("What licence");
+  });
 });
 
 describe("ChatPage on a phone", () => {
