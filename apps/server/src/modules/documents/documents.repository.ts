@@ -35,6 +35,7 @@ const listColumns = {
   categorySource: documentsTable.categorySource,
   documentDate: documentsTable.documentDate,
   triageStatus: documentsTable.triageStatus,
+  parentDocumentId: documentsTable.parentDocumentId,
   deletedAt: documentsTable.deletedAt,
   createdAt: documentsTable.createdAt,
   updatedAt: documentsTable.updatedAt,
@@ -209,6 +210,16 @@ export function createDocumentsRepository({ db }: { db: Database }) {
         .from(documentsTable)
         .where(and(eq(documentsTable.userId, userId), eq(documentsTable.contentHash, contentHash)));
       return row ?? null;
+    },
+
+    // The direct children of a document, for example the attachments a mail arrived
+    // with. Used to delete a subtree explicitly rather than relying only on the
+    // database's own cascade.
+    async findChildren({ userId, documentId }: { userId: string; documentId: string }): Promise<Document[]> {
+      return db
+        .select()
+        .from(documentsTable)
+        .where(and(eq(documentsTable.userId, userId), eq(documentsTable.parentDocumentId, documentId)));
     },
 
     // For the telegram watcher: which documents from a given source have finished the

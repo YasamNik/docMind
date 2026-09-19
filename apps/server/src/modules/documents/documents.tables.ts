@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 
 export const documentsTable = sqliteTable(
   "documents",
@@ -29,6 +29,9 @@ export const documentsTable = sqliteTable(
     categorySource: text("category_source"),
     documentDate: text("document_date"),
     triageStatus: text("triage_status").notNull().default("pending"),
+    // The mail an attachment arrived in. Cascade, because deleting the email should take
+    // the invoice that came with it rather than leaving an orphan with no context.
+    parentDocumentId: text("parent_document_id").references((): AnySQLiteColumn => documentsTable.id, { onDelete: "cascade" }),
     deletedAt: text("deleted_at"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),

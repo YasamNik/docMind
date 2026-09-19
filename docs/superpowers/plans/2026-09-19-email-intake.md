@@ -79,7 +79,7 @@ These are not theoretical. Each one was a real bug found in the feature this pla
 **Watch out:** the `source` column in migration 0014 needed adding to the repository's
 explicit `listColumns` projection or typecheck failed. This column will need the same.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
   it("links an attachment to the mail it arrived in, and deletes it with the mail", async () => {
@@ -99,11 +99,11 @@ explicit `listColumns` projection or typecheck failed. This column will need the
 The second half is the point of the cascade: deleting the mail takes its attachments with
 it, because that is what a person means by deleting the email.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `pnpm --filter @docmind/server exec vitest run documents.usecases`
 
-- [ ] **Step 3: Add the column**
+- [x] **Step 3: Add the column**
 
 ```ts
     // The mail an attachment arrived in. Cascade, because deleting the email should take
@@ -112,22 +112,60 @@ Run: `pnpm --filter @docmind/server exec vitest run documents.usecases`
 ```
 
 A self reference needs the `AnySQLiteColumn` annotation or TypeScript cannot infer the
-type. Check the generated SQL: SQLite cannot add a foreign key with `ALTER TABLE`, so
-drizzle-kit will rebuild the table. Read the generated migration carefully and confirm it
-preserves every column and its data before committing. If it does anything destructive,
-stop and raise it rather than committing.
+type.
 
-- [ ] **Step 4: Generate the migration, in this task**
+**What actually happened, for the next reader.** This plan assumed SQLite cannot add a
+foreign key with `ALTER TABLE` and that drizzle-kit would rebuild the table. It does not:
+the drizzle-kit version in use here emits a one line
+`ALTER TABLE documents ADD parent_document_id text REFERENCES documents(id);`, because
+SQLite does allow `ADD COLUMN ... REFERENCES` when the new column is nullable with no
+non-null default. Verified on a disposable copy of the live database: all 14 rows and
+every existing column survived, `PRAGMA foreign_key_check` reported no violations. On
+that axis the one line ALTER is actually safer than a rebuild would have been.
+
+The real problem was different: that ALTER path drops the `ON DELETE CASCADE` clause
+even though `documents.tables.ts` declares it, and the migration's own snapshot metadata
+still records `onDelete: cascade` correctly. Confirmed the break through the app's real
+migration pipeline (`createDatabase` + `runMigrations`, the same path `index.ts` and
+`createTestDatabase` use): inserting a parent and a child and then deleting the parent
+raised `SQLITE_CONSTRAINT: FOREIGN KEY constraint failed` instead of cascading, and both
+rows survived. A first pass at this task stopped here and reported it rather than
+guessing at a fix, per this plan's own instruction.
+
+The resolution, on explicit instruction after that report: keep the one line ALTER
+(safest shape for a live database with real rows in it; a forced rebuild would trade a
+verified-safe migration for a riskier one just to satisfy the generator) and hand-edit
+the generated SQL to add `ON DELETE CASCADE` back, with a comment in the migration file
+explaining why, so nobody "fixes" it back to what drizzle-kit produced. Because the
+snapshot already records the cascade, a later `db:generate` sees no drift and will not
+touch the file. Raw SQL is explicitly allowed in migrations per `CLAUDE.md`.
+
+Also added defense in depth in the application: `documents.purge()` now collects a
+document's full subtree through `parentDocumentId` and deletes children before the
+parent explicitly, rather than relying only on the database's `ON DELETE CASCADE`. The
+cascade depends on `PRAGMA foreign_keys` being on for the connection that runs the
+delete, a property of how the database was opened rather than of the data, so the
+application no longer depends on that alone. Covered by two tests: one exercising
+`documents.purge()` (the application path), one deleting the parent row directly through
+the repository, bypassing `purge()`, to prove the schema's own cascade also holds.
+
+- [x] **Step 4: Generate the migration, in this task**
 
 ```bash
 cd apps/server && pnpm db:generate --name add_parent_document_id
 ```
 
-- [ ] **Step 5: Thread it through upload and the list projection, then run**
+Then hand-edit `apps/server/drizzle/0015_add_parent_document_id.sql` to add
+`ON DELETE CASCADE` and the comment explaining why, as above. Verified again afterward
+on a disposable copy of the live database: 14 rows before and after, `PRAGMA
+foreign_key_check` clean, and a real cascade delete against one of the 14 actual rows
+removed a synthetic child correctly.
+
+- [x] **Step 5: Thread it through upload and the list projection, then run**
 
 Run: `pnpm --filter @docmind/server exec vitest run documents` and `pnpm typecheck`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/server/src/modules/documents apps/server/drizzle

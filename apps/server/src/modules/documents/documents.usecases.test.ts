@@ -133,6 +133,34 @@ describe("documents service", () => {
     expect((await documents.get({ userId, documentId: browser.id })).source).toBe("upload");
     expect((await documents.get({ userId, documentId: bot.id })).source).toBe("telegram");
   });
+
+  it("links an attachment to the mail it arrived in, and deletes it with the mail", async () => {
+    const { document: mail } = await documents.upload({ userId, name: "mail.txt", mimeType: "text/plain", body: Readable.from(["body"]), source: "email" });
+    const { document: attachment } = await documents.upload({
+      userId, name: "invoice.pdf", mimeType: "application/pdf", body: Readable.from(["pdf"]),
+      source: "email", parentDocumentId: mail.id,
+    });
+
+    expect((await documents.get({ userId, documentId: attachment.id })).parentDocumentId).toBe(mail.id);
+
+    await documents.purge({ userId, documentId: mail.id });
+    await expect(documents.get({ userId, documentId: attachment.id })).rejects.toMatchObject({ code: "documents.not_found" });
+  });
+
+  it("cascades at the database level too, when a parent row is deleted directly rather than through purge()", async () => {
+    const { document: mail } = await documents.upload({ userId, name: "mail.txt", mimeType: "text/plain", body: Readable.from(["body"]), source: "email" });
+    const { document: attachment } = await documents.upload({
+      userId, name: "invoice.pdf", mimeType: "application/pdf", body: Readable.from(["pdf"]),
+      source: "email", parentDocumentId: mail.id,
+    });
+
+    // Bypasses documents.purge()'s explicit child cleanup on purpose, so this exercises
+    // the schema's own ON DELETE CASCADE rather than the application-level defense.
+    const repository = createDocumentsRepository({ db });
+    await repository.remove({ userId, documentId: mail.id });
+
+    await expect(documents.get({ userId, documentId: attachment.id })).rejects.toMatchObject({ code: "documents.not_found" });
+  });
 });
 
 describe("documents service filters and enrichment", () => {

@@ -46,6 +46,18 @@ export function createDocumentsService({
     }
   }
 
+  // A document plus every descendant reached through parentDocumentId, root first. Used
+  // by purge() so deleting a mail takes its attachments with it as an explicit
+  // application step, not just as a side effect of the schema's own cascade.
+  async function collectSubtree(userId: string, documentId: string): Promise<Document[]> {
+    const document = await repository.findById({ userId, documentId });
+    if (!document) throw notFound(documentId);
+    const children = await repository.findChildren({ userId, documentId });
+    const subtree = [document];
+    for (const child of children) subtree.push(...(await collectSubtree(userId, child.id)));
+    return subtree;
+  }
+
   async function getEnrichedOrThrow(userId: string, documentId: string) {
     const row = await repository.findByIdWithExtras({ userId, documentId });
     if (!row || row.deletedAt) throw notFound(documentId);
@@ -76,6 +88,7 @@ export function createDocumentsService({
       body,
       maxUploadBytes = DEFAULT_MAX_UPLOAD_BYTES,
       source = "upload",
+      parentDocumentId,
     }: {
       userId: string;
       name: string;
@@ -83,6 +96,7 @@ export function createDocumentsService({
       body: Readable;
       maxUploadBytes?: number;
       source?: "upload" | "telegram" | "email";
+      parentDocumentId?: string;
     }) {
       const documentId = newDocumentId();
       const safeName = sanitizeFilename(name);
@@ -136,6 +150,7 @@ export function createDocumentsService({
         categorySource: null,
         documentDate: null,
         triageStatus: "pending",
+        parentDocumentId: parentDocumentId ?? null,
         deletedAt: null,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -203,12 +218,18 @@ export function createDocumentsService({
     },
 
     async purge({ userId, documentId }: { userId: string; documentId: string }) {
-      const document = await repository.findById({ userId, documentId });
-      if (!document) throw notFound(documentId);
-      await requireActiveStorage(userId, document);
-      const driver = await storageService.getDriver(userId, document.storageDriver);
-      await driver.delete({ key: document.storageKey });
-      await repository.remove({ userId, documentId });
+      const subtree = await collectSubtree(userId, documentId);
+      for (const doc of subtree) await requireActiveStorage(userId, doc);
+      // Deepest descendants first, the requested document last. The schema also cascades
+      // this through parentDocumentId's ON DELETE CASCADE, but that only fires when
+      // foreign keys are enabled on the connection that runs the delete, a property of
+      // how the database was opened rather than of the data. Deleting children here
+      // explicitly means purge() removes the same rows and files either way.
+      for (const doc of [...subtree].reverse()) {
+        const driver = await storageService.getDriver(userId, doc.storageDriver);
+        await driver.delete({ key: doc.storageKey });
+        await repository.remove({ userId, documentId: doc.id });
+      }
     },
 
     async openFile({ userId, documentId }: { userId: string; documentId: string }) {
