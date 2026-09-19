@@ -91,6 +91,15 @@ it.
 model reads, a valibot schema, `writes`, `destructive`, and a handler. Reminders and
 calendar later are records. Nothing in the router changes.
 
+**A tool handler produces the user-facing reply itself; a tool-calling turn never feeds
+a tool's result back into its own `messages` array.** `saveNote` returns the confirmation
+text once it has written the note, `searchWeb` returns the answer once it has the search
+result, and so on. Nothing appends the result as a further assistant or user turn and
+asks the model to write the reply from it. That keeps the retry path in the AI layer,
+which does append a turn to correct invalid arguments, the only place a turn is ever
+appended to a caller's messages, and it is the pattern a future tool must follow rather
+than reinvent.
+
 ### 3. The instructions document
 
 One markdown document in `chat.instructions`, shipped with an editable default, appended to

@@ -7,10 +7,30 @@ import { createSettingsService, type SettingsService } from "../settings/setting
 import { createAiService } from "./ai.usecases.js";
 import { aiSettingDefinitions } from "./ai.settings.js";
 import { aiProviderRegistry } from "./providers/index.js";
-import type { AiAdapter, ModelInfo, StructuredResult, TestResult } from "./ai.types.js";
+import type { AiAdapter, ChatMessage, ModelInfo, StructuredResult, TestResult } from "./ai.types.js";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
 
 const silentLogger = pino({ level: "silent" });
+
+// Anthropic's Messages API requires the conversation to alternate strictly between
+// "user" and "assistant" turns and rejects two adjacent turns of the same role with a
+// 400. System-role entries are pulled out and sent separately (see anthropic.adapter.ts),
+// so they never take part in the adjacency check. This is a test-time guard, not
+// production code: it exists so a usecase test that builds a same-role adjacency by
+// mistake fails loudly here instead of only failing later, once, against a live provider.
+function assertAlternatingRoles(messages: ChatMessage[]): void {
+  const conversation = messages.filter((m) => m.role !== "system");
+  for (let i = 1; i < conversation.length; i++) {
+    const previous = conversation[i - 1]!;
+    const current = conversation[i]!;
+    if (previous.role === current.role) {
+      throw new Error(
+        `assertAlternatingRoles: two adjacent "${current.role}" turns at index ${i - 1} and ${i}. ` +
+          `Anthropic requires user/assistant turns to alternate.`,
+      );
+    }
+  }
+}
 
 function fakeAdapter(overrides: Partial<AiAdapter> = {}): AiAdapter {
   return {
@@ -21,9 +41,12 @@ function fakeAdapter(overrides: Partial<AiAdapter> = {}): AiAdapter {
     streamText: vi.fn(async () => ({
       async *[Symbol.asyncIterator]() { yield "hello"; },
     })),
-    streamChat: vi.fn(async () => ({
-      async *[Symbol.asyncIterator]() { yield { type: "text" as const, text: "hello" }; },
-    })),
+    streamChat: vi.fn(async (args: { messages: ChatMessage[] }) => {
+      assertAlternatingRoles(args.messages);
+      return {
+        async *[Symbol.asyncIterator]() { yield { type: "text" as const, text: "hello" }; },
+      };
+    }),
     embed: vi.fn(async () => ({ vectors: [[0.1, 0.2]], dimension: 2 })),
     recognizeImage: vi.fn(async () => ({ text: "extracted text" })),
     listModels: vi.fn(async () => [
@@ -271,8 +294,28 @@ describe("ai service", () => {
     expect(streamChatMock).toHaveBeenCalledTimes(2);
     const secondCallArgs = streamChatMock.mock.calls[1]![0] as { messages: Array<{ role: string; content: string }> };
     const lastMessage = secondCallArgs.messages.at(-1);
+    const secondToLastMessage = secondCallArgs.messages.at(-2);
     expect(lastMessage?.role).toBe("user");
     expect(lastMessage?.content).toContain("invalid arguments");
+    expect(secondToLastMessage?.role).not.toBe(lastMessage?.role);
+  });
+
+  it("assertAlternatingRoles ignores system turns and only flags adjacent same-role user/assistant turns", () => {
+    expect(() =>
+      assertAlternatingRoles([
+        { role: "system", content: "sys" },
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "hello" },
+        { role: "user", content: "again" },
+      ]),
+    ).not.toThrow();
+
+    expect(() =>
+      assertAlternatingRoles([
+        { role: "user", content: "note: buy milk" },
+        { role: "user", content: "retry" },
+      ]),
+    ).toThrow(/adjacent "user" turns/);
   });
 
   it("streamChatWithTools reports ai.tool_call_invalid honestly after a second invalid attempt, without repairing anything", async () => {

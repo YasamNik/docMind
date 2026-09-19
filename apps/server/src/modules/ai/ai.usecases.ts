@@ -32,6 +32,17 @@ type AdapterFactories = {
 // that fail validation is retried exactly once, with the parse error fed back to the
 // model as an extra turn; a second failure is reported as ai.tool_call_invalid rather
 // than guessed at or silently dropped.
+//
+// The retry appends two turns, not one: an assistant turn describing the failed call,
+// then the user turn carrying the parse error. Anthropic's Messages API requires
+// messages to alternate strictly between user and assistant roles and rejects two
+// adjacent turns of the same role with a 400. The caller's messages already end in a
+// user turn, so appending only a user correction would produce two user turns in a row.
+// The assistant turn is not decoration: it stands in for the model's own failed call,
+// which is what a real assistant turn there would have been. Once the adapters carry a
+// real tool_use/tool_result wire shape, this pair becomes a faithful assistant tool_use
+// content block plus a user turn holding a tool_result block with is_error set, instead
+// of plain text standing in for both.
 async function* driveToolCallStream({
   adapter,
   model,
@@ -83,6 +94,7 @@ async function* driveToolCallStream({
 
     const retryMessages: ChatMessage[] = [
       ...messages,
+      { role: "assistant", content: `I called "${part.name}" with arguments that did not match its schema.` },
       {
         role: "user",
         content: `Your call to "${part.name}" had invalid arguments: ${issueMessage}. Call the tool again with corrected arguments that match its schema.`,
