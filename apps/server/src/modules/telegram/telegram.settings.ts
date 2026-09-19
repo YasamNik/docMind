@@ -74,4 +74,14 @@ export const telegramSettingDefinitions: SettingDefinition[] = [
     default: false,
     doc: "Whether the bot has already said once that notes moved behind /note.",
   }),
+  // One Telegram chat maps to one active chat session, the same session model the
+  // app's own chat page uses, so a conversation held on the phone is visible there
+  // too. Cleared to "" by /new, which is what starts a fresh one on the next turn.
+  defineSetting({
+    key: "telegram.chatSessionId",
+    schema: v.string(),
+    internal: true,
+    default: "",
+    doc: "Id of the active chat session for the paired Telegram conversation, cleared by /new.",
+  }),
 ];

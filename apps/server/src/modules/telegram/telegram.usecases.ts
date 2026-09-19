@@ -3,6 +3,8 @@ import { Readable } from "node:stream";
 import * as v from "valibot";
 import { isAppError } from "../../shared/errors/errors.js";
 import { createLogger, type Logger } from "../../shared/logger/logger.js";
+import { TELEGRAM_ASSISTANT_SYSTEM_PROMPT } from "../chat/chat.models.js";
+import type { ChatService } from "../chat/chat.usecases.js";
 import type { Database } from "../database/database.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
@@ -10,23 +12,33 @@ import type { SettingsService } from "../settings/settings.usecases.js";
 import { fetchReadablePage } from "./link-fetch.js";
 import { createTelegramClient, type TelegramClient } from "./telegram.client.js";
 import {
-  assistantComingSoonReply,
+  acknowledgementReply,
+  assistantReplyText,
   compressedPhotoNotice,
   duplicateReply,
   fileDocumentName,
   fileTooLargeReply,
   finishedDocumentReply,
   intentOf,
+  isCheapMessage,
   linkDocumentBody,
   linkDocumentName,
   missingNoteTextReply,
+  newThreadReply,
   notesMovedNotice,
   pairingSucceededReply,
   receivedReply,
+  splitForTelegram,
+  stripCitationMarkers,
   textDocumentName,
   type TelegramIntent,
 } from "./telegram.models.js";
 import { telegramUpdateSchema, type TelegramMessage, type TelegramUpdate } from "./telegram.schemas.js";
+
+// Only what the assistant turn actually calls: creating a session and sending a
+// message. Kept narrow on purpose so a test can hand this a chat service backed by a
+// fake AI adapter without also standing in for every route chat.usecases.ts serves.
+type TelegramChatService = Pick<ChatService, "createSession" | "sendMessage">;
 
 // Own poll loop in the shape of jobs.runner.ts: re-reads its token every cycle instead
 // of reacting to a settings write, because settingsService has no post-write hook.
@@ -72,6 +84,7 @@ export function createTelegramService({
   db,
   settingsService,
   documentsService,
+  chatService,
   getUserId,
   clientFactory = createTelegramClient,
   fetchLinkPage = fetchReadablePage,
@@ -89,6 +102,10 @@ export function createTelegramService({
   db: Database;
   settingsService: SettingsService;
   documentsService: DocumentsService;
+  // The same chat service the app's own chat page uses: retrieval, history and
+  // citations are its implementation, not a second one grown here. The assistant
+  // passes its own system prompt (TELEGRAM_ASSISTANT_SYSTEM_PROMPT) on every call.
+  chatService: TelegramChatService;
   // There is exactly one Telegram-paired account, and this loop runs with no HTTP
   // session to read it from. Resolved fresh every cycle so a user created after the
   // process started is picked up without a restart, the same way the token is.
@@ -245,11 +262,49 @@ export function createTelegramService({
     await settingsService.setInternal(userId, "telegram.noteMigrationNoticeSent", true);
   }
 
-  // Placeholder until the assistant conversation is wired up: plain text and /web both
-  // land here for now, so the bot answers something rather than going quiet on a
-  // message it used to file as a note.
-  async function handleConversationPlaceholder({ client, chatId }: { client: TelegramClient; chatId: number }) {
-    await client.sendMessage({ chatId, text: assistantComingSoonReply() });
+  // One Telegram chat maps to one active chat session, so the same conversation is
+  // visible on the app's own chat page afterwards. Created lazily on the first turn
+  // and cleared by /new, never by anything else.
+  async function ensureChatSession({ userId }: { userId: string }): Promise<string> {
+    const existing = await settingsService.get<string>(userId, "telegram.chatSessionId");
+    if (existing) return existing;
+    const session = await chatService.createSession({ userId });
+    await settingsService.setInternal(userId, "telegram.chatSessionId", session.id);
+    return session.id;
+  }
+
+  // Runs one turn of the assistant conversation through the app's own chat service,
+  // with its own system prompt so it talks like a person instead of refusing when no
+  // document matched. streamChat has no token stream on Telegram's side, so the reply
+  // is consumed to completion here and sent as one message, split if it runs long.
+  async function handleAssistantTurn({ userId, client, chatId, text }: { userId: string; client: TelegramClient; chatId: number; text: string }) {
+    const trimmed = text.trim();
+    if (isCheapMessage(trimmed)) {
+      await client.sendMessage({ chatId, text: acknowledgementReply() });
+      return;
+    }
+
+    const sessionId = await ensureChatSession({ userId });
+    const generator = await chatService.sendMessage({ userId, sessionId, content: trimmed, systemPrompt: TELEGRAM_ASSISTANT_SYSTEM_PROMPT });
+
+    let fullText = "";
+    let sourceNames: string[] = [];
+    let errorMessage: string | undefined;
+    for await (const event of generator) {
+      if (event.event === "token") fullText += event.data;
+      else if (event.event === "done") sourceNames = event.data.citations.map((c) => c.documentName);
+      else if (event.event === "error") errorMessage = event.data.message;
+    }
+
+    const reply = errorMessage ?? assistantReplyText({ answer: stripCitationMarkers(fullText), sourceNames });
+    for (const part of splitForTelegram(reply)) {
+      await client.sendMessage({ chatId, text: part });
+    }
+  }
+
+  async function handleNewThread({ userId, client, chatId }: { userId: string; client: TelegramClient; chatId: number }) {
+    await settingsService.setInternal(userId, "telegram.chatSessionId", "");
+    await client.sendMessage({ chatId, text: newThreadReply() });
   }
 
   async function handleUpdate({ userId, client, update }: { userId: string; client: TelegramClient; update: TelegramUpdate }) {
@@ -286,15 +341,21 @@ export function createTelegramService({
       await handleLink({ userId, client, chatId, url: intent.url });
       return;
     }
-    if (intent.kind === "newThread" || intent.kind === "web") {
-      // Answered for real once the assistant conversation lands.
-      await handleConversationPlaceholder({ client, chatId });
+    if (intent.kind === "newThread") {
+      await handleNewThread({ userId, client, chatId });
+      return;
+    }
+    // /web reuses the same conversation for now; live web search is a later change
+    // that attaches to this same turn only for that command.
+    if (intent.kind === "web") {
+      await handleAssistantTurn({ userId, client, chatId, text: intent.text });
       return;
     }
     if (intent.kind === "chat") {
-      // Answered for real once the assistant conversation lands. Plain text used to
-      // become a note, so the first time this fires the bot also says where notes went.
-      await handleConversationPlaceholder({ client, chatId });
+      await handleAssistantTurn({ userId, client, chatId, text: intent.text });
+      // Plain text used to become a note, so the first time this fires the bot also
+      // says where notes went. /web is an explicit new command, not the old habit,
+      // so it never triggers this.
       await noteMigrationNoticeIfDue({ userId, client, chatId });
       return;
     }

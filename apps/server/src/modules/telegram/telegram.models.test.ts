@@ -1,20 +1,26 @@
 import { describe, expect, it } from "vitest";
 import type { TelegramUpdate } from "./telegram.schemas.js";
 import {
+  acknowledgementReply,
   assistantComingSoonReply,
+  assistantReplyText,
   compressedPhotoNotice,
   duplicateReply,
   fileDocumentName,
   fileTooLargeReply,
   finishedDocumentReply,
   intentOf,
+  isCheapMessage,
   linkDocumentBody,
   linkDocumentName,
   missingNoteTextReply,
   newPairingCode,
+  newThreadReply,
   notesMovedNotice,
   pairingSucceededReply,
   receivedReply,
+  splitForTelegram,
+  stripCitationMarkers,
   textDocumentName,
 } from "./telegram.models.js";
 
@@ -236,6 +242,65 @@ describe("telegram models", () => {
 
   it("tells someone once that notes now need /note", () => {
     expect(notesMovedNotice()).toMatch(/\/note/);
+  });
+
+  it("leaves a short reply as one message", () => {
+    expect(splitForTelegram("short answer")).toEqual(["short answer"]);
+  });
+
+  it("splits a long reply on a paragraph break near the limit", () => {
+    const first = "a".repeat(3000);
+    const second = "b".repeat(3000);
+    const parts = splitForTelegram(`${first}\n\n${second}`, 4096);
+    expect(parts).toEqual([first, second]);
+    expect(parts.every((p) => p.length <= 4096)).toBe(true);
+  });
+
+  it("hard splits a reply with no good paragraph break, without losing any text", () => {
+    const text = "z".repeat(9000);
+    const parts = splitForTelegram(text, 4096);
+    expect(parts.every((p) => p.length <= 4096)).toBe(true);
+    expect(parts.join("")).toBe(text);
+  });
+
+  it("removes bracketed citation markers a text message cannot render", () => {
+    expect(stripCitationMarkers("The rent is $1200 [1].")).toBe("The rent is $1200.");
+    expect(stripCitationMarkers("No sources here.")).toBe("No sources here.");
+  });
+
+  it("names the document a reply used, once per document", () => {
+    const reply = assistantReplyText({ answer: "The rent is $1200.", sourceNames: ["lease.pdf", "lease.pdf"] });
+    expect(reply).toBe("The rent is $1200.\n\nUsed lease.pdf.");
+  });
+
+  it("names more than one document when more than one was used", () => {
+    const reply = assistantReplyText({ answer: "Two things.", sourceNames: ["a.pdf", "b.pdf"] });
+    expect(reply).toBe("Two things.\n\nUsed a.pdf, b.pdf.");
+  });
+
+  it("leaves a reply alone when nothing was used", () => {
+    expect(assistantReplyText({ answer: "Morning!", sourceNames: [] })).toBe("Morning!");
+  });
+
+  it("treats punctuation-only text and a lone emoji as cheap, not worth a model call", () => {
+    expect(isCheapMessage("ok")).toBe(true);
+    expect(isCheapMessage("OK!")).toBe(true);
+    expect(isCheapMessage("👍")).toBe(true);
+    expect(isCheapMessage("...")).toBe(true);
+    expect(isCheapMessage("!!")).toBe(true);
+  });
+
+  it("does not treat an ordinary question as cheap", () => {
+    expect(isCheapMessage("what time is it")).toBe(false);
+    expect(isCheapMessage("3/4 cup of sugar")).toBe(false);
+  });
+
+  it("acknowledges a cheap message without pretending to have answered anything", () => {
+    expect(acknowledgementReply().length).toBeGreaterThan(0);
+  });
+
+  it("says starting fresh when /new resets the conversation", () => {
+    expect(newThreadReply()).toMatch(/fresh|new/i);
   });
 
   it("names a file document from telegram's own filename first", () => {

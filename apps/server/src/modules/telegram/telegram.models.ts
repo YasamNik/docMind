@@ -158,6 +158,64 @@ export function notesMovedNotice(): string {
   return "Quick heads up: texting me now starts a conversation instead of saving a note. To save a note, send /note followed by the text, like /note buy milk.";
 }
 
+// Telegram cuts a message off outright past this many characters, so a long answer is
+// sent as several messages instead of one that gets cut off mid sentence.
+export const TELEGRAM_MESSAGE_LIMIT = 4096;
+
+// Splits on a blank line near the limit when one is there to use, and falls back to a
+// hard cut when the text has no good break, since a truncated answer is worse than two
+// messages either way.
+export function splitForTelegram(text: string, maxLength = TELEGRAM_MESSAGE_LIMIT): string[] {
+  if (text.length <= maxLength) return [text];
+  const parts: string[] = [];
+  let remaining = text;
+  while (remaining.length > maxLength) {
+    let cut = remaining.lastIndexOf("\n\n", maxLength);
+    if (cut < maxLength / 2) cut = maxLength;
+    parts.push(remaining.slice(0, cut).trimEnd());
+    remaining = remaining.slice(cut).trimStart();
+  }
+  if (remaining.length > 0) parts.push(remaining);
+  return parts;
+}
+
+// The in-app chat marks a used passage with [1], [2] and so on for its own citation
+// chips. Telegram has nothing to render those against, so they come out before the
+// reply is sent and assistantReplyText below names the document in words instead.
+export function stripCitationMarkers(text: string): string {
+  return text.replace(/\s*\[\d+\]/g, "").trimEnd();
+}
+
+// Names what the reply drew on, once per document, so a confident answer is never
+// mistaken for one backed by nothing. Silent when nothing was used: an ordinary
+// conversational reply gets no footer at all.
+export function assistantReplyText({ answer, sourceNames }: { answer: string; sourceNames: string[] }): string {
+  const unique = [...new Set(sourceNames)];
+  if (unique.length === 0) return answer;
+  return `${answer}\n\nUsed ${unique.join(", ")}.`;
+}
+
+// Short acknowledgements a person sends without expecting a real answer: bare
+// punctuation, a lone emoji, or one of a handful of stock replies. None of these are
+// worth a paid model call, the failure mode the cost note in the spec is about.
+const CHEAP_ACKNOWLEDGEMENTS = new Set(["ok", "okay", "k", "kk", "thanks", "thank you", "thx", "cool", "nice", "sure", "yep", "yup", "np"]);
+
+export function isCheapMessage(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return true;
+  if (!/[\p{L}\p{N}]/u.test(trimmed)) return true;
+  const bare = trimmed.toLowerCase().replace(/[.!?]+$/, "");
+  return CHEAP_ACKNOWLEDGEMENTS.has(bare);
+}
+
+export function acknowledgementReply(): string {
+  return "👍";
+}
+
+export function newThreadReply(): string {
+  return "Starting fresh. What's up?";
+}
+
 // A refusal from the link guard already reads like a sentence a person can act on,
 // so the chat reply is just that reason with no extra framing added around it.
 

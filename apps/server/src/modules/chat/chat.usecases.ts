@@ -108,7 +108,21 @@ export function createChatService({
     // done event with the resolved citations. A generation failure is caught inside
     // the generator itself and turned into a saved error message plus an error event,
     // so a failed reply never leaves the user's turn unanswered.
-    async sendMessage({ userId, sessionId, content }: { userId: string; sessionId: string; content: string }): Promise<AsyncGenerator<ChatStreamEvent>> {
+    // systemPrompt defaults to the in-app document-bound prompt above. The Telegram
+    // assistant passes its own sibling prompt (chat.models.ts, TELEGRAM_ASSISTANT_SYSTEM_PROMPT)
+    // so it can hold an ordinary conversation instead of refusing when nothing matched,
+    // while reusing this same retrieval, history and citation pipeline unchanged.
+    async sendMessage({
+      userId,
+      sessionId,
+      content,
+      systemPrompt = CHAT_SYSTEM_PROMPT,
+    }: {
+      userId: string;
+      sessionId: string;
+      content: string;
+      systemPrompt?: string;
+    }): Promise<AsyncGenerator<ChatStreamEvent>> {
       const session = await requireSession(userId, sessionId);
 
       const userMessage: NewChatMessage = {
@@ -145,7 +159,7 @@ export function createChatService({
         content: m.content,
       }));
 
-      const messages = assembleChatContext({ systemPrompt: CHAT_SYSTEM_PROMPT, chunks, history });
+      const messages = assembleChatContext({ systemPrompt, chunks, history });
 
       async function* generate(): AsyncGenerator<ChatStreamEvent> {
         try {

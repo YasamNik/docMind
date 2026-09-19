@@ -2,11 +2,20 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { sql } from "drizzle-orm";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createError } from "../../shared/errors/errors.js";
 import { createTestDatabase } from "../../shared/test/database.test-utils.js";
+import { aiSettingDefinitions } from "../ai/ai.settings.js";
+import type { AiAdapter, ModelInfo, StructuredResult, TestResult } from "../ai/ai.types.js";
+import { createAiService } from "../ai/ai.usecases.js";
+import { aiProviderRegistry } from "../ai/providers/index.js";
+import { createChatService, type ChatService } from "../chat/chat.usecases.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import { createDocumentsService } from "../documents/documents.usecases.js";
+import { createSearchRepository } from "../search/search.repository.js";
+import { searchSettingDefinitions } from "../search/search.settings.js";
+import { createSearchService } from "../search/search.usecases.js";
 import { createSettingsRegistry } from "../settings/settings.registry.js";
 import { createSettingsService } from "../settings/settings.usecases.js";
 import { storageSettingDefinitions } from "../storage/storage.settings.js";
@@ -15,6 +24,14 @@ import { createTagsService } from "../tags/tags.usecases.js";
 import type { TelegramClient } from "./telegram.client.js";
 import { telegramSettingDefinitions } from "./telegram.settings.js";
 import { createTelegramService, type FetchLinkPage } from "./telegram.usecases.js";
+
+function asyncIterableOf(chunks: string[]): AsyncIterable<string> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for (const chunk of chunks) yield chunk;
+    },
+  };
+}
 
 const userId = "user-1";
 const PAIRED_ID = 111;
@@ -136,17 +153,55 @@ let root: string;
 let db: Awaited<ReturnType<typeof createTestDatabase>>["db"];
 let settingsService: ReturnType<typeof createSettingsService>;
 let documentsService: ReturnType<typeof createDocumentsService>;
+let chatService: ChatService;
+// Reassigned within a test to script what the model returns for that turn. Reading
+// through this indirection, rather than rebuilding the whole ai/search/chat stack per
+// test, is what lets "keeps the thread" script two different replies for two turns of
+// the same conversation.
+let streamChatImpl: AiAdapter["streamChat"];
+
+function fakeChatAdapter(): AiAdapter {
+  return {
+    generateStructured: vi.fn(async () => ({ data: {}, usage: { promptTokens: 0, completionTokens: 0 } }) as StructuredResult),
+    streamText: vi.fn(async () => asyncIterableOf([])),
+    streamChat: (...args) => streamChatImpl(...args),
+    embed: vi.fn(async () => ({ vectors: [], dimension: 0 })),
+    recognizeImage: vi.fn(async () => ({ text: "" })),
+    listModels: vi.fn(async () => [] as ModelInfo[]),
+    testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1, message: "ok" }) as TestResult),
+  };
+}
+
+async function uploadWithChunk(name: string, text: string) {
+  const { document } = await documentsService.upload({ userId, name, mimeType: "text/plain", body: Readable.from([text]) });
+  await db.run(sql`update documents set extracted_text = ${text}, extraction_status = 'done' where id = ${document.id}`);
+  const searchRepository = createSearchRepository({ db });
+  await searchRepository.insertChunks([{ documentId: document.id, chunkIndex: 0, chunkText: text, tokenCount: 10, startChar: 0, endChar: text.length }]);
+  return document.id;
+}
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "docmind-telegram-"));
   ({ db } = await createTestDatabase());
   settingsService = createSettingsService({
     db,
-    registry: createSettingsRegistry([...storageSettingDefinitions, ...telegramSettingDefinitions]),
+    registry: createSettingsRegistry([...storageSettingDefinitions, ...telegramSettingDefinitions, ...aiSettingDefinitions, ...searchSettingDefinitions]),
     config: { settingsEncryptionKey: "22".repeat(32), env: { DOCUMENT_STORAGE_ROOT: root } },
   });
   const storageService = createStorageService({ settingsService, countDocuments: async () => 0 });
   documentsService = createDocumentsService({ db, storageService });
+
+  // Not configured by default (no ai.model.chat), so a test that never touches the
+  // assistant gets the same graceful "no model configured" path production would.
+  streamChatImpl = vi.fn(async () => asyncIterableOf(["Okay."]));
+  const adapter = fakeChatAdapter();
+  const aiService = createAiService({
+    settingsService,
+    registry: aiProviderRegistry,
+    adapterFactories: { "openai-compatible": () => adapter, "anthropic": () => adapter },
+  });
+  const searchService = createSearchService({ db, aiService, settingsService });
+  chatService = createChatService({ db, aiService, searchService });
 });
 
 afterEach(() => rm(root, { recursive: true, force: true }));
@@ -166,6 +221,7 @@ function buildService(
     db,
     settingsService,
     documentsService,
+    chatService,
     getUserId: async () => userId,
     clientFactory: () => client,
     fetchLinkPage,
@@ -528,6 +584,7 @@ describe("telegram service", () => {
       db,
       settingsService,
       documentsService,
+      chatService,
       getUserId: async () => userId,
       clientFactory: () => client,
       fetchLinkPage: fetchLinkPageNotConfigured,
@@ -542,6 +599,133 @@ describe("telegram service", () => {
     const elapsedMs = Date.now() - startedAt;
 
     expect(elapsedMs).toBeLessThan(1000);
+  });
+});
+
+describe("telegram service, the assistant", () => {
+  async function pairAndConfigureChat() {
+    await settingsService.set(userId, {
+      "telegram.botToken": "111:token",
+      "ai.openrouter.apiKey": "sk-or-v1-test",
+      "ai.model.chat": "openrouter://test-chat-model",
+    });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    // The once-only note-migration notice is a Task 1 concern with its own tests;
+    // pre-marking it sent keeps these tests focused on the conversation itself.
+    await settingsService.setInternal(userId, "telegram.noteMigrationNoticeSent", true);
+  }
+
+  it("answers a question about a document, and says which one it used", async () => {
+    await pairAndConfigureChat();
+    await uploadWithChunk("lease.txt", "The lease renews on March 1st.");
+    streamChatImpl = vi.fn(async () => asyncIterableOf(["The lease renews March 1st [1]."]));
+    const { client, sent } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "when does my lease renew?" })]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toContain("The lease renews March 1st");
+    expect(sent[0]?.text).toContain("lease.txt");
+    expect(sent[0]?.text).not.toContain("[1]");
+  });
+
+  it("answers an ordinary question without documents rather than refusing", async () => {
+    await pairAndConfigureChat();
+    streamChatImpl = vi.fn(async () => asyncIterableOf(["Morning! Nothing on your plate that I can see."]));
+    const { client, sent } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "good morning" })]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toBe("Morning! Nothing on your plate that I can see.");
+  });
+
+  it("keeps the thread, so a follow up understands what it refers to", async () => {
+    await pairAndConfigureChat();
+    let call = 0;
+    streamChatImpl = vi.fn(async () => asyncIterableOf([call++ === 0 ? "It's a Labrador." : "Yes, still a Labrador."]));
+    const { client } = fakeTelegram({
+      batches: [
+        [updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "what breed is my dog" })],
+        [updateWithText({ updateId: 2, fromId: PAIRED_ID, text: "are you sure" })],
+      ],
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    await telegram.runOnce();
+
+    const sessions = await chatService.listSessions(userId);
+    expect(sessions).toHaveLength(1);
+    const messages = await chatService.listMessages({ userId, sessionId: sessions[0]!.id });
+    expect(messages.filter((m) => m.role === "user").map((m) => m.content)).toEqual(["what breed is my dog", "are you sure"]);
+  });
+
+  it("starts fresh after /new", async () => {
+    await pairAndConfigureChat();
+    streamChatImpl = vi.fn(async () => asyncIterableOf(["Sure."]));
+    const { client, sent } = fakeTelegram({
+      batches: [
+        [updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "what breed is my dog" })],
+        [updateWithCommand({ updateId: 2, fromId: PAIRED_ID, command: "/new" })],
+        [updateWithText({ updateId: 3, fromId: PAIRED_ID, text: "are you sure" })],
+      ],
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    await telegram.runOnce();
+    await telegram.runOnce();
+
+    const sessions = await chatService.listSessions(userId);
+    expect(sessions).toHaveLength(2);
+    expect(sent.some((m) => /fresh/i.test(m.text))).toBe(true);
+  });
+
+  it("splits an answer longer than a telegram message rather than truncating it", async () => {
+    await pairAndConfigureChat();
+    const longAnswer = "x".repeat(5000);
+    streamChatImpl = vi.fn(async () => asyncIterableOf([longAnswer]));
+    const { client, sent } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "tell me a long story" })]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent.length).toBeGreaterThan(1);
+    expect(sent.every((m) => m.text.length <= 4096)).toBe(true);
+    expect(sent.map((m) => m.text).join("")).toBe(longAnswer);
+  });
+
+  it("says so when no chat model is configured, instead of failing silently", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    await settingsService.setInternal(userId, "telegram.noteMigrationNoticeSent", true);
+    streamChatImpl = vi.fn(async () => asyncIterableOf(["should never be reached"]));
+    const { client, sent } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "what is my rent" })]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toMatch(/no model configured|settings page/i);
+    expect(streamChatImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not spend a model call on a bare ok or an emoji", async () => {
+    await pairAndConfigureChat();
+    streamChatImpl = vi.fn(async () => asyncIterableOf(["should never be reached"]));
+    const { client, sent } = fakeTelegram({
+      batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "ok" })], [updateWithText({ updateId: 2, fromId: PAIRED_ID, text: "👍" })]],
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    await telegram.runOnce();
+
+    expect(streamChatImpl).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(2);
   });
 });
 
@@ -829,6 +1013,7 @@ describe("telegram service, background loops", () => {
       db,
       settingsService,
       documentsService,
+      chatService,
       getUserId: async () => userId,
       clientFactory: () => client,
       fetchLinkPage: fetchLinkPageNotConfigured,
