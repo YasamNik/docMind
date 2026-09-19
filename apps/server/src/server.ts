@@ -53,6 +53,7 @@ import { registerSummaryRoutes } from "./modules/summary/summary.routes.js";
 import { createSummaryService } from "./modules/summary/summary.usecases.js";
 import { registerTelegramRoutes } from "./modules/telegram/telegram.routes.js";
 import { createTelegramService } from "./modules/telegram/telegram.usecases.js";
+import { createEmailService } from "./modules/email/email.usecases.js";
 import { registerTagsRoutes } from "./modules/tags/tags.routes.js";
 import { createTagsService } from "./modules/tags/tags.usecases.js";
 import { registerExportRoutes } from "./modules/export/export.routes.js";
@@ -191,6 +192,17 @@ export function createServer({
     },
     appBaseUrl: config.clientBaseUrl,
   });
+  // Same shape as telegramService just above: its own loop rather than a job, one
+  // account with no HTTP session to read it from, settings and credentials re-read
+  // fresh every cycle so saving a password starts it and clearing one stops it.
+  const emailService = createEmailService({
+    settingsService,
+    documentsService,
+    getUserId: async () => {
+      const [row] = await db.select({ id: authUserTable.id }).from(authUserTable).limit(1);
+      return row?.id;
+    },
+  });
 
   app.get("/api/health", (c) => c.json({ status: "ok" }));
   registerAuthRoutes({ app, auth, db });
@@ -236,6 +248,7 @@ export function createServer({
     extractionService,
     jobRunner,
     telegramService,
+    emailService,
     ocrEngine,
     aiService,
     tagsService,
