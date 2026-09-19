@@ -115,3 +115,55 @@ export function compressedPhotoNotice(): string {
 export function linkNotSupportedReply(): string {
   return "Links aren't supported yet. Send the file itself or a note instead.";
 }
+
+// Extensions this module ever actually needs to guess: a photo always reports
+// image/jpeg, and a forwarded file carries whatever mime type the sender's own client
+// attached. Anything else is left without an extension rather than guessed wrong.
+const KNOWN_FILE_EXTENSIONS: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+  "application/pdf": ".pdf",
+};
+
+function guessedExtension(mimeType: string | undefined): string {
+  if (!mimeType) return "";
+  return KNOWN_FILE_EXTENSIONS[mimeType] ?? "";
+}
+
+function withGuessedExtension(base: string, mimeType: string | undefined): string {
+  const ext = guessedExtension(mimeType);
+  if (!ext || base.toLowerCase().endsWith(ext)) return base;
+  return `${base}${ext}`;
+}
+
+// A photo or a forwarded file carries no filename of its own. A caption someone
+// actually typed, "hydro march", makes a far better name than a timestamp, so it wins
+// whenever Telegram gave nothing better. documentsService.upload sanitizes whatever
+// name it is handed, so this only has to pick a reasonable one.
+export function fileDocumentName({
+  intent,
+  caption,
+  messageId,
+  now,
+}: {
+  intent: Extract<TelegramIntent, { kind: "file" }>;
+  caption: string | undefined;
+  messageId: number;
+  now: Date;
+}): string {
+  if (intent.fileName) return intent.fileName;
+  const trimmedCaption = caption?.trim();
+  if (trimmedCaption) return withGuessedExtension(trimmedCaption, intent.mimeType);
+  const stamp = now.toISOString().slice(0, 10).replace(/-/g, "");
+  return `telegram-${stamp}-${messageId}${guessedExtension(intent.mimeType)}`;
+}
+
+// A text note has no filename at all, so it is titled from its own first line until
+// the summary model retitles it, the same gap a nameless browser upload would have.
+export function textDocumentName(text: string): string {
+  const firstLine = text.split(/\r?\n/)[0]!.trim();
+  const short = firstLine.length > 60 ? `${firstLine.slice(0, 60).trimEnd()}...` : firstLine;
+  return `${short || "Note"}.txt`;
+}

@@ -10,6 +10,7 @@ import type { Database } from "./modules/database/database.js";
 import { requireUser, sessionMiddleware } from "./modules/auth/auth.middleware.js";
 import { registerAuthRoutes } from "./modules/auth/auth.routes.js";
 import { createAuth } from "./modules/auth/auth.services.js";
+import { user as authUserTable } from "./modules/auth/auth.tables.js";
 import { registerAiRoutes } from "./modules/ai/ai.routes.js";
 import { createAiService } from "./modules/ai/ai.usecases.js";
 import { aiProviderRegistry } from "./modules/ai/providers/index.js";
@@ -50,6 +51,7 @@ import { registerSearchRoutes } from "./modules/search/search.routes.js";
 import { createSearchService } from "./modules/search/search.usecases.js";
 import { registerSummaryRoutes } from "./modules/summary/summary.routes.js";
 import { createSummaryService } from "./modules/summary/summary.usecases.js";
+import { createTelegramService } from "./modules/telegram/telegram.usecases.js";
 import { registerTagsRoutes } from "./modules/tags/tags.routes.js";
 import { createTagsService } from "./modules/tags/tags.usecases.js";
 import { registerExportRoutes } from "./modules/export/export.routes.js";
@@ -173,6 +175,19 @@ export function createServer({
     db,
     handlers: { extraction: extractionService.handler, rules: rulesService.handler, embedding: searchService.handler, summarize: summaryService.handler },
   });
+  // Own long polling loop, not a job: getUpdates holds a connection open for up to
+  // pollTimeoutSeconds, which does not fit the job runner's discrete-task model. There
+  // is exactly one account, and this loop has no HTTP session to read it from, so it
+  // resolves the sole signed-up user itself, fresh every cycle, the same way it
+  // re-reads the bot token every cycle.
+  const telegramService = createTelegramService({
+    settingsService,
+    documentsService,
+    getUserId: async () => {
+      const [row] = await db.select({ id: authUserTable.id }).from(authUserTable).limit(1);
+      return row?.id;
+    },
+  });
 
   app.get("/api/health", (c) => c.json({ status: "ok" }));
   registerAuthRoutes({ app, auth, db });
@@ -216,6 +231,7 @@ export function createServer({
     jobsService,
     extractionService,
     jobRunner,
+    telegramService,
     ocrEngine,
     aiService,
     tagsService,

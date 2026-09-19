@@ -3,12 +3,14 @@ import type { TelegramUpdate } from "./telegram.schemas.js";
 import {
   compressedPhotoNotice,
   duplicateReply,
+  fileDocumentName,
   fileTooLargeReply,
   intentOf,
   linkNotSupportedReply,
   newPairingCode,
   pairingSucceededReply,
   receivedReply,
+  textDocumentName,
 } from "./telegram.models.js";
 
 function baseUpdate(message: NonNullable<TelegramUpdate["message"]>): TelegramUpdate {
@@ -135,5 +137,26 @@ describe("telegram models", () => {
     expect(fileTooLargeReply()).toMatch(/20 ?mb/i);
     expect(compressedPhotoNotice()).toMatch(/compress/i);
     expect(linkNotSupportedReply()).toMatch(/not.*support|support.*not/i);
+  });
+
+  it("names a file document from telegram's own filename first", () => {
+    const intent = { kind: "file", fileId: "f1", fileName: "receipt.pdf", mimeType: "application/pdf", compressedPhoto: false } as const;
+    expect(fileDocumentName({ intent, caption: "hydro march", messageId: 1, now: new Date("2026-09-18T00:00:00Z") })).toBe("receipt.pdf");
+  });
+
+  it("names a captioned photo from the caption instead of a timestamp", () => {
+    const intent = { kind: "file", fileId: "f2", fileName: undefined, mimeType: "image/jpeg", compressedPhoto: true } as const;
+    expect(fileDocumentName({ intent, caption: "hydro march", messageId: 2, now: new Date("2026-09-18T00:00:00Z") })).toBe("hydro march.jpg");
+  });
+
+  it("falls back to the date and message id when there is no filename and no caption", () => {
+    const intent = { kind: "file", fileId: "f3", fileName: undefined, mimeType: "image/jpeg", compressedPhoto: true } as const;
+    expect(fileDocumentName({ intent, caption: undefined, messageId: 42, now: new Date("2026-09-18T00:00:00Z") })).toBe("telegram-20260918-42.jpg");
+  });
+
+  it("titles a text note from its first line, truncated", () => {
+    expect(textDocumentName("Remember to renew the lease by Friday.")).toBe("Remember to renew the lease by Friday..txt");
+    const long = "x".repeat(80);
+    expect(textDocumentName(`${long}\nsecond line`)).toBe(`${long.slice(0, 60)}....txt`);
   });
 });
