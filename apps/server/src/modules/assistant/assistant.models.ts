@@ -1,5 +1,6 @@
 import { createError } from "../../shared/errors/errors.js";
 import type { ToolDefinition } from "../ai/ai.types.js";
+import { CHAT_SYSTEM_PROMPT, TELEGRAM_ASSISTANT_SYSTEM_PROMPT } from "../chat/chat.models.js";
 import type { AssistantSurface, InstructionVersion, ToolContext } from "./assistant.types.js";
 
 // textDocumentName, missingNoteTextReply and newThreadReply moved here from
@@ -226,6 +227,18 @@ answer questions about.
 <user-instructions>
 ${trimmed}
 </user-instructions>`;
+}
+
+// The base prompt for the call that actually writes an answer, answerFromDocuments and
+// searchWeb alike (assistant.registry.ts), picked by surface rather than hard-coded at
+// each call site. Telegram gets TELEGRAM_ASSISTANT_SYSTEM_PROMPT (chat.models.ts): a
+// live probe found that both handlers were sending CHAT_SYSTEM_PROMPT unconditionally,
+// so a Telegram question with no matching document got the app's own refusal sentence
+// back, the exact behavior TELEGRAM_ASSISTANT_SYSTEM_PROMPT exists to prevent. The app
+// surface keeps CHAT_SYSTEM_PROMPT, written for a search box that should refuse without
+// context. withInstructions still wraps whichever this returns.
+export function answeringPromptFor(surface: AssistantSurface): string {
+  return surface === "telegram" ? TELEGRAM_ASSISTANT_SYSTEM_PROMPT : CHAT_SYSTEM_PROMPT;
 }
 
 // Used by the two answering handlers (assistant.registry.ts) to carry the same

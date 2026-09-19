@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
 import type { ToolDefinition } from "../ai/ai.types.js";
+import { CHAT_SYSTEM_PROMPT, TELEGRAM_ASSISTANT_SYSTEM_PROMPT } from "../chat/chat.models.js";
 import type { InstructionVersion } from "./assistant.types.js";
 import {
+  answeringPromptFor,
   assertInstructionsWithinCap,
   ASSISTANT_TRIAGE_SYSTEM_PROMPT,
   assistantTroubleReply,
@@ -238,6 +240,16 @@ describe("assistant models, the instructions prompt section", () => {
   it("leaves buildAssistantPrompt's own output unchanged when no instructions are given", () => {
     const prompt = buildAssistantPrompt({ basePrompt: "Base.", tools: [], writesWithheld: false });
     expect(prompt).not.toContain("user's standing instructions");
+  });
+});
+
+describe("assistant models, answeringPromptFor", () => {
+  it("picks the telegram assistant prompt for the telegram surface", () => {
+    expect(answeringPromptFor("telegram")).toBe(TELEGRAM_ASSISTANT_SYSTEM_PROMPT);
+  });
+
+  it("picks the app's own chat prompt for the app surface", () => {
+    expect(answeringPromptFor("app")).toBe(CHAT_SYSTEM_PROMPT);
   });
 });
 

@@ -6,6 +6,7 @@ import { createTestApp } from "../../shared/test/app.test-utils.js";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
 import type { AiAdapter, ChatStreamPart, ModelInfo, StructuredResult, TestResult } from "../ai/ai.types.js";
 import { createSearchRepository } from "../search/search.repository.js";
+import { CHAT_SYSTEM_PROMPT, TELEGRAM_ASSISTANT_SYSTEM_PROMPT } from "../chat/chat.models.js";
 import { missingNoteTextReply, newThreadReply } from "./assistant.models.js";
 import { assistantCapabilities } from "./assistant.registry.js";
 import type { ToolContext } from "./assistant.types.js";
@@ -184,6 +185,32 @@ describe("assistant registry, handlers", () => {
     expect(answerSpy).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: expect.stringContaining("Reply in one word.") }));
   });
 
+  it("answers a telegram turn with the telegram assistant prompt, not the app's refusal prompt", async () => {
+    const { t, userId } = await setup(vi.fn(async () => asyncIterableOf(["An answer."])));
+    const session = await t.services.chatService.createSession({ userId });
+    await t.services.chatService.appendUserMessage({ userId, sessionId: session.id, content: "anything" });
+    const answerSpy = vi.spyOn(t.services.chatService, "answerFromDocuments");
+    const ctx = buildCtx({ t, userId, sessionId: session.id, surface: "telegram", userMessage: "anything" });
+
+    await assistantCapabilities.answerFromDocuments.handler({ question: "anything" }, ctx);
+
+    expect(answerSpy).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: expect.stringContaining(TELEGRAM_ASSISTANT_SYSTEM_PROMPT) }));
+    const [call] = answerSpy.mock.calls;
+    expect(call?.[0]?.systemPrompt).not.toContain("I don't have enough information to answer that");
+  });
+
+  it("answers an app turn with the app's own chat prompt, not the telegram assistant prompt", async () => {
+    const { t, userId } = await setup(vi.fn(async () => asyncIterableOf(["An answer."])));
+    const session = await t.services.chatService.createSession({ userId });
+    await t.services.chatService.appendUserMessage({ userId, sessionId: session.id, content: "anything" });
+    const answerSpy = vi.spyOn(t.services.chatService, "answerFromDocuments");
+    const ctx = buildCtx({ t, userId, sessionId: session.id, surface: "app", userMessage: "anything" });
+
+    await assistantCapabilities.answerFromDocuments.handler({ question: "anything" }, ctx);
+
+    expect(answerSpy).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: expect.stringContaining(CHAT_SYSTEM_PROMPT) }));
+  });
+
   it("searches the web through the same answering path, with web set", async () => {
     const chatStream = vi.fn(async () => asyncIterableOf(["Sunny and 20C."]));
     const { t, userId } = await setup(chatStream);
@@ -207,6 +234,30 @@ describe("assistant registry, handlers", () => {
     await assistantCapabilities.searchWeb.handler({ question: "weather today" }, ctx);
 
     expect(answerSpy).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: expect.stringContaining("Reply in one word.") }));
+  });
+
+  it("searches the web on the telegram surface with the telegram assistant prompt, not the app's refusal prompt", async () => {
+    const { t, userId } = await setup(vi.fn(async () => asyncIterableOf(["Sunny and 20C."])));
+    const session = await t.services.chatService.createSession({ userId });
+    await t.services.chatService.appendUserMessage({ userId, sessionId: session.id, content: "weather today" });
+    const answerSpy = vi.spyOn(t.services.chatService, "answerFromDocuments");
+    const ctx = buildCtx({ t, userId, sessionId: session.id, surface: "telegram", userMessage: "weather today" });
+
+    await assistantCapabilities.searchWeb.handler({ question: "weather today" }, ctx);
+
+    expect(answerSpy).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: expect.stringContaining(TELEGRAM_ASSISTANT_SYSTEM_PROMPT) }));
+  });
+
+  it("searches the web on the app surface with the app's own chat prompt", async () => {
+    const { t, userId } = await setup(vi.fn(async () => asyncIterableOf(["Sunny and 20C."])));
+    const session = await t.services.chatService.createSession({ userId });
+    await t.services.chatService.appendUserMessage({ userId, sessionId: session.id, content: "weather today" });
+    const answerSpy = vi.spyOn(t.services.chatService, "answerFromDocuments");
+    const ctx = buildCtx({ t, userId, sessionId: session.id, surface: "app", userMessage: "weather today" });
+
+    await assistantCapabilities.searchWeb.handler({ question: "weather today" }, ctx);
+
+    expect(answerSpy).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: expect.stringContaining(CHAT_SYSTEM_PROMPT) }));
   });
 
   it("says plainly that the web needs an OpenRouter chat model, instead of throwing", async () => {
