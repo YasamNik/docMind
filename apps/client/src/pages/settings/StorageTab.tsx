@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { storageApi, type StorageDriverSummary, type StorageTestResult } from "@/lib/storage-api";
 import { settingsApi, type ResolvedSetting } from "@/lib/settings-api";
+import { clearStorageReauthRequired, useStorageReauthRequired } from "@/lib/storage-reauth";
 import { GuideCard } from "./ProviderCard";
 
 function documentCountLabel(count: number) {
@@ -63,6 +64,10 @@ export function StorageTab() {
   async function runHealthCheck(driverId: string) {
     const result = await test.mutateAsync(driverId).catch((e: Error) => ({ ok: false, message: e.message }));
     setTestResults((prev) => ({ ...prev, [driverId]: result }));
+    // A health check carries no reason for a failure, only a message, so it cannot be
+    // the thing that flags a driver as needing reauthorization. It can, however, be
+    // trusted to clear that flag: a driver that just answered is plainly not stuck.
+    if (result.ok) clearStorageReauthRequired(queryClient, driverId);
     return result;
   }
 
@@ -312,6 +317,7 @@ function DriverConnection({
   queryClient: QueryClient;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const needsReauth = useStorageReauthRequired(driver.id);
 
   const clientIdSetting = driverSettings.find((s) => settingShortKey(s) === "clientId");
   const clientSecretSetting = driverSettings.find((s) => settingShortKey(s) === "clientSecret");
@@ -339,6 +345,14 @@ function DriverConnection({
     return (
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm">Connected as {driver.accountEmail}</span>
+        {needsReauth && (
+          <>
+            <Badge variant="destructive">Needs reconnecting</Badge>
+            <a href={`/api/storage/drivers/${driver.id}/connect`} className={buttonVariants({ size: "sm" })}>
+              Reconnect
+            </a>
+          </>
+        )}
         <Button size="sm" variant="outline" onClick={() => setConfirmOpen(true)}>Disconnect</Button>
 
         <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>

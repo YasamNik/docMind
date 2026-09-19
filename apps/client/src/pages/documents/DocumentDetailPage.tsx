@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -12,6 +12,7 @@ import { fieldLabel, formatFieldValue, isAmountFieldKey } from "@/lib/fields-for
 import { formatBytes, formatDate, formatDocumentDate } from "@/lib/format";
 import { jobsApi } from "@/lib/jobs-api";
 import { sortApi, type ProposalRow } from "@/lib/sort-api";
+import { markStorageReauthRequired } from "@/lib/storage-reauth";
 import { categoriesApi, documentCategorizationApi, tagsApi } from "@/lib/tags-api";
 
 // documentDate stays out of this list: the page already shows it on its own line, next
@@ -43,12 +44,54 @@ function ExtractedFieldsCard({ fields }: { fields: ExtractedField[] }) {
   );
 }
 
-function Preview({ id, mimeType }: { id: string; mimeType: string | null }) {
+// Shown in place of a preview that failed to load because its storage needs
+// reauthorizing, rather than a broken image or an empty frame with no explanation.
+function ReauthRequiredNotice() {
+  return (
+    <div className="flex items-center justify-center rounded-[28px] bg-org-neutral-200 p-10 text-center">
+      <p className="text-sm text-muted-foreground">
+        This file's storage needs to be reconnected before it can be shown. Go to Settings, Storage, and
+        reconnect it.
+      </p>
+    </div>
+  );
+}
+
+function Preview({ id, mimeType, storageDriver, queryClient }: { id: string; mimeType: string | null; storageDriver: string; queryClient: QueryClient }) {
   const url = documentsApi.fileUrl(id);
+  const [reauthRequired, setReauthRequired] = useState(false);
+
+  // The preview loads the file straight into an img or iframe src, so a failed load
+  // never carries a status code or a body into this component's hands. Once it has
+  // already failed, one extra fetch through the api client learns why, without ever
+  // making that call on the path where the preview loads fine.
+  async function handleLoadError() {
+    const code = await documentsApi.fileErrorCode(id);
+    if (code === "storage.reauth_required") {
+      markStorageReauthRequired(queryClient, storageDriver);
+      setReauthRequired(true);
+    }
+  }
+
+  if (reauthRequired) return <ReauthRequiredNotice />;
+
+  // No onError here: a PDF loaded straight into an iframe's src does not raise one for
+  // an HTTP error status. The response body is still valid, loadable content as far as
+  // the frame is concerned, it just is not a PDF. Detecting a failed PDF preview would
+  // need the file fetched and checked before it is handed to the iframe at all, which
+  // is a real change to how the preview loads, not a small addition, so it is left as a
+  // follow-up rather than built here.
   if (mimeType === "application/pdf")
     return <iframe title="Preview" src={url} className="w-full h-[70vh] rounded-[28px] border border-border" />;
   if (mimeType?.startsWith("image/"))
-    return <img src={url} alt="Preview" className="max-h-[70vh] rounded-[28px] border border-border" />;
+    return (
+      <img
+        src={url}
+        alt="Preview"
+        onError={handleLoadError}
+        className="max-h-[70vh] rounded-[28px] border border-border"
+      />
+    );
   return (
     <div className="flex items-center justify-center rounded-[28px] bg-org-neutral-200 p-10 text-center">
       <p className="text-sm text-muted-foreground">
@@ -381,7 +424,7 @@ export function DocumentDetailPage() {
       {document.storageLocation ? (
         <StorageLocationNotice location={document.storageLocation} />
       ) : (
-        <Preview id={id} mimeType={document.mimeType} />
+        <Preview id={id} mimeType={document.mimeType} storageDriver={document.storageDriver} queryClient={queryClient} />
       )}
 
       <Card>

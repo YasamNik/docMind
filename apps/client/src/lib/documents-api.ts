@@ -22,6 +22,9 @@ export type DocumentRow = {
   name: string;
   mimeType: string | null;
   sizeBytes: number | null;
+  // Which storage driver holds the file. Only needed to attribute a file fetch failure
+  // to the right driver when the storage it lives on needs reauthorizing.
+  storageDriver: string;
   extractionStatus: "pending" | "processing" | "done" | "failed";
   extractionError: string | null;
   categoryId: string | null;
@@ -94,6 +97,22 @@ export const documentsApi = {
   },
   fileUrl(id: string, download = false) {
     return `/api/documents/${id}/file${download ? "?download=1" : ""}`;
+  },
+  // The preview renders the file url directly in an img or iframe, so a failed load
+  // never reaches api.ts's error handling. This is the diagnostic used only after that
+  // load already failed, to learn why without ever buffering the file body itself.
+  async fileErrorCode(id: string): Promise<string | null> {
+    const res = await fetch(`/api/documents/${id}/file`, { credentials: "include" });
+    if (res.ok) {
+      await res.body?.cancel();
+      return null;
+    }
+    try {
+      const body = (await res.json()) as { error?: { code?: string } };
+      return body.error?.code ?? null;
+    } catch {
+      return null;
+    }
   },
   async bulkDelete(documentIds: string[]) {
     return api.json<{ count: number }>("POST", "/api/documents/bulk/delete", { documentIds });

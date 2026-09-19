@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StorageTab } from "./StorageTab";
 import type { StorageDriverSummary, StorageTestResult } from "@/lib/storage-api";
 import type { ResolvedSetting } from "@/lib/settings-api";
+import { markStorageReauthRequired } from "@/lib/storage-reauth";
 
 afterEach(() => cleanup());
 
@@ -106,7 +107,7 @@ function renderStorageTab() {
       <StorageTab />
     </QueryClientProvider>,
   );
-  return { ...result, invalidateSpy };
+  return { ...result, invalidateSpy, queryClient };
 }
 
 describe("StorageTab", () => {
@@ -279,6 +280,53 @@ describe("StorageTab", () => {
         "storage.googleDrive.refreshToken": null,
         "storage.googleDrive.accountEmail": null,
       }));
+    });
+
+    it("shows a reconnect action for a connected driver flagged as needing reauthorization", async () => {
+      listDrivers.mockResolvedValueOnce([localDriver(), googleDriveDriver({ accountEmail: "someone@example.com" })]);
+      listSettings.mockResolvedValueOnce(googleDriveSettingsConnected);
+      const { queryClient } = renderStorageTab();
+      await screen.findByText("Active");
+      markStorageReauthRequired(queryClient, "googleDrive");
+
+      fireEvent.click(screen.getByRole("button", { name: /Google Drive/i }));
+
+      expect(await screen.findByText(/needs reconnecting/i)).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Reconnect" })).toHaveAttribute(
+        "href",
+        "/api/storage/drivers/googleDrive/connect",
+      );
+      // Still connected: reconnecting is offered alongside the existing connection, not
+      // instead of it.
+      expect(screen.getByText(/someone@example.com/)).toBeInTheDocument();
+    });
+
+    it("does not show a reconnect action for a connected driver nothing has flagged", async () => {
+      listDrivers.mockResolvedValueOnce([localDriver(), googleDriveDriver({ accountEmail: "someone@example.com" })]);
+      listSettings.mockResolvedValueOnce(googleDriveSettingsConnected);
+      renderStorageTab();
+      await screen.findByText("Active");
+
+      fireEvent.click(screen.getByRole("button", { name: /Google Drive/i }));
+      await screen.findByText(/someone@example.com/);
+
+      expect(screen.queryByText(/needs reconnecting/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Reconnect" })).not.toBeInTheDocument();
+    });
+
+    it("clears the reconnect state once the Test button succeeds again", async () => {
+      listDrivers.mockResolvedValueOnce([localDriver(), googleDriveDriver({ accountEmail: "someone@example.com" })]);
+      listSettings.mockResolvedValueOnce(googleDriveSettingsConnected);
+      const { queryClient } = renderStorageTab();
+      await screen.findByText("Active");
+      markStorageReauthRequired(queryClient, "googleDrive");
+      fireEvent.click(screen.getByRole("button", { name: /Google Drive/i }));
+      await screen.findByText(/needs reconnecting/i);
+
+      fireEvent.click(screen.getByRole("button", { name: "Test" }));
+
+      await waitFor(() => expect(screen.queryByText(/needs reconnecting/i)).not.toBeInTheDocument());
+      expect(screen.queryByRole("link", { name: "Reconnect" })).not.toBeInTheDocument();
     });
 
     it("hides the local driver's oauth setup entirely", async () => {

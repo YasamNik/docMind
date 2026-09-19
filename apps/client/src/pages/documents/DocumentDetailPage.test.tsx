@@ -39,6 +39,7 @@ const documentDetail = {
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
   storageLocation: null as { label: string; url?: string } | null,
+  storageDriver: "local",
 };
 
 const getMock = vi.fn(async () => documentDetail);
@@ -46,11 +47,13 @@ const setCategoryMock = vi.fn(async (_id: string, categoryId: string | null) => 
 const addTagMock = vi.fn(async (_id: string, _tagId: string) => [...documentDetail.tags, { id: "tag_2", name: "Bills", color: null, auto: false, manual: true }]);
 const removeTagMock = vi.fn(async (_id: string, _tagId: string) => []);
 const acceptTitleMock = vi.fn(async (_id: string) => ({ ...documentDetail, name: documentDetail.suggestedTitle ?? documentDetail.name, suggestedTitle: null }));
+const fileErrorCodeMock = vi.fn(async (_id: string): Promise<string | null> => null);
 
 vi.mock("@/lib/documents-api", () => ({
   documentsApi: {
     get: () => getMock(),
     fileUrl: (id: string, download = false) => `/api/documents/${id}/file${download ? "?download=1" : ""}`,
+    fileErrorCode: (id: string) => fileErrorCodeMock(id),
     rename: vi.fn(),
     remove: vi.fn(),
     reextract: vi.fn(),
@@ -97,7 +100,7 @@ function renderPage() {
       </QueryClientProvider>
     </MemoryRouter>,
   );
-  return { invalidateSpy };
+  return { invalidateSpy, queryClient };
 }
 
 describe("DocumentDetailPage document date", () => {
@@ -165,6 +168,50 @@ describe("DocumentDetailPage storage location", () => {
 
     expect(await screen.findByText("Rent")).toBeInTheDocument();
     expect(screen.getByText("some text")).toBeInTheDocument();
+  });
+});
+
+describe("DocumentDetailPage file access", () => {
+  afterEach(() => {
+    getMock.mockImplementation(async () => documentDetail);
+    fileErrorCodeMock.mockReset().mockResolvedValue(null);
+  });
+
+  it("shows a reconnect message instead of a broken image when storage needs reauthorizing", async () => {
+    getMock.mockImplementationOnce(async () => ({ ...documentDetail, mimeType: "image/png" }));
+    fileErrorCodeMock.mockResolvedValueOnce("storage.reauth_required");
+    renderPage();
+    const image = await screen.findByAltText("Preview");
+
+    fireEvent.error(image);
+
+    expect(await screen.findByText(/needs to be reconnected/i)).toBeInTheDocument();
+    expect(fileErrorCodeMock).toHaveBeenCalledWith("doc_1");
+    expect(screen.queryByAltText("Preview")).not.toBeInTheDocument();
+  });
+
+  it("marks the document's storage driver as needing reauthorization", async () => {
+    getMock.mockImplementationOnce(async () => ({ ...documentDetail, mimeType: "image/png" }));
+    fileErrorCodeMock.mockResolvedValueOnce("storage.reauth_required");
+    const { queryClient } = renderPage();
+    const image = await screen.findByAltText("Preview");
+
+    fireEvent.error(image);
+    await screen.findByText(/needs to be reconnected/i);
+
+    expect(queryClient.getQueryData(["storage-reauth", "local"])).toBe(true);
+  });
+
+  it("leaves the preview as is when the image fails for an unrelated reason", async () => {
+    getMock.mockImplementationOnce(async () => ({ ...documentDetail, mimeType: "image/png" }));
+    fileErrorCodeMock.mockResolvedValueOnce(null);
+    renderPage();
+    const image = await screen.findByAltText("Preview");
+
+    fireEvent.error(image);
+
+    await waitFor(() => expect(fileErrorCodeMock).toHaveBeenCalledWith("doc_1"));
+    expect(screen.queryByText(/needs to be reconnected/i)).not.toBeInTheDocument();
   });
 });
 
