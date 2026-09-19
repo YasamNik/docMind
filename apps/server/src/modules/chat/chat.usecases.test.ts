@@ -278,3 +278,83 @@ describe("chat service, answerFromDocuments", () => {
     expect(afterError[1]?.error).toBe("boom");
   });
 });
+
+describe("chat service, the pending tool call column", () => {
+  it("remembers one pending tool call on a session and reads it back", async () => {
+    const { t, userId } = await setup();
+    const session = await t.services.chatService.createSession({ userId });
+
+    await t.services.chatService.setPendingToolCall({ userId, sessionId: session.id, value: "prop_a" });
+
+    expect(await t.services.chatService.readPendingToolCall({ userId, sessionId: session.id })).toBe("prop_a");
+  });
+
+  it("clears it only for the caller that read that exact value", async () => {
+    const { t, userId } = await setup();
+    const session = await t.services.chatService.createSession({ userId });
+    await t.services.chatService.setPendingToolCall({ userId, sessionId: session.id, value: "prop_a" });
+
+    const first = await t.services.chatService.clearPendingToolCall({ userId, sessionId: session.id, expected: "prop_a" });
+    expect(first).toBe(true);
+
+    const second = await t.services.chatService.clearPendingToolCall({ userId, sessionId: session.id, expected: "prop_a" });
+    expect(second).toBe(false);
+
+    expect(await t.services.chatService.readPendingToolCall({ userId, sessionId: session.id })).toBeNull();
+  });
+
+  it("refuses to clear a pending call that has already been replaced", async () => {
+    const { t, userId } = await setup();
+    const session = await t.services.chatService.createSession({ userId });
+    await t.services.chatService.setPendingToolCall({ userId, sessionId: session.id, value: "prop_a" });
+    await t.services.chatService.setPendingToolCall({ userId, sessionId: session.id, value: "prop_b" });
+
+    const cleared = await t.services.chatService.clearPendingToolCall({ userId, sessionId: session.id, expected: "prop_a" });
+
+    expect(cleared).toBe(false);
+    expect(await t.services.chatService.readPendingToolCall({ userId, sessionId: session.id })).toBe("prop_b");
+  });
+
+  it("returns the id of the assistant message it appended", async () => {
+    const { t, userId } = await setup();
+    const session = await t.services.chatService.createSession({ userId });
+
+    const messageId = await t.services.chatService.appendAssistantMessage({ userId, sessionId: session.id, content: "Save that as a note?" });
+
+    const messages = await t.services.chatService.listMessages({ userId, sessionId: session.id });
+    expect(messages.some((message) => message.id === messageId)).toBe(true);
+  });
+
+  it("keeps the pending call out of every session the API returns", async () => {
+    const { t, userId } = await setup();
+    const session = await t.services.chatService.createSession({ userId });
+    await t.services.chatService.setPendingToolCall({ userId, sessionId: session.id, value: "prop_a" });
+
+    const fetched = await t.services.chatService.getSession({ userId, sessionId: session.id });
+    expect(fetched).not.toHaveProperty("pendingToolCall");
+
+    const list = await t.services.chatService.listSessions(userId);
+    expect(list.find((s) => s.id === session.id)).not.toHaveProperty("pendingToolCall");
+
+    const created = await t.services.chatService.createSession({ userId });
+    expect(created).not.toHaveProperty("pendingToolCall");
+  });
+
+  it("rejects a pending write against another user's session", async () => {
+    const { t, userId } = await setup();
+    const session = await t.services.chatService.createSession({ userId });
+    const otherUserId = "user_other";
+
+    await expectAppError(
+      () => t.services.chatService.setPendingToolCall({ userId: otherUserId, sessionId: session.id, value: "prop_a" }),
+      "chat.session_not_found",
+    );
+  });
+
+  it("reads null for a session that has never had one", async () => {
+    const { t, userId } = await setup();
+    const session = await t.services.chatService.createSession({ userId });
+
+    expect(await t.services.chatService.readPendingToolCall({ userId, sessionId: session.id })).toBeNull();
+  });
+});

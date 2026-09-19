@@ -120,6 +120,13 @@
       "when": 1789763164561,
       "tag": "0016_add_document_types",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1789853192800,
+      "tag": "0017_add_pending_tool_call",
+      "breakpoints": true
     }
   ]
 }

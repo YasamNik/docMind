@@ -37,6 +37,36 @@ export function createChatRepository({ db }: { db: Database }) {
       await db.update(chatSessionsTable).set({ updatedAt }).where(eq(chatSessionsTable.id, sessionId));
     },
 
+    async setPendingToolCall({ sessionId, value }: { sessionId: string; value: string | null }): Promise<void> {
+      await db.update(chatSessionsTable).set({ pendingToolCall: value }).where(eq(chatSessionsTable.id, sessionId));
+    },
+
+    // One conditional update: clears the column only where it still holds the exact
+    // string this caller read. rowsAffected tells the caller whether it won the race,
+    // the same house pattern updateTriageStatusBatch uses in documents.repository.ts.
+    // The comparison is on the raw string; this repository never looks inside it.
+    async clearPendingToolCallIfMatches({
+      userId,
+      sessionId,
+      expected,
+    }: {
+      userId: string;
+      sessionId: string;
+      expected: string;
+    }): Promise<boolean> {
+      const result = await db
+        .update(chatSessionsTable)
+        .set({ pendingToolCall: null })
+        .where(
+          and(
+            eq(chatSessionsTable.id, sessionId),
+            eq(chatSessionsTable.userId, userId),
+            eq(chatSessionsTable.pendingToolCall, expected),
+          ),
+        );
+      return result.rowsAffected > 0;
+    },
+
     async insertMessage(message: NewChatMessage): Promise<void> {
       await db.insert(chatMessagesTable).values(message);
     },

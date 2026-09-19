@@ -11,6 +11,10 @@ export const chatSessionsTable = sqliteTable(
     // Nullable JSON array of document ids. Null means the chat is scoped to all
     // documents. Set at session creation and immutable afterward.
     documentScope: text("document_scope"),
+    // Nullable JSON envelope of one proposal the assistant is waiting on the user to
+    // answer (see pendingToolCallSchema in assistant.schemas.ts). This module treats it
+    // as an opaque string; the assistant module owns its shape and meaning.
+    pendingToolCall: text("pending_tool_call"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },

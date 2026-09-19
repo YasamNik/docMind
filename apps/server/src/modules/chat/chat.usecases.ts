@@ -14,7 +14,7 @@ import {
   type ChatPromptMessage,
 } from "./chat.models.js";
 import { createChatRepository } from "./chat.repository.js";
-import type { ChatMessage, ChatSession, Citation, NewChatMessage, NewChatSession } from "./chat.types.js";
+import type { ChatMessage, ChatSession, Citation, NewChatMessage, NewChatSession, PendingProposal } from "./chat.types.js";
 
 // Chunks retrieved for RAG context per message. Kept local to this module: the
 // remaining chat.models.ts constants (MAX_CONTEXT_CHARS, MAX_HISTORY_MESSAGES) cap the
@@ -35,8 +35,12 @@ function parseJsonArray<T>(raw: string | null): T[] | null {
   }
 }
 
+// Strips the pending proposal column from anything the chat API returns. A raw
+// internal JSON blob would be a second, unparsed door onto the same state the
+// assistant module's own typed routes already expose.
 function presentSession(session: ChatSession) {
-  return { ...session, documentScope: parseJsonArray<string>(session.documentScope) };
+  const { pendingToolCall: _pendingToolCall, ...rest } = session;
+  return { ...rest, documentScope: parseJsonArray<string>(session.documentScope) };
 }
 
 function presentMessage(message: ChatMessage) {
@@ -46,7 +50,11 @@ function presentMessage(message: ChatMessage) {
 export type ChatStreamEvent =
   | { event: "token"; data: string }
   | { event: "done"; data: { citations: Citation[] } }
-  | { event: "error"; data: { message: string } };
+  | { event: "error"; data: { message: string } }
+  // Carries a proposal the assistant is waiting on the user to answer. The shape ships
+  // in this task; nothing emits it yet, since chat.sendMessage never calls a tool. The
+  // assistant's own runTurn is the emitter, once plan 5 moves the app's chat page onto it.
+  | { event: "proposal"; data: PendingProposal };
 
 export function createChatService({
   db,
@@ -95,7 +103,10 @@ export function createChatService({
   // Appends the assistant's own turn. citations are stored as json when there are
   // any, null otherwise; error is stored as given, or null on a normal answer. This
   // is the one place an assistant message is ever written, whether the turn ended
-  // in an answer or in a caught failure.
+  // in an answer or in a caught failure. Returns the new message's id: a proposal
+  // anchors itself to the turn that carries it (see setPendingToolCall below and
+  // pendingToolCallSchema in assistant.schemas.ts), and nothing else reads this
+  // return today, so adding it breaks no caller.
   async function appendAssistantMessage({
     sessionId,
     content,
@@ -107,9 +118,10 @@ export function createChatService({
     content: string;
     citations?: Citation[];
     error?: string | null;
-  }): Promise<void> {
+  }): Promise<string> {
+    const id = newMessageId();
     await repository.insertMessage({
-      id: newMessageId(),
+      id,
       sessionId,
       role: "assistant",
       content,
@@ -117,6 +129,7 @@ export function createChatService({
       error,
       createdAt: nowIso(),
     });
+    return id;
   }
 
   // The retrieval and generation half of the RAG flow, with nothing persisted:
@@ -184,6 +197,7 @@ export function createChatService({
         userId,
         title: null,
         documentScope: documentScope ? JSON.stringify(documentScope) : null,
+        pendingToolCall: null,
         createdAt: now,
         updatedAt: now,
       } satisfies NewChatSession;
@@ -215,6 +229,31 @@ export function createChatService({
     appendUserMessage,
     appendAssistantMessage,
     answerFromDocuments,
+
+    // Sets, reads and conditionally clears the pending proposal column, treating its
+    // value as an opaque string throughout: this module never parses it, the assistant
+    // module owns what it means (Decision 7 in the assistant confirmation plan).
+    // setPendingToolCall and readPendingToolCall resolve the session first, so a session
+    // id belonging to someone else is chat.session_not_found rather than a silent miss.
+    // Neither write touches updatedAt: a proposal is not a new message in the session
+    // list's eyes, and the turn that made it already touched the row.
+    async setPendingToolCall({ userId, sessionId, value }: { userId: string; sessionId: string; value: string }): Promise<void> {
+      await requireSession(userId, sessionId);
+      await repository.setPendingToolCall({ sessionId, value });
+    },
+
+    async readPendingToolCall({ userId, sessionId }: { userId: string; sessionId: string }): Promise<string | null> {
+      const session = await requireSession(userId, sessionId);
+      return session.pendingToolCall;
+    },
+
+    // One conditional update, no resolve-first check of its own: the where clause
+    // already scopes by userId, and a mismatch on any part of it, wrong user, wrong
+    // session, or a value that has already moved on, reads the same way, as false. True
+    // means this caller is the one that cleared it.
+    async clearPendingToolCall({ userId, sessionId, expected }: { userId: string; sessionId: string; expected: string }): Promise<boolean> {
+      return repository.clearPendingToolCallIfMatches({ userId, sessionId, expected });
+    },
 
     // The core RAG flow. Saves the user's turn immediately, then returns an async
     // generator of SSE-shaped events: token pieces as they stream in, then a final
