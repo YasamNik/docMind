@@ -245,6 +245,14 @@ export const googleDriveDriverDefinition: StorageDriverDefinition = {
         link: "https://console.cloud.google.com/apis/credentials/consent",
       },
       {
+        text: "On the Audience page, press Publish app. Until you do, Google blocks every account that is not "
+          + "on the tester list, including your own, with \"Access blocked: has not completed the Google "
+          + "verification process\". Publishing takes effect immediately and needs no review, because DocMind "
+          + "only asks for the drive.file scope, which Google treats as non sensitive. Adding yourself under "
+          + "Test users works too, but then Google drops the connection every seven days.",
+        link: "https://console.cloud.google.com/auth/audience",
+      },
+      {
         text: "Create credentials, then OAuth client ID, application type Web application. Name it anything. "
           + "Leave Authorized JavaScript origins empty. Under Authorized redirect URIs press Add URI and paste "
           + "the address shown at the top of this page, exactly as it is. Then press Create.",
@@ -259,8 +267,8 @@ export const googleDriveDriverDefinition: StorageDriverDefinition = {
       "Connect from the machine running DocMind if you can. A tunnel address changes whenever the tunnel "
         + "restarts, and Google needs the exact address registered before you press Connect. Once connected, "
         + "restarts no longer matter.",
-      "While the consent screen is in testing mode Google drops the connection after seven days. Publishing it "
-        + "stops that, and can wait until you are tired of reconnecting.",
+      "If Connect fails with Error 403 access_denied, the consent screen is still in testing mode. Publish it, "
+        + "or add your own address under Test users.",
       "DocMind asks for the drive.file scope, which means it can only see files it created. Everything already "
         + "in your Drive stays invisible to it.",
     ],
