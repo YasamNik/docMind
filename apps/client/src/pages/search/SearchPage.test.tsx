@@ -2,9 +2,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SearchResult } from "@/lib/search-api";
 import { SearchPage } from "./SearchPage";
 
-const searchMock = vi.fn(async (_query: string, _limit?: number) => ({
+// Annotated rather than inferred: without this the first fixture's literal source
+// narrows the mock's type, and a later fixture with a different source stops compiling.
+const searchMock = vi.fn(async (_query: string, _limit?: number): Promise<{ results: SearchResult[]; query: string }> => ({
   results: [
     {
       documentId: "doc_1",
@@ -12,7 +15,7 @@ const searchMock = vi.fn(async (_query: string, _limit?: number) => ({
       chunkText: "The monthly rent is due on the first of the month.",
       chunkIndex: 0,
       score: 0.87,
-      source: "hybrid" as const,
+      source: "hybrid",
       storageDriver: "local",
     },
   ],
@@ -87,7 +90,7 @@ describe("SearchPage", () => {
           chunkText: "The old lease is stored elsewhere.",
           chunkIndex: 0,
           score: 0.7,
-          source: "keyword" as const,
+          source: "keyword",
           storageDriver: "s3",
         },
       ],
