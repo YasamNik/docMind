@@ -1,0 +1,25 @@
+From: Vendor <billing@vendor.example>
+To: Accounts Payable <ap@example.com>
+Subject: Two receipts
+Date: Fri, 09 Jan 2026 09:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="MIXED-DUPFN"
+
+--MIXED-DUPFN
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+Two receipts attached, same name, different purchases.
+--MIXED-DUPFN
+Content-Type: application/pdf; name="receipt.pdf"
+Content-Disposition: attachment; filename="receipt.pdf"
+Content-Transfer-Encoding: base64
+
+UkVDRUlQVC1DT05URU5ULU9ORS1NQVJLRVI=
+--MIXED-DUPFN
+Content-Type: application/pdf; name="receipt.pdf"
+Content-Disposition: attachment; filename="receipt.pdf"
+Content-Transfer-Encoding: base64
+
+UkVDRUlQVC1DT05URU5ULVRXTy1NQVJLRVI=
+--MIXED-DUPFN--

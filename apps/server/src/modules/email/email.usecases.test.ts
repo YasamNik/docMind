@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createError } from "../../shared/errors/errors.js";
 import { createTestDatabase } from "../../shared/test/database.test-utils.js";
 import { createDocumentsService } from "../documents/documents.usecases.js";
 import { createSettingsRegistry } from "../settings/settings.registry.js";
@@ -33,6 +34,11 @@ function createFakeMailbox({ raw = {} }: { raw?: Record<number, Buffer> } = {}) 
   const movedMessages: { uid: number; from: string; destination: string }[] = [];
   let closed = false;
   let fetchOverride: ((uid: number) => Promise<{ uid: number; source: Readable }>) | undefined;
+  let sizeOverride: ((uid: number) => Promise<number | undefined>) | undefined;
+  // Fails the next call to moveMessage only, then returns to moving messages normally,
+  // so a test can put a single connection blip right after processMessage has already
+  // committed a message's documents without losing the fake's own default move logic.
+  let failNextMoveOnce = false;
 
   function messagesIn(folder: string): number[] {
     return folders.get(folder) ?? [];
@@ -47,6 +53,10 @@ function createFakeMailbox({ raw = {} }: { raw?: Record<number, Buffer> } = {}) 
       return messagesIn(folder)
         .slice(0, limit)
         .map((uid) => ({ uid }));
+    },
+    async messageSize({ uid }) {
+      if (sizeOverride) return sizeOverride(uid);
+      return raw[uid]?.length;
     },
     async fetchMessage({ uid }) {
       fetchedUids.push(uid);
@@ -65,6 +75,10 @@ function createFakeMailbox({ raw = {} }: { raw?: Record<number, Buffer> } = {}) 
       return { uid, source };
     },
     async moveMessage({ folder, uid, destination }) {
+      if (failNextMoveOnce) {
+        failNextMoveOnce = false;
+        throw createError({ code: "email.imap_error", message: "IMAP messageMove to imap.example.com: the connection was refused", status: 502 });
+      }
       const current = messagesIn(folder);
       const index = current.indexOf(uid);
       if (index === -1) throw new Error(`uid ${uid} is not in ${folder}`);
@@ -92,6 +106,12 @@ function createFakeMailbox({ raw = {} }: { raw?: Record<number, Buffer> } = {}) 
     isClosed: () => closed,
     setFetchOverride: (fn: typeof fetchOverride) => {
       fetchOverride = fn;
+    },
+    setSizeOverride: (fn: typeof sizeOverride) => {
+      sizeOverride = fn;
+    },
+    failNextMove: () => {
+      failNextMoveOnce = true;
     },
   };
 }
@@ -206,6 +226,34 @@ describe("email service", () => {
     expect(mailbox.ensuredFolders).toContain("DocMind/Failed");
   });
 
+  it("moves an oversized message to Failed without ever downloading it", async () => {
+    await configureImap({ "email.imap.maxMessageSizeMb": 1 });
+    const mailbox = createFakeMailbox();
+    mailbox.seed("DocMind", [1]);
+    mailbox.setSizeOverride(async () => 2 * 1024 * 1024);
+    const email = buildService(async () => mailbox.client, { messageRetryAttempts: 1 });
+
+    await email.runOnce();
+
+    expect(mailbox.fetchedUids).toEqual([]);
+    expect(mailbox.messagesIn("DocMind/Failed")).toEqual([1]);
+    expect(await documentsService.list({ userId })).toHaveLength(0);
+  });
+
+  it("still processes a message at or under the configured size", async () => {
+    await configureImap({ "email.imap.maxMessageSizeMb": 1 });
+    const raw = await fixtureBuffer("plain-text-only.eml");
+    const mailbox = createFakeMailbox({ raw: { 1: raw } });
+    mailbox.seed("DocMind", [1]);
+    mailbox.setSizeOverride(async () => raw.length);
+    const email = buildService(async () => mailbox.client);
+
+    await email.runOnce();
+
+    expect(mailbox.fetchedUids).toEqual([1]);
+    expect(mailbox.messagesIn("DocMind/Done")).toEqual([1]);
+  });
+
   it("retries a failing message a bounded number of times, then moves it to Failed", async () => {
     await configureImap();
     const mailbox = createFakeMailbox();
@@ -257,6 +305,67 @@ describe("email service", () => {
     expect(await documentsService.list({ userId })).toHaveLength(1);
   });
 
+  // Regression test for treating a dropped connection as a bad message. Unlike the
+  // "poisoned" tests above, which throw a plain Error to stand for something wrong
+  // with the message itself, this throws the same AppError email.client.ts actually
+  // produces for a real IMAP failure, so it must be read as a connection problem, not
+  // charged to uid 1, and must stop the batch before uid 2 is ever touched.
+  it("abandons the batch on a dropped connection, without charging the in-flight message a retry", async () => {
+    await configureImap();
+    const goodRaw = await fixtureBuffer("plain-text-only.eml");
+    const mailbox = createFakeMailbox({ raw: { 1: goodRaw, 2: goodRaw } });
+    mailbox.seed("DocMind", [1, 2]);
+    mailbox.setFetchOverride(async (uid) => {
+      if (uid === 1) {
+        throw createError({ code: "email.imap_error", message: "IMAP download to imap.example.com: the connection was refused", status: 502 });
+      }
+      return { uid, source: new Readable({ read() { this.push(goodRaw); this.push(null); } }) };
+    });
+    const email = buildService(async () => mailbox.client, { messageRetryAttempts: 1 });
+
+    await expect(email.runOnce()).rejects.toThrow(/connection was refused/);
+
+    expect(mailbox.messagesIn("DocMind")).toEqual([1, 2]);
+    expect(mailbox.messagesIn("DocMind/Failed")).toEqual([]);
+    expect(mailbox.messagesIn("DocMind/Done")).toEqual([]);
+    // uid 2 was never even reached: the batch stopped at the connection failure.
+    expect(mailbox.fetchedUids).toEqual([1]);
+
+    // The connection recovers on the next cycle, and both messages that were never
+    // touched, including the one that hit the drop, go through cleanly.
+    mailbox.setFetchOverride(undefined);
+    await email.runOnce();
+
+    expect(mailbox.messagesIn("DocMind/Done")).toEqual([1, 2]);
+    expect(mailbox.messagesIn("DocMind/Failed")).toEqual([]);
+  });
+
+  // Regression test for the safety the spec calls out: documents are committed before
+  // the move to Done, so a crash between the two must leave the message to be handled
+  // again rather than losing it, and the content-hash dedupe must make that replay
+  // produce no duplicates.
+  it("does not duplicate documents when the move to Done fails right after the documents are committed", async () => {
+    await configureImap();
+    const raw = await fixtureBuffer("attachment-with-note.eml");
+    const mailbox = createFakeMailbox({ raw: { 1: raw } });
+    mailbox.seed("DocMind", [1]);
+    mailbox.failNextMove();
+    const email = buildService(async () => mailbox.client);
+
+    await expect(email.runOnce()).rejects.toThrow(/connection was refused/);
+
+    expect(mailbox.messagesIn("DocMind")).toEqual([1]);
+    expect(mailbox.messagesIn("DocMind/Done")).toEqual([]);
+    const afterFirstCycle = await documentsService.list({ userId });
+    expect(afterFirstCycle).toHaveLength(2);
+
+    await email.runOnce();
+
+    expect(mailbox.messagesIn("DocMind/Done")).toEqual([1]);
+    const afterSecondCycle = await documentsService.list({ userId });
+    expect(afterSecondCycle).toHaveLength(2);
+  });
+
   it("takes a bounded batch, so a folder of thousands does not stall the process on its first run", async () => {
     await configureImap();
     const raw = await fixtureBuffer("plain-text-only.eml");
@@ -297,9 +406,50 @@ describe("email service", () => {
     await expect(email.runOnce()).resolves.toBeUndefined();
   });
 
+  it("waits the configured pollSeconds between cycles, not the constructor default", async () => {
+    await configureImap({ "email.imap.pollSeconds": 5 });
+    const mailbox = createFakeMailbox();
+    mailbox.seed("DocMind", []);
+    let calls = 0;
+    const email = buildService(
+      async () => {
+        calls += 1;
+        return mailbox.client;
+      },
+      // Deliberately far from the configured pollSeconds, so the assertions below can
+      // only pass if the setting, not this constructor default, drove the wait. A
+      // short shutdown timeout keeps the cleanup below from waiting out a real five
+      // seconds once the fake clock is gone and the loop's own pending wait can no
+      // longer be advanced.
+      { idleIntervalMs: 999_000, shutdownTimeoutMs: 50 },
+    );
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await email.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(calls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls).toBe(2);
+    } finally {
+      // Real timers first: stop()'s own shutdown race sets a real setTimeout, and the
+      // loop's already-pending wait was scheduled on the fake clock, which is now
+      // gone, so stop() can only ever resolve through its shutdown timeout here.
+      vi.useRealTimers();
+      await email.stop();
+    }
+  });
+
   it("returns from stop() even when a cycle is stuck", async () => {
     await configureImap();
     const client: ImapClient = {
+      async messageSize() {
+        return undefined;
+      },
       async listFolder() {
         return new Promise(() => {});
       },
@@ -331,6 +481,9 @@ describe("email service", () => {
     let closed = false;
     let pushedEverything = false;
     const client: ImapClient = {
+      async messageSize() {
+        return raw.length;
+      },
       async listFolder({ limit }) {
         return [{ uid: 1 }].slice(0, limit);
       },

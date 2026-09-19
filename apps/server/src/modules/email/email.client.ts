@@ -20,6 +20,7 @@ export type ImapConnection = {
   mailboxCreate(path: string): Promise<unknown>;
   mailboxOpen(path: string): Promise<unknown>;
   search(query: { all: boolean }, options?: { uid?: boolean }): Promise<number[] | false | undefined>;
+  fetchOne(range: number, query: { size: boolean }, options?: { uid?: boolean }): Promise<{ size?: number } | false | undefined>;
   download(range: number, part?: string, options?: { uid?: boolean }): Promise<{ content: Readable }>;
   messageMove(range: number, destination: string, options?: { uid?: boolean }): Promise<unknown>;
   logout(): Promise<void>;
@@ -76,6 +77,13 @@ function imapError({ operation, host, reason }: { operation: string; host: strin
 // of bug the Telegram review found in a getUpdates call whose own timeout parameter
 // bounded nothing on this end. This wrapper bounds the wait regardless of what the
 // underlying library does, win or lose the race.
+//
+// It bounds the promise returned to the caller, not the underlying imapflow operation
+// itself: on a timeout this function rejects and moves on, but the socket call behind
+// it is not cancelled and keeps running until imapflow's own timeout, if any, gives
+// up on it. A hung server can still make one cycle take a while for this reason, even
+// though stop() itself stays responsive because it never waits on a cycle past its own
+// shutdown deadline.
 function withTimeout<T>(promise: Promise<T>, { timeoutMs, operation, host }: { timeoutMs: number; operation: string; host: string }): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(imapError({ operation, host, reason: "timed out" })), timeoutMs);
@@ -136,6 +144,21 @@ export async function createImapClient({
     return (uids || []).slice(0, limit).map((uid) => ({ uid }));
   }
 
+  // The size IMAP reports for a message, read with a plain FETCH rather than a
+  // download, so the caller can decide whether a message is worth downloading at all
+  // before it commits to holding the whole thing in memory. Returns undefined if the
+  // server does not answer with a size, which callers should treat as "unknown" rather
+  // than as license to skip a message that might in fact be oversized.
+  async function messageSize({ folder, uid }: { folder: string; uid: number }): Promise<number | undefined> {
+    await withTimeout(connection.mailboxOpen(folder), { timeoutMs: commandTimeoutMs, operation: "mailboxOpen", host });
+    const fetched = await withTimeout(connection.fetchOne(uid, { size: true }, { uid: true }), {
+      timeoutMs: commandTimeoutMs,
+      operation: "fetchOne",
+      host,
+    });
+    return fetched ? fetched.size : undefined;
+  }
+
   async function fetchMessage({ folder, uid }: { folder: string; uid: number }): Promise<ImapFetchedMessage> {
     await withTimeout(connection.mailboxOpen(folder), { timeoutMs: commandTimeoutMs, operation: "mailboxOpen", host });
     const downloaded = await withTimeout(connection.download(uid, undefined, { uid: true }), {
@@ -173,7 +196,7 @@ export async function createImapClient({
     }
   }
 
-  return { listFolder, fetchMessage, moveMessage, ensureFolder, close };
+  return { listFolder, messageSize, fetchMessage, moveMessage, ensureFolder, close };
 }
 
 export type ImapClient = Awaited<ReturnType<typeof createImapClient>>;

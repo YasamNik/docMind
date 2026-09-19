@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
 import { simpleParser } from "mailparser";
-import { isAppError } from "../../shared/errors/errors.js";
+import { createError, isAppError } from "../../shared/errors/errors.js";
 import { createLogger, type Logger } from "../../shared/logger/logger.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
@@ -18,6 +18,7 @@ const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_MESSAGE_RETRY_ATTEMPTS = 3;
 const DEFAULT_IDLE_INTERVAL_MS = 60_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000;
+const BYTES_PER_MB = 1024 * 1024;
 // The connection test cares about the true count waiting in the folder, not a
 // processing-sized slice of it, so it asks listFolder for everything rather than the
 // batchSize the loop itself uses.
@@ -26,10 +27,29 @@ const TEST_FOLDER_LIMIT = Number.MAX_SAFE_INTEGER;
 export type EmailClientFactory = (config: { host: string; port: number; user: string; password: string }) => Promise<ImapClient>;
 export type EmailTestResult = { ok: boolean; message: string };
 
-type ConnectionConfig = { host: string; port: number; user: string; password: string; folder: string; doneFolder: string; failedFolder: string };
+type ConnectionConfig = {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  folder: string;
+  doneFolder: string;
+  failedFolder: string;
+  maxMessageSizeBytes: number;
+};
 
 function backoffDelayMs(attempt: number): number {
   return Math.min(1000 * 2 ** Math.max(0, attempt - 1), 60000);
+}
+
+// A fetch or a move that failed because the connection itself dropped, read the same
+// narrow way imapFailureReason reads it below: every failure email.client.ts's own
+// calls produce is rebuilt into this one error code, so this is the one honest way to
+// tell "the socket went away" apart from "mailparser or the upload path did not like
+// this particular message". A plain Error, the kind a bad message actually throws, is
+// never mistaken for this.
+function isConnectionFailure(error: unknown): boolean {
+  return isAppError(error) && error.code === "email.imap_error";
 }
 
 function joinWithAnd(items: string[]): string {
@@ -116,7 +136,8 @@ export function createEmailService({
     const folder = (await settingsService.get<string>(userId, "email.imap.folder")) ?? "DocMind";
     const doneFolder = (await settingsService.get<string>(userId, "email.imap.doneFolder")) ?? "DocMind/Done";
     const failedFolder = (await settingsService.get<string>(userId, "email.imap.failedFolder")) ?? "DocMind/Failed";
-    return { host, port, user, password, folder, doneFolder, failedFolder };
+    const maxMessageSizeMb = (await settingsService.get<number>(userId, "email.imap.maxMessageSizeMb")) ?? 25;
+    return { host, port, user, password, folder, doneFolder, failedFolder, maxMessageSizeBytes: maxMessageSizeMb * BYTES_PER_MB };
   }
 
   // Everything mailparser needs to know about one message, then the upload path takes
@@ -125,7 +146,35 @@ export function createEmailService({
   // function returns, so the connection this stream came from must not be closed
   // until well after that. Closing happens once, in runOnce, after every message in
   // the batch has gone through here.
-  async function processMessage({ userId, client, folder, uid }: { userId: string; client: ImapClient; folder: string; uid: number }): Promise<void> {
+  async function processMessage({
+    userId,
+    client,
+    folder,
+    uid,
+    maxMessageSizeBytes,
+  }: {
+    userId: string;
+    client: ImapClient;
+    folder: string;
+    uid: number;
+    maxMessageSizeBytes: number;
+  }): Promise<void> {
+    // Checked against what IMAP itself reports for the message, before any of it is
+    // downloaded. mailparser reads a whole message into memory before the upload path
+    // sees any of it, so this is the one place peak memory per message can actually be
+    // bounded; the upload path's own size cap runs too late to help here. A server
+    // that does not answer with a size leaves this unable to judge the message at
+    // all, so it lets it through rather than failing every message a server like that
+    // sends.
+    const size = await client.messageSize({ folder, uid });
+    if (typeof size === "number" && size > maxMessageSizeBytes) {
+      throw createError({
+        code: "email.message_too_large",
+        message: `Message is ${size} bytes, over the ${maxMessageSizeBytes} byte limit, and was not downloaded`,
+        status: 413,
+      });
+    }
+
     const fetched = await client.fetchMessage({ folder, uid });
     // keepCidLinks is not optional here: mailparser's default rewrites every cid:
     // reference in the html into a base64 data uri before documentsFromMail ever
@@ -159,12 +208,21 @@ export function createEmailService({
   // messageRetryAttempts is used up, move it to Failed so it stops being retried and
   // stops sitting at the front of every future batch ahead of mail that would
   // otherwise go through cleanly.
+  //
+  // That bad-message retry accounting only applies to a failure this message actually
+  // caused. A fetch or a move that failed because the connection itself dropped is not
+  // evidence against this uid, and every message behind it in the same batch would
+  // fail the exact same way for the exact same reason. Such a failure is rethrown
+  // untouched: it skips the retry count entirely and reaches runOnce's own catch,
+  // which abandons the rest of the batch and backs the whole cycle off, rather than
+  // one connection blip slowly walking a folder of good, unread mail into Failed.
   async function handleMessage({
     userId,
     client,
     folder,
     doneFolder,
     failedFolder,
+    maxMessageSizeBytes,
     uid,
   }: {
     userId: string;
@@ -172,13 +230,16 @@ export function createEmailService({
     folder: string;
     doneFolder: string;
     failedFolder: string;
+    maxMessageSizeBytes: number;
     uid: number;
   }): Promise<void> {
     try {
-      await processMessage({ userId, client, folder, uid });
+      await processMessage({ userId, client, folder, uid, maxMessageSizeBytes });
       messageAttempts.delete(uid);
       await client.moveMessage({ folder, uid, destination: doneFolder });
     } catch (error) {
+      if (isConnectionFailure(error)) throw error;
+
       const attempts = (messageAttempts.get(uid) ?? 0) + 1;
       const reason = (error as Error)?.message ?? String(error);
       if (attempts >= messageRetryAttempts) {
@@ -192,14 +253,25 @@ export function createEmailService({
     }
   }
 
+  // How long the loop waits between one cycle finishing and the next starting, absent
+  // a failure. Starts at the constructor default, which only ever governs a cycle
+  // before any user has been resolved; from the first cycle that reaches a real user
+  // onward, it tracks that user's own email.imap.pollSeconds, re-read every cycle the
+  // same way the credentials themselves are, so saving a new value takes effect on the
+  // very next wait rather than needing a restart.
+  let idleWaitMs = idleIntervalMs;
+
   async function runOnce(): Promise<void> {
     const userId = await getUserId();
     if (!userId) return;
 
+    const pollSeconds = await settingsService.get<number>(userId, "email.imap.pollSeconds");
+    if (typeof pollSeconds === "number" && pollSeconds > 0) idleWaitMs = pollSeconds * 1000;
+
     const connection = await resolveConnectionConfig(userId);
     if (!connection) return;
 
-    const { folder, doneFolder, failedFolder, ...credentials } = connection;
+    const { folder, doneFolder, failedFolder, maxMessageSizeBytes, ...credentials } = connection;
     const client = await clientFactory(credentials);
     try {
       await client.ensureFolder({ folder: doneFolder });
@@ -207,7 +279,7 @@ export function createEmailService({
 
       const messages = await client.listFolder({ folder, limit: batchSize });
       for (const { uid } of messages) {
-        await handleMessage({ userId, client, folder, doneFolder, failedFolder, uid });
+        await handleMessage({ userId, client, folder, doneFolder, failedFolder, maxMessageSizeBytes, uid });
       }
       await settingsService.setInternal(userId, "email.imap.lastError", "");
     } catch (error) {
@@ -235,7 +307,7 @@ export function createEmailService({
           logger.warn({ err: (error as Error)?.message ?? String(error), attempt }, "Email loop cycle failed");
         }
         if (!running) break;
-        const waitMs = attempt > 0 ? backoffDelayMs(attempt) : idleIntervalMs;
+        const waitMs = attempt > 0 ? backoffDelayMs(attempt) : idleWaitMs;
         await new Promise((resolve) => setTimeout(resolve, waitMs));
       }
     })();

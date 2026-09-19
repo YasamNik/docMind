@@ -100,4 +100,20 @@ describe("documentsFromMail", () => {
     expect(attachments[0]!.name).not.toContain("/");
     expect(attachments[0]!.name).not.toContain("..");
   });
+
+  it("falls back to a plain name for an attachment with no filename at all", async () => {
+    const parsed = await parseFixture("no-filename-attachment.eml");
+    const { attachments } = documentsFromMail(parsed);
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]!.name).toBe("attachment");
+    expect(attachments[0]!.content.toString("utf-8")).toBe("NO-FILENAME-ATTACHMENT-MARKER");
+  });
+
+  it("keeps two attachments that share the same filename as two separate documents", async () => {
+    const parsed = await parseFixture("duplicate-filenames.eml");
+    const { attachments } = documentsFromMail(parsed);
+    expect(attachments).toHaveLength(2);
+    expect(attachments.map((attachment) => attachment.name)).toEqual(["receipt.pdf", "receipt.pdf"]);
+    expect(attachments[0]!.content.equals(attachments[1]!.content)).toBe(false);
+  });
 });

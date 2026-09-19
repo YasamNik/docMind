@@ -92,6 +92,7 @@ a folder full of mail must never be stopped by one malformed message.
 | `email.imap.doneFolder` | no | defaults to `DocMind/Done` |
 | `email.imap.failedFolder` | no | defaults to `DocMind/Failed` |
 | `email.imap.pollSeconds` | no | defaults to 60 |
+| `email.imap.maxMessageSizeMb` | no | defaults to 25, see Attachment sizes below |
 | `email.imap.lastError` | internal | surfaced on the settings page |
 
 A Test action connects, lists the folder and reports what it found, so a wrong host or a
@@ -129,6 +130,11 @@ folder must exist before it can be watched.
 - **A folder with thousands of messages** would be ingested in one go the first time it is
   pointed at. The cycle takes a bounded batch per pass so the first run spreads out rather
   than stalling the process or the model budget.
-- **Attachment sizes.** A 50 MB attachment streams through the same upload path as any
-  file, but a mailbox full of them would fill the storage driver quickly. The upload path's
-  existing size cap applies unchanged.
+- **Attachment sizes.** This does not stream end to end. `mailparser` reads a whole
+  message, headers and every attachment, into memory before any of it reaches the
+  streaming upload path, so the upload path's own size cap runs too late to bound the
+  peak memory a message costs. `email.imap.maxMessageSizeMb` (default 25 MB) is the
+  actual cap: it is checked against the size IMAP itself reports for a message before
+  that message is downloaded at all, and a message over it is moved to Failed without
+  being fetched. Full streaming MIME parsing, so a message is never held whole in
+  memory, is a later change.

@@ -12,6 +12,7 @@ function createFakeConnection(overrides: Partial<ImapConnection> = {}): ImapConn
     mailboxCreate: vi.fn().mockResolvedValue(undefined),
     mailboxOpen: vi.fn().mockResolvedValue(undefined),
     search: vi.fn().mockResolvedValue([]),
+    fetchOne: vi.fn().mockResolvedValue({ size: 123 }),
     download: vi.fn().mockResolvedValue({ content: Readable.from(["body"]) }),
     messageMove: vi.fn().mockResolvedValue(undefined),
     logout: vi.fn().mockResolvedValue(undefined),
@@ -83,6 +84,27 @@ describe("createImapClient", () => {
 
     expect(connection.mailboxOpen).toHaveBeenCalledWith("DocMind");
     expect(messages).toEqual([{ uid: 1 }, { uid: 2 }, { uid: 3 }]);
+  });
+
+  it("reads a message's size without downloading it", async () => {
+    const connection = createFakeConnection({ fetchOne: vi.fn().mockResolvedValue({ size: 4096 }) });
+    const client = await createImapClient({ host: HOST, port: 993, user: "u", password: "p", connectionFactory: () => connection });
+
+    const size = await client.messageSize({ folder: "DocMind", uid: 9 });
+
+    expect(connection.mailboxOpen).toHaveBeenCalledWith("DocMind");
+    expect(connection.fetchOne).toHaveBeenCalledWith(9, { size: true }, { uid: true });
+    expect(connection.download).not.toHaveBeenCalled();
+    expect(size).toBe(4096);
+  });
+
+  it("reports an unknown size as undefined rather than guessing", async () => {
+    const connection = createFakeConnection({ fetchOne: vi.fn().mockResolvedValue(false) });
+    const client = await createImapClient({ host: HOST, port: 993, user: "u", password: "p", connectionFactory: () => connection });
+
+    const size = await client.messageSize({ folder: "DocMind", uid: 9 });
+
+    expect(size).toBeUndefined();
   });
 
   it("fetches a message as a stream without buffering it", async () => {

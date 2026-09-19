@@ -53,6 +53,16 @@ export const emailSettingDefinitions: SettingDefinition[] = [
     doc: "How often the watched folder is checked.",
   }),
   defineSetting({
+    key: "email.imap.maxMessageSizeMb",
+    schema: v.pipe(v.number(), v.integer(), v.minValue(1)),
+    default: 25,
+    // mailparser reads a whole message into memory before the upload path sees any of
+    // it, so this is what actually bounds peak memory per message, not the upload
+    // path's own size cap. Checked against what IMAP reports before the message is
+    // downloaded at all: a message over this is moved to Failed without being fetched.
+    doc: "Messages larger than this are moved to Failed without being downloaded.",
+  }),
+  defineSetting({
     key: "email.imap.lastError",
     schema: v.string(),
     internal: true,
