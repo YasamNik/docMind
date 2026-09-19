@@ -27,8 +27,11 @@ describe("re-extract route", () => {
     const res = await t.app.request(`/api/documents/${document.id}/extract`, { method: "POST", headers: { cookie } });
     expect(res.status).toBe(202);
     expect((await res.json()).job).toMatchObject({ type: "extraction", status: "pending" });
+    // Filtered to extraction jobs: the preset document types seeded on the first sort
+    // (Task 2) mean a rules job is also enqueued once extraction finishes, which is not
+    // what this test is checking.
     const jobs = await (await t.app.request("/api/jobs", { headers: { cookie } })).json();
-    expect(jobs.jobs).toHaveLength(2);
+    expect(jobs.jobs.filter((j: { type: string }) => j.type === "extraction")).toHaveLength(2);
     expect((await t.app.request("/api/documents/doc_0000000000000000/extract", { method: "POST", headers: { cookie } })).status).toBe(404);
   });
 

@@ -23,12 +23,14 @@ import {
   outcomeFor,
   parseScope,
   pickCategory,
+  pickType,
   PROMPT_WARNING_THRESHOLD,
   resultsForItems,
+  splitReplyItemsByKnownType,
 } from "./rules.models.js";
 import { createRulesRepository } from "./rules.repository.js";
 import { rulesJobPayloadSchema, rulesReplySchema, ruleSuggestionsSchema } from "./rules.schemas.js";
-import type { AutomaticItem, EvaluationResult, NewSortEvaluation, Proposal, ProposalKind, ReplyItem, RulesJobPayload, TargetType } from "./rules.types.js";
+import type { AutomaticItem, EvaluationResult, NewSortEvaluation, Proposal, ProposalKind, RawReplyItem, RulesJobPayload, TargetType } from "./rules.types.js";
 
 export function createRulesService({
   db,
@@ -48,12 +50,16 @@ export function createRulesService({
   const documentsRepository = createDocumentsRepository({ db });
   const jobsService = createJobsService({ db });
 
-  async function loadAutomaticItems(userId: string): Promise<{ categories: AutomaticItem[]; tags: AutomaticItem[] }> {
+  async function loadAutomaticItems(userId: string): Promise<{ categories: AutomaticItem[]; tags: AutomaticItem[]; types: AutomaticItem[] }> {
     // Seeding is lazy (see tags.usecases.ts), so a sort run is one of the two places
     // that must trigger it: a user who never opens the Types page still gets the
     // presets and the retired documentType migration the first time a sort runs.
     if (tagsService) await tagsService.ensureTypesSeeded({ userId });
-    const [rawCategories, rawTags] = await Promise.all([tagsRepository.listCategoriesRaw(userId), tagsRepository.listTagsRaw(userId)]);
+    const [rawCategories, rawTags, rawTypes] = await Promise.all([
+      tagsRepository.listCategoriesRaw(userId),
+      tagsRepository.listTagsRaw(userId),
+      tagsRepository.listTypesRaw(userId),
+    ]);
     const paths = buildCategoryPaths(rawCategories);
     const categories: AutomaticItem[] = rawCategories
       .filter((c) => c.autoApply === 1 && c.description.trim().length > 0)
@@ -77,12 +83,23 @@ export function createRulesService({
         pathOrName: t.name,
         updatedAt: t.updatedAt,
       }));
-    return { categories, tags };
+    const types: AutomaticItem[] = rawTypes
+      .filter((t) => t.autoApply === 1 && t.description.trim().length > 0)
+      .map((t) => ({
+        type: "type" as const,
+        id: t.id,
+        name: t.name,
+        description: t.description,
+        confidenceThreshold: t.confidenceThreshold,
+        pathOrName: t.name,
+        updatedAt: t.updatedAt,
+      }));
+    return { categories, tags, types };
   }
 
   async function hasAutomaticItems(userId: string): Promise<boolean> {
-    const { categories, tags } = await loadAutomaticItems(userId);
-    return categories.length > 0 || tags.length > 0;
+    const { categories, tags, types } = await loadAutomaticItems(userId);
+    return categories.length > 0 || tags.length > 0 || types.length > 0;
   }
 
   function tagNotFound(tagId: string) {
@@ -91,12 +108,28 @@ export function createRulesService({
   function categoryNotFound(categoryId: string) {
     return createError({ code: "categories.not_found", message: `Category "${categoryId}" not found`, status: 404 });
   }
+  function typeNotFound(typeId: string) {
+    return createError({ code: "types.not_found", message: `Document type "${typeId}" not found`, status: 404 });
+  }
 
   async function loadSingleItem(userId: string, targetType: TargetType, targetId: string): Promise<AutomaticItem | null> {
     if (targetType === "tag") {
       const tag = await tagsRepository.findTagById({ userId, tagId: targetId });
       if (!tag) return null;
       return { type: "tag", id: tag.id, name: tag.name, description: tag.description, confidenceThreshold: tag.confidenceThreshold, pathOrName: tag.name, updatedAt: tag.updatedAt };
+    }
+    if (targetType === "type") {
+      const docType = await tagsRepository.findTypeById({ userId, typeId: targetId });
+      if (!docType) return null;
+      return {
+        type: "type",
+        id: docType.id,
+        name: docType.name,
+        description: docType.description,
+        confidenceThreshold: docType.confidenceThreshold,
+        pathOrName: docType.name,
+        updatedAt: docType.updatedAt,
+      };
     }
     const category = await tagsRepository.findCategoryById({ userId, categoryId: targetId });
     if (!category) return null;
@@ -122,6 +155,12 @@ export function createRulesService({
     const category = await tagsRepository.findCategoryById({ userId, categoryId });
     if (!category) throw categoryNotFound(categoryId);
     return category;
+  }
+
+  async function requireType(userId: string, typeId: string) {
+    const docType = await tagsRepository.findTypeById({ userId, typeId });
+    if (!docType) throw typeNotFound(typeId);
+    return docType;
   }
 
   async function resolveScopeDocuments(userId: string, scope: string) {
@@ -163,12 +202,13 @@ export function createRulesService({
       documentText: document.extractedText ?? "",
       categories: targetItems.filter((i) => i.type === "category"),
       tags: targetItems.filter((i) => i.type === "tag"),
+      types: targetItems.filter((i) => i.type === "type"),
       examples,
     });
     if (promptLength > PROMPT_WARNING_THRESHOLD) {
       logger.warn({ userId, documentId, promptLength }, "Rules prompt exceeds the size warning threshold");
     }
-    const { data } = await aiService.generateStructured<{ items: ReplyItem[] }>({
+    const { data } = await aiService.generateStructured<{ items: RawReplyItem[] }>({
       userId,
       task: "rules",
       schema: rulesReplySchema,
@@ -176,11 +216,15 @@ export function createRulesService({
       system,
       input,
     });
-    const unknownIds = findUnknownReplyIds(targetItems, data.items);
+    const { items: knownTypeItems, unknownTypes } = splitReplyItemsByKnownType(data.items);
+    if (unknownTypes.length > 0) {
+      logger.warn({ userId, documentId, unknownTypes }, "Rules reply used an unknown type discriminator, dropping those rows");
+    }
+    const unknownIds = findUnknownReplyIds(targetItems, knownTypeItems);
     if (unknownIds.length > 0) {
       logger.warn({ userId, documentId, unknownIds }, "Rules reply referenced unknown ids, dropping them");
     }
-    const knownReplyItems = data.items.filter((i) => !unknownIds.includes(i.id));
+    const knownReplyItems = knownTypeItems.filter((i) => !unknownIds.includes(i.id));
     return { modelId, results: resultsForItems(targetItems, knownReplyItems) };
   }
 
@@ -200,9 +244,11 @@ export function createRulesService({
     document: Document;
   }) {
     const categoryPick = pickCategory(results);
+    const typePick = pickType(results);
+    const picks = { category: categoryPick, type: typePick };
     const now = nowIso();
     const evaluations: NewSortEvaluation[] = results.map((r) => {
-      const applied = isAppliedResult(r, categoryPick);
+      const applied = isAppliedResult(r, picks);
       return {
         id: newEvaluationId(),
         documentId,
@@ -224,7 +270,7 @@ export function createRulesService({
       await repository.insertEvaluations(evaluations, txDb);
       for (const r of results) {
         if (r.item.type !== "tag") continue;
-        const applied = isAppliedResult(r, categoryPick);
+        const applied = isAppliedResult(r, picks);
         if (applied) await repository.setTagAutoApplied({ documentId, tagId: r.item.id, applied: true, tx: txDb });
       }
       if (categoryPick && document.categorySource !== "manual") {
@@ -232,6 +278,14 @@ export function createRulesService({
           userId,
           documentId,
           patch: { categoryId: categoryPick.targetId, categorySource: "auto", updatedAt: now },
+          tx: txDb,
+        });
+      }
+      if (typePick && document.documentTypeSource !== "manual") {
+        await documentsRepository.update({
+          userId,
+          documentId,
+          patch: { documentTypeId: typePick.targetId, documentTypeSource: "auto", updatedAt: now },
           tx: txDb,
         });
       }
@@ -252,13 +306,15 @@ export function createRulesService({
     results: EvaluationResult[];
     document: Document;
   }) {
-    const categoryPick = pickCategory(results.filter((r) => r.item.type === "category"));
+    const categoryPick = pickCategory(results);
+    const typePick = pickType(results);
+    const picks = { category: categoryPick, type: typePick };
     const now = nowIso();
     await db.transaction(async (tx) => {
       const txDb = asTxDb(tx);
       const evaluations: NewSortEvaluation[] = [];
       for (const r of results) {
-        const applied = isAppliedResult(r, categoryPick);
+        const applied = isAppliedResult(r, picks);
         let currentlyAuto = false;
         let currentlyManual = false;
         if (r.item.type === "tag") {
@@ -273,6 +329,8 @@ export function createRulesService({
           currentlyManual,
           currentCategoryId: document.categoryId,
           currentCategorySource: document.categorySource as "manual" | "auto" | null,
+          currentTypeId: document.documentTypeId,
+          currentTypeSource: document.documentTypeSource as "manual" | "auto" | null,
         });
         let finalOutcome = outcome;
         if (proposalKind) {
@@ -315,8 +373,8 @@ export function createRulesService({
     if (!document) return;
 
     if (payload.mode === "initial") {
-      const { categories, tags } = await loadAutomaticItems(payload.userId);
-      const targetItems = [...categories, ...tags];
+      const { categories, tags, types } = await loadAutomaticItems(payload.userId);
+      const targetItems = [...categories, ...tags, ...types];
       if (targetItems.length === 0) {
         await documentsRepository.update({ userId: payload.userId, documentId: payload.documentId, patch: { ruleStatus: "done", updatedAt: nowIso() } });
         return;
@@ -355,8 +413,8 @@ export function createRulesService({
       }
       targetItems = [single];
     } else {
-      const { categories, tags } = await loadAutomaticItems(payload.userId);
-      targetItems = [...categories, ...tags];
+      const { categories, tags, types } = await loadAutomaticItems(payload.userId);
+      targetItems = [...categories, ...tags, ...types];
     }
     if (targetItems.length === 0) return;
     const { modelId, results } = await runEvaluation({ userId: payload.userId, documentId: payload.documentId, targetItems, document });
@@ -370,6 +428,7 @@ export function createRulesService({
 
   async function runOnScope({ userId, targetType, targetId, scope }: { userId: string; targetType: TargetType; targetId: string; scope: string }) {
     if (targetType === "tag") await requireTag(userId, targetId);
+    else if (targetType === "type") await requireType(userId, targetId);
     else await requireCategory(userId, targetId);
     const documents = await resolveScopeDocuments(userId, scope);
     const jobIds: string[] = [];
@@ -418,17 +477,24 @@ export function createRulesService({
     };
   }
 
+  function resolveItemName(targetType: string, targetId: string, names: { tagNames: Map<string, string>; paths: Map<string, string>; typeNames: Map<string, string> }): string {
+    if (targetType === "tag") return names.tagNames.get(targetId) ?? "(deleted tag)";
+    if (targetType === "type") return names.typeNames.get(targetId) ?? "(deleted type)";
+    return names.paths.get(targetId) ?? "(deleted category)";
+  }
+
   async function enrichProposals(userId: string, rows: { id: string; documentId: string; targetType: string; targetId: string; confidence: number; reasoning: string; proposalKind: string | null; documentName: string }[]): Promise<Proposal[]> {
-    const [tags, categories] = await Promise.all([tagsRepository.listTagsRaw(userId), tagsRepository.listCategoriesRaw(userId)]);
+    const [tags, categories, types] = await Promise.all([tagsRepository.listTagsRaw(userId), tagsRepository.listCategoriesRaw(userId), tagsRepository.listTypesRaw(userId)]);
     const paths = buildCategoryPaths(categories);
     const tagNames = new Map(tags.map((t) => [t.id, t.name]));
+    const typeNames = new Map(types.map((t) => [t.id, t.name]));
     return rows.map((r) => ({
       id: r.id,
       documentId: r.documentId,
       documentName: r.documentName,
       targetType: r.targetType as TargetType,
       targetId: r.targetId,
-      itemName: r.targetType === "tag" ? (tagNames.get(r.targetId) ?? "(deleted tag)") : (paths.get(r.targetId) ?? "(deleted category)"),
+      itemName: resolveItemName(r.targetType, r.targetId, { tagNames, paths, typeNames }),
       kind: r.proposalKind as ProposalKind,
       confidence: r.confidence,
       reasoning: r.reasoning,
@@ -462,6 +528,8 @@ export function createRulesService({
           await repository.setTagAutoApplied({ documentId: row.documentId, tagId: row.targetId, applied: false, tx: txDb });
         } else if (row.targetType === "category" && row.proposalKind === "set_category") {
           await documentsRepository.update({ userId, documentId: row.documentId, patch: { categoryId: row.targetId, categorySource: "auto", updatedAt: now }, tx: txDb });
+        } else if (row.targetType === "type" && row.proposalKind === "set_type") {
+          await documentsRepository.update({ userId, documentId: row.documentId, patch: { documentTypeId: row.targetId, documentTypeSource: "auto", updatedAt: now }, tx: txDb });
         }
         await repository.updateEvaluationOutcome({ id: row.id, outcome: "applied", tx: txDb });
       }
@@ -475,12 +543,13 @@ export function createRulesService({
   async function listEvaluationsForDocument({ userId, documentId }: { userId: string; documentId: string }) {
     await documentsService.get({ userId, documentId });
     const rows = await repository.listLatestEvaluationsForDocument({ userId, documentId });
-    const [tags, categories] = await Promise.all([tagsRepository.listTagsRaw(userId), tagsRepository.listCategoriesRaw(userId)]);
+    const [tags, categories, types] = await Promise.all([tagsRepository.listTagsRaw(userId), tagsRepository.listCategoriesRaw(userId), tagsRepository.listTypesRaw(userId)]);
     const paths = buildCategoryPaths(categories);
     const tagNames = new Map(tags.map((t) => [t.id, t.name]));
+    const typeNames = new Map(types.map((t) => [t.id, t.name]));
     return rows.map((r) => ({
       ...r,
-      itemName: r.targetType === "tag" ? (tagNames.get(r.targetId) ?? "(deleted tag)") : (paths.get(r.targetId) ?? "(deleted category)"),
+      itemName: resolveItemName(r.targetType, r.targetId, { tagNames, paths, typeNames }),
     }));
   }
 
@@ -493,7 +562,7 @@ export function createRulesService({
   }: {
     userId: string;
     documentId: string;
-    targetType: "tag" | "category";
+    targetType: TargetType;
     targetId: string;
     signal: "positive" | "negative";
   }) {

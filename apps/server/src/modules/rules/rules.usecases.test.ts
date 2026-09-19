@@ -34,12 +34,23 @@ async function uploadWithText(t: Awaited<ReturnType<typeof setup>>["t"], userId:
 }
 
 describe("rules service, initial mode", () => {
-  it("has no automatic items until a tag or category has both a description and auto_apply", async () => {
+  it("has no automatic items until a tag, category, or type has both a description and auto_apply", async () => {
     const { t, userId } = await setup();
+    // Preset document types are seeded and auto-apply by default (Task 2), so proving
+    // "no automatic items" for tags and categories needs every preset removed first.
+    await t.services.tagsService.ensureTypesSeeded({ userId });
+    for (const type of await t.services.tagsService.listTypes(userId)) {
+      await t.services.tagsService.deleteType({ userId, typeId: type.id });
+    }
     expect(await t.services.rulesService.hasAutomaticItems(userId)).toBe(false);
     await t.services.tagsService.createTag({ userId, name: "Rent" });
     expect(await t.services.rulesService.hasAutomaticItems(userId)).toBe(false);
     await t.services.tagsService.createTag({ userId, name: "Utilities", description: "Utility bills" });
+    expect(await t.services.rulesService.hasAutomaticItems(userId)).toBe(true);
+  });
+
+  it("counts a preset document type toward automatic items once seeded", async () => {
+    const { t, userId } = await setup();
     expect(await t.services.rulesService.hasAutomaticItems(userId)).toBe(true);
   });
 
@@ -104,6 +115,38 @@ describe("rules service, initial mode", () => {
 
     const document = await t.services.documentsService.get({ userId, documentId });
     expect(document.categoryId).toBeNull();
+  });
+
+  it("applies the highest-confidence matched type with document_type_source auto", async () => {
+    const { t, userId, replyRef, runner } = await setup();
+    const quote = await t.services.tagsService.createType({ userId, name: "Quote", description: "A price offered before any work is done." });
+    const handbook = await t.services.tagsService.createType({ userId, name: "Handbook", description: "Instructions shipped with a product." });
+    replyRef.current = {
+      items: [
+        { type: "type", id: quote.id, matched: true, confidence: 0.9, reasoning: "Looks like a quote." },
+        { type: "type", id: handbook.id, matched: true, confidence: 0.4, reasoning: "Not a handbook." },
+      ],
+    };
+    const documentId = await uploadWithText(t, userId, "Quotation for works");
+    await t.services.jobsService.enqueue({ userId, type: "rules", payload: { documentId, userId, mode: "initial" } });
+    await runner.runOnce();
+
+    const document = await t.services.documentsService.get({ userId, documentId });
+    expect(document.documentTypeId).toBe(quote.id);
+    expect(document.documentTypeSource).toBe("auto");
+  });
+
+  it("does not apply a matched type below its threshold", async () => {
+    const { t, userId, replyRef, runner } = await setup();
+    const quote = await t.services.tagsService.createType({ userId, name: "Quote", description: "A price offered before any work is done.", confidenceThreshold: 0.8 });
+    replyRef.current = { items: [{ type: "type", id: quote.id, matched: true, confidence: 0.5, reasoning: "Maybe a quote." }] };
+    const documentId = await uploadWithText(t, userId, "Some text");
+    await t.services.jobsService.enqueue({ userId, type: "rules", payload: { documentId, userId, mode: "initial" } });
+    await runner.runOnce();
+
+    const document = await t.services.documentsService.get({ userId, documentId });
+    expect(document.documentTypeId).toBeNull();
+    expect(document.documentTypeSource).toBeNull();
   });
 
   it("treats an item missing from the reply as no_match with confidence 0", async () => {
@@ -269,6 +312,40 @@ describe("rules service, rerun mode and proposals", () => {
     await t.services.jobsService.enqueue({ userId, type: "rules", payload: { documentId, userId, mode: "rerun", targetType: "category", targetId: candidate.id } });
     await runner.runOnce();
     expect(await t.services.rulesService.listProposalsForDocument({ userId, documentId })).toEqual([]);
+  });
+
+  it("proposes set_type and applies it once accepted", async () => {
+    const { t, userId, replyRef, runner } = await setup();
+    const quote = await t.services.tagsService.createType({ userId, name: "Quote", description: "A price offered before any work is done." });
+    const documentId = await uploadWithText(t, userId, "Quotation text");
+    await t.db.run(sql`update documents set rule_status = 'done' where id = ${documentId}`);
+    replyRef.current = { items: [{ type: "type", id: quote.id, matched: true, confidence: 0.9, reasoning: "Looks like a quote." }] };
+    await t.services.jobsService.enqueue({ userId, type: "rules", payload: { documentId, userId, mode: "rerun", targetType: "type", targetId: quote.id } });
+    await runner.runOnce();
+    const [proposal] = await t.services.rulesService.listProposalsForDocument({ userId, documentId });
+    expect(proposal).toMatchObject({ kind: "set_type", itemName: "Quote" });
+
+    const { appliedCount } = await t.services.rulesService.applyProposals({ userId, accept: [proposal!.id], dismiss: [] });
+    expect(appliedCount).toBe(1);
+    const document = await t.services.documentsService.get({ userId, documentId });
+    expect(document.documentTypeId).toBe(quote.id);
+    expect(document.documentTypeSource).toBe("auto");
+  });
+
+  it("does not overwrite a manually set type on a rerun", async () => {
+    const { t, userId, replyRef, runner } = await setup();
+    const manualType = await t.services.tagsService.createType({ userId, name: "Handbook", description: "Instructions shipped with a product." });
+    const candidate = await t.services.tagsService.createType({ userId, name: "Quote", description: "A price offered before any work is done." });
+    const documentId = await uploadWithText(t, userId, "Quotation text");
+    await t.db.run(sql`update documents set rule_status = 'done', document_type_id = ${manualType.id}, document_type_source = 'manual' where id = ${documentId}`);
+    replyRef.current = { items: [{ type: "type", id: candidate.id, matched: true, confidence: 0.9, reasoning: "Looks like a quote." }] };
+    await t.services.jobsService.enqueue({ userId, type: "rules", payload: { documentId, userId, mode: "rerun", targetType: "type", targetId: candidate.id } });
+    await runner.runOnce();
+
+    expect(await t.services.rulesService.listProposalsForDocument({ userId, documentId })).toEqual([]);
+    const document = await t.services.documentsService.get({ userId, documentId });
+    expect(document.documentTypeId).toBe(manualType.id);
+    expect(document.documentTypeSource).toBe("manual");
   });
 
   it("finishes a rerun job with no output when the target was deleted before it ran", async () => {

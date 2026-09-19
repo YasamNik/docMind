@@ -95,7 +95,9 @@ describe("extraction", () => {
     const job = await t.services.extractionService.requestExtraction({ userId, documentId: document.id });
     expect(job.type).toBe("extraction");
     expect((await t.services.documentsService.get({ userId, documentId: document.id })).extractionStatus).toBe("pending");
-    expect(await t.services.jobsService.list({ userId })).toHaveLength(2);
+    // Filtered to extraction jobs: the preset document types seeded on the first sort
+    // (Task 2) mean a rules job is also enqueued once the first runOnce finishes.
+    expect((await t.services.jobsService.list({ userId })).filter((j) => j.type === "extraction")).toHaveLength(2);
   });
 
   it("destroys the file stream when no extractor matches", async () => {
@@ -200,6 +202,12 @@ describe("extraction", () => {
   });
 
   it("sets rule_status done directly when there are no automatic items", async () => {
+    // Preset document types are seeded and auto-apply by default (Task 2), so a genuinely
+    // empty automatic item set now needs every preset removed first, not just a fresh user.
+    await t.services.tagsService.ensureTypesSeeded({ userId });
+    for (const type of await t.services.tagsService.listTypes(userId)) {
+      await t.services.tagsService.deleteType({ userId, typeId: type.id });
+    }
     const { document } = await t.services.documentsService.upload({ userId, name: "notes.txt", mimeType: "text/plain", body: Readable.from(["hello"]) });
     const runner = createJobRunner({ db: t.db, handlers: { extraction: t.services.extractionService.handler } });
     await runner.runOnce();
@@ -221,7 +229,9 @@ describe("extraction", () => {
     await runner.runOnce();
     const third = await t.services.extractionService.requestExtraction({ userId, documentId: document.id });
     expect(third.id).not.toBe(first.id);
-    expect(await t.services.jobsService.list({ userId })).toHaveLength(2);
+    // Filtered to extraction jobs: the preset document types seeded on the first sort
+    // (Task 2) mean a rules job is also enqueued once the first runOnce finishes.
+    expect((await t.services.jobsService.list({ userId })).filter((j) => j.type === "extraction")).toHaveLength(2);
   });
 
   it("rejects requestExtraction for a document that does not exist, without queuing a job", async () => {
