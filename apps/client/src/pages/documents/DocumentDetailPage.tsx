@@ -61,6 +61,26 @@ function Preview({ id, mimeType }: { id: string; mimeType: string | null }) {
   );
 }
 
+// Shown instead of the preview when the document is not on the active storage. The
+// bytes cannot be read from here, but the original's location is always known, since
+// describeLocation never touches the network.
+function StorageLocationNotice({ location }: { location: { label: string; url?: string } }) {
+  return (
+    <div className="flex items-center justify-center rounded-[28px] bg-org-neutral-200 p-10 text-center">
+      <p className="text-sm text-muted-foreground">
+        This file is on another storage.{" "}
+        {location.url ? (
+          <a className="underline" href={location.url} target="_blank" rel="noreferrer">
+            {location.label}
+          </a>
+        ) : (
+          <span className="font-medium text-foreground">{location.label}</span>
+        )}
+      </p>
+    </div>
+  );
+}
+
 function CategoryPicker({ document, id, queryClient }: { document: DocumentDetail; id: string; queryClient: ReturnType<typeof useQueryClient> }) {
   const { data: categories = [] } = useQuery({ queryKey: ["categories"], queryFn: categoriesApi.list });
   const setCategory = useMutation({
@@ -319,9 +339,11 @@ export function DocumentDetailPage() {
               Accept and file
             </Button>
           )}
-          <Button variant="outline" render={<a href={documentsApi.fileUrl(id, true)} />}>
-            Download
-          </Button>
+          {!document.storageLocation && (
+            <Button variant="outline" render={<a href={documentsApi.fileUrl(id, true)} />}>
+              Download
+            </Button>
+          )}
           <Button
             variant="outline"
             onClick={() => {
@@ -356,7 +378,11 @@ export function DocumentDetailPage() {
         <ProposalsReview documentId={id} queryClient={queryClient} />
       </div>
 
-      <Preview id={id} mimeType={document.mimeType} />
+      {document.storageLocation ? (
+        <StorageLocationNotice location={document.storageLocation} />
+      ) : (
+        <Preview id={id} mimeType={document.mimeType} />
+      )}
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0">

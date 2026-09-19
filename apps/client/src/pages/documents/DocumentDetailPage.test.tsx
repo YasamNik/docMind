@@ -38,6 +38,7 @@ const documentDetail = {
   documentDate: null as string | null,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
+  storageLocation: null as { label: string; url?: string } | null,
 };
 
 const getMock = vi.fn(async () => documentDetail);
@@ -49,7 +50,7 @@ const acceptTitleMock = vi.fn(async (_id: string) => ({ ...documentDetail, name:
 vi.mock("@/lib/documents-api", () => ({
   documentsApi: {
     get: () => getMock(),
-    fileUrl: (id: string) => `/api/documents/${id}/file`,
+    fileUrl: (id: string, download = false) => `/api/documents/${id}/file${download ? "?download=1" : ""}`,
     rename: vi.fn(),
     remove: vi.fn(),
     reextract: vi.fn(),
@@ -114,6 +115,56 @@ describe("DocumentDetailPage document date", () => {
     renderPage();
     await screen.findByText("Rent");
     expect(screen.queryByText(/document date/)).not.toBeInTheDocument();
+  });
+});
+
+describe("DocumentDetailPage storage location", () => {
+  afterEach(() => {
+    getMock.mockImplementation(async () => documentDetail);
+  });
+
+  it("shows the preview and a Download button when the document is on the active storage", async () => {
+    renderPage();
+    expect(await screen.findByTitle("Preview")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute("href", "/api/documents/doc_1/file?download=1");
+  });
+
+  it("shows the location as a link and hides the preview and download when off the active storage", async () => {
+    getMock.mockImplementationOnce(async () => ({
+      ...documentDetail,
+      storageLocation: { label: "s3://bucket/docs/invoice.pdf", url: "https://console.aws.amazon.com/s3/object/bucket?prefix=docs/invoice.pdf" },
+    }));
+    renderPage();
+
+    expect(await screen.findByRole("link", { name: "s3://bucket/docs/invoice.pdf" })).toHaveAttribute(
+      "href",
+      "https://console.aws.amazon.com/s3/object/bucket?prefix=docs/invoice.pdf",
+    );
+    expect(screen.queryByTitle("Preview")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Download" })).not.toBeInTheDocument();
+  });
+
+  it("shows the location as plain text when there is no url", async () => {
+    getMock.mockImplementationOnce(async () => ({
+      ...documentDetail,
+      storageLocation: { label: "/data/documents/doc_1/invoice.pdf" },
+    }));
+    renderPage();
+
+    expect(await screen.findByText("/data/documents/doc_1/invoice.pdf")).toBeInTheDocument();
+    expect(screen.queryByTitle("Preview")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Download" })).not.toBeInTheDocument();
+  });
+
+  it("still shows text, tags and other metadata when the document is off the active storage", async () => {
+    getMock.mockImplementationOnce(async () => ({
+      ...documentDetail,
+      storageLocation: { label: "s3://bucket/docs/invoice.pdf" },
+    }));
+    renderPage();
+
+    expect(await screen.findByText("Rent")).toBeInTheDocument();
+    expect(screen.getByText("some text")).toBeInTheDocument();
   });
 });
 

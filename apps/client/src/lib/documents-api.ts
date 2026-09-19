@@ -52,7 +52,14 @@ export type EvaluationRow = {
   evaluatedAt: string;
 };
 
-export type DocumentDetail = DocumentRow & { extractedText: string | null; categorySource: "manual" | "auto" | null };
+// storageLocation is null while the document lives on the active storage. When it is
+// on another storage, the label and optional url describe where the original file is,
+// since the bytes cannot be read from here.
+export type DocumentDetail = DocumentRow & {
+  extractedText: string | null;
+  categorySource: "manual" | "auto" | null;
+  storageLocation: { label: string; url?: string } | null;
+};
 
 export type UploadResult = { document: DocumentDetail; duplicateOf?: string };
 
