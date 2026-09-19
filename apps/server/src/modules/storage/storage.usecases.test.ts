@@ -54,6 +54,35 @@ describe("storage service", () => {
     await expectAppError(() => storage.describeLocation(userId, "unknown-driver", "key"), "storage.unknown_driver");
   });
 
+  it("readOAuthApp returns undefined rather than throwing when nothing is saved yet", async () => {
+    const { db } = await createTestDatabase();
+    const settingsService = createSettingsService({
+      db,
+      registry: createSettingsRegistry(storageSettingDefinitions),
+      config: { settingsEncryptionKey: "ab".repeat(32), env: { DOCUMENT_STORAGE_ROOT: "/tmp/docmind-test-root" } },
+    });
+    const storage = createStorageService({ settingsService, countDocuments: async () => 0 });
+    expect(await storage.readOAuthApp({ userId: "u1", driverId: "googleDrive" })).toBeUndefined();
+  });
+
+  it("readOAuthApp returns the client id and secret already saved for a driver's own connection", async () => {
+    const { db } = await createTestDatabase();
+    const settingsService = createSettingsService({
+      db,
+      registry: createSettingsRegistry(storageSettingDefinitions),
+      config: { settingsEncryptionKey: "ab".repeat(32), env: { DOCUMENT_STORAGE_ROOT: "/tmp/docmind-test-root" } },
+    });
+    const storage = createStorageService({ settingsService, countDocuments: async () => 0 });
+    await settingsService.set("u1", {
+      "storage.googleDrive.clientId": "shared-client-id",
+      "storage.googleDrive.clientSecret": "shared-client-secret",
+    });
+    expect(await storage.readOAuthApp({ userId: "u1", driverId: "googleDrive" })).toEqual({
+      clientId: "shared-client-id",
+      clientSecret: "shared-client-secret",
+    });
+  });
+
   it("completeOAuthConnection turns a revoked refresh token exchange into a reauth prompt, never a raw error", async () => {
     const { db } = await createTestDatabase();
     const settingsService = createSettingsService({

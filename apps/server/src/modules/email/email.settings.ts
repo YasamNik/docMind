@@ -69,4 +69,37 @@ export const emailSettingDefinitions: SettingDefinition[] = [
     default: "",
     doc: "The reason the last cycle failed, if it did. Kept for diagnosis only; nothing surfaces it yet.",
   }),
+  // Gmail over OAuth, in the shape storage's Google Drive driver settings established:
+  // secret where it matters, not internal, so Disconnect is an ordinary settings write
+  // of two nulls. Written by the connect flow in email.usecases.ts, never typed in.
+  defineSetting({
+    key: "email.gmail.refreshToken",
+    schema: v.pipe(v.string(), v.minLength(1)),
+    secret: true,
+    doc: "Refresh token from connecting a Gmail account through Google. Written by the connect flow, never typed in.",
+  }),
+  defineSetting({
+    key: "email.gmail.accountEmail",
+    schema: v.pipe(v.string(), v.minLength(1)),
+    doc: "The connected Gmail address, written by the connect flow. Also the XOAUTH2 sign-in user.",
+  }),
+  defineSetting({
+    key: "email.gmail.clientId",
+    schema: v.pipe(v.string(), v.minLength(1)),
+    doc: "Optional override client id for Gmail. Leave blank to use the Google app already saved for Google Drive.",
+  }),
+  defineSetting({
+    key: "email.gmail.clientSecret",
+    schema: v.pipe(v.string(), v.minLength(1)),
+    secret: true,
+    doc: "Optional override client secret for Gmail. Required if the client id above is set.",
+  }),
+  // Read by the loop and the Test button once they classify a cycle's failure. Not
+  // written yet: that lands with the loop change this settings addition prepares for.
+  defineSetting({
+    key: "email.imap.lastErrorCode",
+    schema: v.picklist(["reauth_required", "auth_failed", "folder_missing", "network", "unknown"]),
+    internal: true,
+    doc: "Fixed code for the reason the last cycle failed, if it did. Drives the reconnect banner.",
+  }),
 ];

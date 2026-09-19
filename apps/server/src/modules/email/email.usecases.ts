@@ -1,9 +1,11 @@
 import { Readable } from "node:stream";
 import { simpleParser } from "mailparser";
 import { createError, isAppError } from "../../shared/errors/errors.js";
+import { buildGoogleAuthorizeUrl, exchangeGoogleAuthCode, verifyGoogleIdToken } from "../../shared/google-oauth.js";
 import { createLogger, type Logger } from "../../shared/logger/logger.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
+import { signState, verifyState } from "../storage/storage.models.js";
 import { createImapClient, type ImapClient } from "./email.client.js";
 import { documentsFromMail } from "./email.models.js";
 
@@ -27,8 +29,15 @@ const TEST_FOLDER_LIMIT = Number.MAX_SAFE_INTEGER;
 // cannot name, so that setting never ends up holding an arbitrary error's own text.
 const GENERIC_CYCLE_FAILURE_REASON = "the mailbox could not be checked";
 
+// Gmail over OAuth. mail.google.com is the only IMAP scope Google offers; openid and
+// the email scope exist only so the exchange returns an id token this module can read
+// an address out of, which is what lets Connect Gmail ask for nothing but a click.
+const GMAIL_OAUTH_PURPOSE = "email:gmail";
+const GMAIL_SCOPES = ["https://mail.google.com/", "openid", "https://www.googleapis.com/auth/userinfo.email"];
+
 export type EmailClientFactory = (config: { host: string; port: number; user: string; password: string }) => Promise<ImapClient>;
 export type EmailTestResult = { ok: boolean; message: string };
+export type GoogleAppCredentials = { clientId: string; clientSecret: string };
 
 type ConnectionConfig = {
   host: string;
@@ -104,6 +113,15 @@ export function createEmailService({
   messageRetryAttempts = DEFAULT_MESSAGE_RETRY_ATTEMPTS,
   idleIntervalMs = DEFAULT_IDLE_INTERVAL_MS,
   shutdownTimeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
+  // Opaque to this module: produces the one redirect uri Google already has
+  // registered, for storage's Google Drive connection, so Gmail never registers a
+  // second one. Only buildGmailAuthorizeUrl and completeGmailConnection use it.
+  buildRedirectUri,
+  // Reads the Google app already saved for a driver's own connection, if any, so
+  // Gmail can reuse it instead of asking for a second app registration. Returns
+  // undefined when nothing is saved, the same outcome resolveGoogleApp gives when no
+  // override is set either.
+  getSharedGoogleApp,
 }: {
   settingsService: SettingsService;
   documentsService: DocumentsService;
@@ -121,6 +139,8 @@ export function createEmailService({
   // running past this deadline, for example one stuck on a server that accepted a
   // connection and never answered, costs nothing.
   shutdownTimeoutMs?: number;
+  buildRedirectUri?: (args: { origin: string }) => string;
+  getSharedGoogleApp?: (userId: string) => Promise<GoogleAppCredentials | undefined>;
 }) {
   let running = false;
   let loop: Promise<void> | null = null;
@@ -380,7 +400,103 @@ export function createEmailService({
     loop = null;
   }
 
-  return { runOnce, start, stop, testConnection };
+  // The Google app Gmail connects with: an override saved on this page if one is set,
+  // otherwise the app already saved for storage's Google Drive connection, otherwise
+  // nothing. The override is all or nothing, since pairing one app's id with another
+  // app's secret only fails once Google rejects the request, in a way nobody can read.
+  async function resolveGoogleApp(userId: string): Promise<GoogleAppCredentials | undefined> {
+    const overrideClientId = await settingsService.get<string>(userId, "email.gmail.clientId");
+    const overrideClientSecret = await settingsService.get<string>(userId, "email.gmail.clientSecret");
+    if (overrideClientId || overrideClientSecret) {
+      if (!overrideClientId || !overrideClientSecret) {
+        throw createError({
+          code: "email.gmail_app_incomplete",
+          message: "Set both a client id and a client secret to use a Gmail-specific Google app, or clear both to use the app already saved for Google Drive.",
+          status: 400,
+        });
+      }
+      return { clientId: overrideClientId, clientSecret: overrideClientSecret };
+    }
+    return getSharedGoogleApp ? getSharedGoogleApp(userId) : undefined;
+  }
+
+  function redirectUriFor(origin: string): string {
+    if (!buildRedirectUri) {
+      throw new Error("createEmailService was not given buildRedirectUri");
+    }
+    return buildRedirectUri({ origin });
+  }
+
+  // What GET /api/email/gmail/connect redirects the browser to. The state carries the
+  // user's identity and a purpose only this module recognizes, because the callback
+  // that follows arrives on storage's shared redirect address with no session of its
+  // own.
+  async function buildGmailAuthorizeUrl({ userId, origin, secretHex }: { userId: string; origin: string; secretHex: string }): Promise<string> {
+    const app = await resolveGoogleApp(userId);
+    if (!app) {
+      throw createError({
+        code: "email.gmail_not_configured",
+        message: "Connect Google Drive first so Gmail can reuse its app, or set a Gmail-specific client id and secret, before connecting.",
+        status: 400,
+      });
+    }
+    const state = signState({ userId, purpose: GMAIL_OAUTH_PURPOSE, secretHex });
+    return buildGoogleAuthorizeUrl({ clientId: app.clientId, redirectUri: redirectUriFor(origin), scopes: GMAIL_SCOPES, state });
+  }
+
+  // The completer storage's callback route hands a Gmail state to. Verifies the state
+  // again for itself, exactly as storage's own completion does for a storage purpose,
+  // so nothing the route decided can weaken what this module checks.
+  async function completeGmailConnection({
+    code,
+    state,
+    origin,
+    secretHex,
+  }: {
+    code: string;
+    state: string;
+    origin: string;
+    secretHex: string;
+  }): Promise<{ redirectTo: string }> {
+    const verified = verifyState({ state, secretHex });
+    if (verified.purpose !== GMAIL_OAUTH_PURPOSE) {
+      throw createError({ code: "email.invalid_state", message: "Invalid oauth state", status: 400 });
+    }
+    const userId = verified.userId;
+
+    const app = await resolveGoogleApp(userId);
+    if (!app) {
+      throw createError({
+        code: "email.gmail_not_configured",
+        message: "Connect Google Drive first so Gmail can reuse its app, or set a Gmail-specific client id and secret, before connecting.",
+        status: 400,
+      });
+    }
+
+    const exchange = await exchangeGoogleAuthCode({
+      code,
+      clientId: app.clientId,
+      clientSecret: app.clientSecret,
+      redirectUri: redirectUriFor(origin),
+    });
+    if (!exchange.idToken) {
+      throw createError({
+        code: "email.gmail_no_identity",
+        message: "Google did not return an account address for this connection.",
+        status: 400,
+      });
+    }
+    const identity = await verifyGoogleIdToken({ idToken: exchange.idToken, clientId: app.clientId });
+
+    await settingsService.set(userId, {
+      "email.gmail.refreshToken": exchange.refreshToken,
+      "email.gmail.accountEmail": identity.email,
+    });
+
+    return { redirectTo: "/settings?tab=email&connected=gmail" };
+  }
+
+  return { runOnce, start, stop, testConnection, buildGmailAuthorizeUrl, completeGmailConnection };
 }
 
 export type EmailService = ReturnType<typeof createEmailService>;

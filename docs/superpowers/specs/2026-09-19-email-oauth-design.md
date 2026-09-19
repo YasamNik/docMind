@@ -106,13 +106,13 @@ already carries the user id for exactly this reason: the callback arrives with n
 and nothing unsigned on it can be trusted. The target of the connection travels the same
 way.
 
-**The state payload becomes `{ userId, purpose, issuedAt }`.** The signer and verifier move
-to a shared unit, `apps/server/src/shared/oauth/`, because there must be exactly one HMAC
-implementation of this in the codebase. `purpose` is `storage:googleDrive` for a Drive
-connection and `email:gmail` for a mailbox. `storage.models.ts` keeps `signOAuthState` and
-`verifyOAuthState` as thin wrappers that map a driver id to `storage:<driverId>` and reject
-any purpose that is not a storage one, so every existing storage caller and test is
-unchanged.
+**The state payload becomes `{ userId, purpose, issuedAt }`.** The signer and verifier stay
+exactly where they are, in `storage.models.ts`, one flat file, because there must be exactly
+one HMAC implementation of this in the codebase and that file already is it. `purpose` is
+`storage:googleDrive` for a Drive connection and `email:gmail` for a mailbox.
+`storage.models.ts` keeps `signOAuthState` and `verifyOAuthState` as thin wrappers around the
+new purpose-carrying functions: they map a driver id to `storage:<driverId>` and reject any
+purpose that is not a storage one, so every existing storage caller and test is unchanged.
 
 **The callback route stays where it is**, at
 `/api/storage/drivers/googleDrive/callback`, because that is the address the user already
@@ -125,11 +125,15 @@ registered and never has to touch again. What changes is what it does:
    purpose it is ignored entirely.
 3. A `storage:` purpose goes to `storageService.completeOAuthConnection` exactly as it does
    now, path parameter and all.
-4. Any other purpose goes to a completer looked up in an injected table keyed by purpose.
+4. Any other purpose is looked up in an injected completer table keyed by purpose.
    `server.ts` wires `{ "email:gmail": emailService.completeGmailConnection }`. Storage
    imports nothing from email; it is handed a function, the same inversion that already
    hands it `countDocuments`.
-5. The completer returns where to send the browser, so a Gmail connection lands on
+5. A purpose that is not `storage:` and matches nothing in the completer table throws the
+   same `storage.invalid_state` error a bad signature throws, before any completer is
+   called. An unmatched purpose is exactly as untrustworthy as an unverified one: the route
+   must never call a lookup result it has not confirmed exists.
+6. The matched completer returns where to send the browser, so a Gmail connection lands on
    `/settings?tab=email&connected=gmail` and a Drive connection keeps landing on
    `/settings?tab=storage&connected=googleDrive`.
 
@@ -161,8 +165,13 @@ case and the empty case as the exception, in that order.
 **Storage gains one method**, `readOAuthApp({ userId, driverId })`, returning the client id
 and secret from that driver's own `oauth.keys`. `server.ts` wires email with
 `getSharedGoogleApp: (userId) => storageService.readOAuthApp({ userId, driverId:
-"googleDrive" })`. Email's types declare an opaque supplier of a client id and a secret. The
-secret is used in process only and never crosses the API, as today.
+"googleDrive" })`, and that line of wiring carries a one line comment saying plainly that it
+exists so other Google features can borrow the app registered for Drive, and that it is not
+a storage concern, just where those values already live. Email's types declare an opaque
+supplier of a client id and a secret. The secret is used in process only and never crosses
+the API, as today. The existing `storage.googleDrive.*` setting keys are not renamed: the
+user has a live connection stored under them and a rename risks a working connection for a
+cosmetic win.
 
 Email resolves its app credentials in this order:
 
@@ -214,15 +223,23 @@ access page kills both tokens at once. The guide says so rather than implying ot
 An access token lasts about an hour. The loop connects every 60 seconds. Minting a token
 per cycle would be sixty pointless round trips an hour, each one a chance to fail.
 
-The provider knowledge lives in a second shared unit, `apps/server/src/shared/google/`: how
-to build an authorize URL for a given set of scopes, how to exchange a code, how to mint an
-access token from a refresh token, and how to turn a GaxiosError into a sanitized AppError.
-It knows nothing about settings keys, drivers or mailboxes, and throws two neutral codes,
-`google.reauth_required` and `google.auth_failed`. The Google Drive driver is refactored
-onto it in its own commit, catching those two and re-throwing its existing
-`storage.reauth_required` and `storage.google_drive_error` unchanged, because the client
-keys its reconnect banner off those exact strings
-(`apps/client/src/lib/storage-reauth.ts`, `DocumentDetailPage.tsx`).
+The provider knowledge lives in one small new file, `apps/server/src/shared/google-oauth.ts`,
+not a directory: how to build an authorize URL for a given set of scopes, how to exchange a
+code, and how to mint an access token from a refresh token with a short cache. It knows
+nothing about settings keys, drivers or mailboxes, and turns a failed exchange or refresh
+into one of two neutral codes, `google.reauth_required` and `google.auth_failed`, never
+logging or returning the token or secret involved. It is a plain file so a second Google
+feature such as Calendar can import it later without moving anything.
+
+**The Google Drive driver is left alone.** `google-drive.driver.ts` and
+`google-drive.client.ts` keep their own sanitizing logic exactly as it is today, unrefactored
+and untouched: the client keys its reconnect banner off the literal strings
+`storage.reauth_required` and `storage.google_drive_error`
+(`apps/client/src/lib/storage-reauth.ts`, `DocumentDetailPage.tsx`), and moving working,
+shipped code so a new feature can share it is not a trade this change makes. Email's own
+sanitizer duplicates the handful of lines that turn an `invalid_grant` into a reauth signal;
+the duplication is small and the risk of touching Drive's error handling is not worth
+avoiding it.
 
 The token provider holds `{ token, expiresAt }` and calls Google only when the cached token
 is inside five minutes of expiry. The email service memoizes one provider per client id
@@ -245,7 +262,7 @@ expire on Google's schedule makes that gap unacceptable, so this work closes it.
 A new read-only route, `GET /api/email/status`, is the email module's summary of its own
 state:
 
-    { mode, connectedAs?, credentials, redirectUri, needsReconnect, lastError?, lastErrorAt? }
+    { mode, connectedAs?, credentials, redirectUri, needsReconnect, lastError? }
 
 - `mode` is `gmail`, `password` or `unconfigured`.
 - `connectedAs` is the connected Google address, or the IMAP user in password mode.
@@ -259,20 +276,37 @@ state:
 
 Nothing secret appears in it: no token, no password, not even a masked one.
 
+**One function classifies every failure, for both modes.** `runOnce`'s single catch block
+today only recognizes `email.imap_error`; a dead Google grant throws a different code family
+(`google.reauth_required` or `google.auth_failed`) and would fall through to the generic "the
+mailbox could not be checked" reason, which never sets `needsReconnect` even though the
+grant genuinely needs reconnecting. One function, given an error, reads both families and
+returns one of the fixed codes (`reauth_required`, `auth_failed`, `folder_missing`,
+`network`, `unknown`) plus the short curated message that goes with it. It is called from
+that one catch block and nowhere else builds this mapping a second way.
+
 Two internal settings back it. `email.imap.lastError` keeps its current meaning, the short
-curated reason, and a new `email.imap.lastErrorCode` holds a fixed code
-(`reauth_required`, `auth_failed`, `folder_missing`, `network`, `unknown`). Both are written
-together in the cycle's catch and both cleared on a clean cycle. The code is what
-`needsReconnect` derives from, because deriving a decision by string-matching curated prose
-is how curated prose becomes load-bearing and unchangeable.
+curated reason, and a new `email.imap.lastErrorCode` holds the fixed code the classifier
+returned. `email.imap.lastErrorAt` does not exist: nothing reads a last-failure timestamp,
+so it is not a setting. `needsReconnect` derives from `lastErrorCode`, because deriving a
+decision by string-matching curated prose is how curated prose becomes load-bearing and
+unchangeable.
+
+**Test and the banner must never disagree.** Today `testConnection` computes a result and
+writes nothing to settings, so a successful Test would leave a stale `needsReconnect` from
+an earlier failed cycle showing for up to a whole poll interval, and a failed Test would
+leave a clean state that has not actually recovered. `testConnection` runs its attempt, then
+writes `lastError` and `lastErrorCode` through the same classifying function `runOnce` uses,
+clearing both on success, in both Gmail and password mode. The banner reflects whatever the
+user just saw the Test button say, immediately, not on the loop's own schedule.
 
 The Email tab shows a red banner when `needsReconnect` is true: "Gmail access has expired or
 been revoked. Mail is not being collected." with a Reconnect button that walks the same
-consent again. Any other `lastError` shows as a plain line with its timestamp.
+consent again. Any other `lastError` shows as a plain line.
 
 ### 7. Settings
 
-New keys, all in the email module's own namespace:
+Five new keys, all in the email module's own namespace:
 
 | Key | Secret | Purpose |
 |-----|--------|---------|
@@ -281,7 +315,6 @@ New keys, all in the email module's own namespace:
 | `email.gmail.clientId` | no | Optional override. Blank means use the app saved for Google Drive. |
 | `email.gmail.clientSecret` | yes | Optional override, required if the id above is set. |
 | `email.imap.lastErrorCode` | internal | Fixed code for the last failure, drives the reconnect banner. |
-| `email.imap.lastErrorAt` | internal | When that failure was recorded. |
 
 The refresh token and account email mirror storage exactly: secret where it matters, not
 internal, so Disconnect is an ordinary settings write of two nulls through the existing API
@@ -410,15 +443,18 @@ No test talks to Google, and no test opens a socket. The seam is the one
 - **Pure, unit.** Mode resolution across every settings combination. Credential resolution
   across override, shared and empty, including the all-or-nothing override rule. The mapping
   from an error code to a curated reason and to `needsReconnect`.
-- **Shared state unit.** A purpose round trips. A tampered payload, a wrong secret and an
-  expired state are rejected, moved over from the existing storage tests. A state signed
-  `email:gmail` is rejected by storage's wrapper verifier, and a state signed
-  `storage:googleDrive` is rejected by email's completer.
+- **Shared state unit, added to `storage.models.test.ts`.** A purpose round trips. A
+  tampered payload, a wrong secret and an expired state are rejected, exactly as the
+  existing driver-id tests already assert for their own shape. A state signed `email:gmail`
+  is rejected by storage's wrapper verifier, and a state signed `storage:googleDrive` is
+  rejected by email's completer. Every existing storage test in that file runs unedited.
 - **Callback dispatch.** A Gmail state arriving at the storage callback path reaches the
   injected email completer and redirects to the email tab. A Drive state reaches storage's
   own completion, unchanged. A Gmail state with a `:id` path parameter naming some other
   driver still reaches the email completer, which is the assertion that the unsigned path
-  parameter decides nothing. An unsigned or expired state reaches no completer at all.
+  parameter decides nothing. An unsigned or expired state reaches no completer at all. A
+  state whose purpose is neither `storage:` nor in the completer table gets the same
+  `storage.invalid_state` error a bad signature gets, not a 500.
 - **Shared Google unit,** against an injected token endpoint function. A first call fetches
   and a second within the window does not, asserted on the call count. A call after expiry
   fetches again. An `invalid_grant` becomes `google.reauth_required` carrying no property of
@@ -434,7 +470,10 @@ No test talks to Google, and no test opens a socket. The seam is the one
   ask for a token once between them, which is the cache assertion. A revoked token writes
   `lastErrorCode: reauth_required` and the status route reports `needsReconnect`. Gmail
   takes precedence over a configured app password. A password-mode cycle behaves exactly as
-  its existing tests say, unchanged.
+  its existing tests say, unchanged. A successful Test after a failed cycle clears
+  `needsReconnect` immediately, and a failed Test sets it immediately, in both modes: the
+  test asserting this calls `testConnection` directly and reads the settings it wrote,
+  never waiting on the loop's own interval.
 - **Routes.** Connect redirects to a Google URL carrying the three scopes,
   `access_type=offline`, `prompt=consent`, the shared redirect URI and a state. Connect with
   no credentials anywhere returns a clear 400, and so does a half-set override. The
@@ -489,11 +528,6 @@ No test talks to Google, and no test opens a socket. The seam is the one
   after it fails with "Invalid oauth state". The window is the ten minute state TTL and the
   fix is pressing Connect again, so this is a note in the commit rather than a migration,
   but it is worth knowing before it is reported as a bug.
-- **Refactoring the Drive driver onto the shared Google unit touches working code.** It is a
-  separate commit, strictly a move, and the two error codes the client depends on are
-  preserved and asserted. If it gets difficult, the honest fallback is to leave Drive alone
-  and accept one duplicated sanitizer: email working matters more than the tidiness of a
-  file the user never sees.
 - **Two refresh tokens for one Google app.** Google issues a new refresh token on each
   consent with `prompt=consent` and keeps older ones valid up to a per app and user limit.
   Two is nowhere near it. Recorded so a future third Google feature does not quietly assume

@@ -4,13 +4,16 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { OAuth2Client } from "google-auth-library";
 import { simpleParser } from "mailparser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createError } from "../../shared/errors/errors.js";
 import { createTestDatabase } from "../../shared/test/database.test-utils.js";
+import { expectAppError } from "../../shared/test/errors.test-utils.js";
 import { createDocumentsService } from "../documents/documents.usecases.js";
 import { createSettingsRegistry } from "../settings/settings.registry.js";
 import { createSettingsService } from "../settings/settings.usecases.js";
+import { signState } from "../storage/storage.models.js";
 import { storageSettingDefinitions } from "../storage/storage.settings.js";
 import { createStorageService } from "../storage/storage.usecases.js";
 import type { ImapClient } from "./email.client.js";
@@ -581,5 +584,136 @@ describe("email service", () => {
     expect(pushedEverything).toBe(true);
     const docs = await documentsService.list({ userId });
     expect(docs.map((d) => d.name)).toContain("invoice.pdf");
+  });
+});
+
+const GMAIL_SECRET_HEX = "77".repeat(32);
+
+function gmailRedirectUri({ origin }: { origin: string }): string {
+  return `${origin}/api/storage/drivers/googleDrive/callback`;
+}
+
+function unusedClientFactory(): EmailClientFactory {
+  return async () => {
+    throw new Error("not used by the gmail connect tests");
+  };
+}
+
+describe("gmail authorize url", () => {
+  it("refuses to build one with no google app configured anywhere", async () => {
+    const email = buildService(unusedClientFactory(), { buildRedirectUri: gmailRedirectUri });
+
+    await expectAppError(
+      () => email.buildGmailAuthorizeUrl({ userId, origin: "https://example.com", secretHex: GMAIL_SECRET_HEX }),
+      "email.gmail_not_configured",
+    );
+  });
+
+  it("refuses a half set override rather than pairing one app's id with another's secret", async () => {
+    await settingsService.set(userId, { "email.gmail.clientId": "override-id" });
+    const email = buildService(unusedClientFactory(), {
+      buildRedirectUri: gmailRedirectUri,
+      getSharedGoogleApp: async () => ({ clientId: "shared-id", clientSecret: "shared-secret" }),
+    });
+
+    await expectAppError(
+      () => email.buildGmailAuthorizeUrl({ userId, origin: "https://example.com", secretHex: GMAIL_SECRET_HEX }),
+      "email.gmail_app_incomplete",
+    );
+  });
+
+  it("uses the shared google app when no override is set, and signs an email:gmail state", async () => {
+    const email = buildService(unusedClientFactory(), {
+      buildRedirectUri: gmailRedirectUri,
+      getSharedGoogleApp: async () => ({ clientId: "shared-id", clientSecret: "shared-secret" }),
+    });
+
+    const url = new URL(await email.buildGmailAuthorizeUrl({ userId, origin: "https://example.com", secretHex: GMAIL_SECRET_HEX }));
+
+    expect(url.origin + url.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
+    expect(url.searchParams.get("client_id")).toBe("shared-id");
+    expect(url.searchParams.get("redirect_uri")).toBe("https://example.com/api/storage/drivers/googleDrive/callback");
+    expect(url.searchParams.get("scope")).toBe("https://mail.google.com/ openid https://www.googleapis.com/auth/userinfo.email");
+    expect(url.searchParams.get("access_type")).toBe("offline");
+    expect(url.searchParams.get("prompt")).toBe("consent");
+    expect(url.toString()).not.toContain("shared-secret");
+  });
+
+  it("prefers an override client id and secret over the shared app", async () => {
+    await settingsService.set(userId, { "email.gmail.clientId": "override-id", "email.gmail.clientSecret": "override-secret" });
+    const email = buildService(unusedClientFactory(), {
+      buildRedirectUri: gmailRedirectUri,
+      getSharedGoogleApp: async () => ({ clientId: "shared-id", clientSecret: "shared-secret" }),
+    });
+
+    const url = new URL(await email.buildGmailAuthorizeUrl({ userId, origin: "https://example.com", secretHex: GMAIL_SECRET_HEX }));
+
+    expect(url.searchParams.get("client_id")).toBe("override-id");
+  });
+});
+
+describe("gmail connect completion", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("rejects a state signed for a purpose other than email:gmail", async () => {
+    const email = buildService(unusedClientFactory(), { buildRedirectUri: gmailRedirectUri });
+    const state = signState({ userId, purpose: "storage:googleDrive", secretHex: GMAIL_SECRET_HEX });
+
+    await expectAppError(
+      () => email.completeGmailConnection({ code: "abc", state, origin: "https://example.com", secretHex: GMAIL_SECRET_HEX }),
+      "email.invalid_state",
+    );
+  });
+
+  it("refuses to complete with no google app configured anywhere", async () => {
+    const email = buildService(unusedClientFactory(), { buildRedirectUri: gmailRedirectUri });
+    const state = signState({ userId, purpose: "email:gmail", secretHex: GMAIL_SECRET_HEX });
+
+    await expectAppError(
+      () => email.completeGmailConnection({ code: "abc", state, origin: "https://example.com", secretHex: GMAIL_SECRET_HEX }),
+      "email.gmail_not_configured",
+    );
+  });
+
+  it("exchanges the code, verifies the account, and stores the refresh token and address", async () => {
+    vi.spyOn(OAuth2Client.prototype, "getToken").mockResolvedValue({
+      tokens: { refresh_token: "gmail-refresh-token", access_token: "gmail-access-token", id_token: "gmail-id-token" },
+      res: undefined,
+    } as never);
+    vi.spyOn(OAuth2Client.prototype, "verifyIdToken").mockResolvedValue({
+      getPayload: () => ({ email: "me@gmail.com" }),
+    } as never);
+    await settingsService.set(userId, { "email.gmail.clientId": "override-id", "email.gmail.clientSecret": "override-secret" });
+    const email = buildService(unusedClientFactory(), { buildRedirectUri: gmailRedirectUri });
+    const state = signState({ userId, purpose: "email:gmail", secretHex: GMAIL_SECRET_HEX });
+
+    const result = await email.completeGmailConnection({ code: "auth-code", state, origin: "https://example.com", secretHex: GMAIL_SECRET_HEX });
+
+    expect(result).toEqual({ redirectTo: "/settings?tab=email&connected=gmail" });
+    expect(await settingsService.get(userId, "email.gmail.accountEmail")).toBe("me@gmail.com");
+    const rows = await settingsService.debugRows(userId);
+    const refreshTokenRow = rows.find((r) => r.key === "email.gmail.refreshToken");
+    expect(refreshTokenRow?.isSecret).toBe(1);
+  });
+
+  it("never leaks the refresh token or the code into a thrown error", async () => {
+    vi.spyOn(OAuth2Client.prototype, "getToken").mockRejectedValue(
+      Object.assign(new Error("invalid_grant"), { response: { data: { error: "invalid_grant" } } }),
+    );
+    await settingsService.set(userId, { "email.gmail.clientId": "override-id", "email.gmail.clientSecret": "leaked-client-secret" });
+    const email = buildService(unusedClientFactory(), { buildRedirectUri: gmailRedirectUri });
+    const state = signState({ userId, purpose: "email:gmail", secretHex: GMAIL_SECRET_HEX });
+
+    let caught: unknown;
+    try {
+      await email.completeGmailConnection({ code: "leaked-auth-code", state, origin: "https://example.com", secretHex: GMAIL_SECRET_HEX });
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as { code?: string } | undefined)?.code).toBe("google.reauth_required");
+    expect(JSON.stringify(caught)).not.toContain("leaked-client-secret");
+    expect(JSON.stringify(caught)).not.toContain("leaked-auth-code");
   });
 });

@@ -109,6 +109,19 @@ export function createStorageService({
       return (await this.getDriver(userId, driverId)).healthCheck();
     },
 
+    // The client id and secret already saved for an oauth driver's own connection, for
+    // a caller outside storage that wants to reuse the same Google app rather than
+    // asking the user to register a second one. Returns undefined rather than throwing
+    // when nothing is saved yet, since "nothing to reuse" is an ordinary outcome for a
+    // caller deciding what to fall back to, not a storage error.
+    async readOAuthApp({ userId, driverId }: { userId: string; driverId: string }): Promise<{ clientId: string; clientSecret: string } | undefined> {
+      const { oauth } = oauthDefinitionOrThrow(driverId);
+      const clientId = await settingsService.get<string>(userId, oauth.keys.clientId);
+      const clientSecret = await settingsService.get<string>(userId, oauth.keys.clientSecret);
+      if (!clientId || !clientSecret) return undefined;
+      return { clientId, clientSecret };
+    },
+
     // Sends the browser to the provider. The state carries the user's identity because
     // the callback that follows arrives with no session of its own.
     async buildAuthorizeUrl({ userId, driverId, origin, secretHex }: { userId: string; driverId: string; origin: string; secretHex: string }) {

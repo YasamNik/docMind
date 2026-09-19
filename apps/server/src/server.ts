@@ -42,6 +42,7 @@ import { createSettingsRegistry } from "./modules/settings/settings.registry.js"
 import { registerSettingsRoutes } from "./modules/settings/settings.routes.js";
 import { createSettingsService } from "./modules/settings/settings.usecases.js";
 import { registerStorageRoutes } from "./modules/storage/storage.routes.js";
+import { buildOAuthRedirectUri } from "./modules/storage/storage.models.js";
 import { createStorageService } from "./modules/storage/storage.usecases.js";
 import { registerRulesRoutes } from "./modules/rules/rules.routes.js";
 import { createRulesService } from "./modules/rules/rules.usecases.js";
@@ -208,6 +209,13 @@ export function createServer({
       const [row] = await db.select({ id: authUserTable.id }).from(authUserTable).limit(1);
       return row?.id;
     },
+    // Gmail connects on the same address already registered for Google Drive, so it
+    // never needs its own redirect URI registered with Google.
+    buildRedirectUri: ({ origin }) => buildOAuthRedirectUri({ origin, driverId: "googleDrive" }),
+    // Reads the Google app already saved for the Drive connection so Gmail can reuse
+    // it. This exists so other Google features can borrow the app registered for
+    // Drive; it is not a storage concern, just where those values already live.
+    getSharedGoogleApp: (userId) => storageService.readOAuthApp({ userId, driverId: "googleDrive" }),
   });
 
   app.get("/api/health", (c) => c.json({ status: "ok" }));
@@ -227,10 +235,24 @@ export function createServer({
   registerSummaryRoutes({ app, summaryService, getUserId });
   registerFieldsRoutes({ app, fieldsRepository, summaryService, getUserId });
   registerChatRoutes({ app, chatService, getUserId });
-  registerStorageRoutes({ app, storageService, getUserId, settingsEncryptionKey: config.settingsEncryptionKey });
+  registerStorageRoutes({
+    app,
+    storageService,
+    getUserId,
+    settingsEncryptionKey: config.settingsEncryptionKey,
+    // Wired here, at route registration, rather than into createStorageService above:
+    // emailService is built before this line runs, so route registration time already
+    // has it, while building this table into storage's own constructor would need
+    // emailService to exist before storage does, an evaluation order this file does
+    // not follow.
+    completers: {
+      "email:gmail": ({ code, state, origin }) =>
+        emailService.completeGmailConnection({ code, state, origin, secretHex: config.settingsEncryptionKey }),
+    },
+  });
   registerTelegramRoutes({ app, settingsService, getUserId });
   registerAssistantRoutes({ app, assistantService, getUserId });
-  registerEmailRoutes({ app, emailService, getUserId });
+  registerEmailRoutes({ app, emailService, getUserId, settingsEncryptionKey: config.settingsEncryptionKey });
 
   const exportService = createExportService({ db, storageService });
   registerExportRoutes({ app, exportService, getUserId });

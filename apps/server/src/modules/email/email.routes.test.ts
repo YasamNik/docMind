@@ -31,12 +31,14 @@ function fakeClient(overrides: Partial<ImapClient> = {}): ImapClient {
   };
 }
 
-async function makeApp(clientFactory: EmailClientFactory) {
+const SETTINGS_ENCRYPTION_KEY = "44".repeat(32);
+
+async function makeApp(clientFactory: EmailClientFactory, overrides: Partial<Parameters<typeof createEmailService>[0]> = {}) {
   const { db } = await createTestDatabase();
   const settingsService = createSettingsService({
     db,
     registry: createSettingsRegistry([...storageSettingDefinitions, ...emailSettingDefinitions]),
-    config: { settingsEncryptionKey: "44".repeat(32), env: {} },
+    config: { settingsEncryptionKey: SETTINGS_ENCRYPTION_KEY, env: {} },
   });
   const storageService = createStorageService({ settingsService, countDocuments: async () => 0 });
   const documentsService = createDocumentsService({ db, storageService });
@@ -45,11 +47,12 @@ async function makeApp(clientFactory: EmailClientFactory) {
     documentsService,
     getUserId: async () => userId,
     clientFactory,
+    ...overrides,
   });
 
   const app = new Hono();
   app.onError(errorHandler);
-  registerEmailRoutes({ app, emailService, getUserId: () => userId });
+  registerEmailRoutes({ app, emailService, getUserId: () => userId, settingsEncryptionKey: SETTINGS_ENCRYPTION_KEY });
   return { app, settingsService };
 }
 
@@ -173,5 +176,45 @@ describe("email routes", () => {
     expect(body.ok).toBe(false);
     expect(body.message).not.toContain("ECONNRESET");
     expect(body.message.length).toBeGreaterThan(0);
+  });
+});
+
+function gmailRedirectUri({ origin }: { origin: string }): string {
+  return `${origin}/api/storage/drivers/googleDrive/callback`;
+}
+
+describe("gmail connect route", () => {
+  it("sends the browser to Google carrying the three scopes and no secret", async () => {
+    const { app } = await makeApp(async () => fakeClient(), {
+      buildRedirectUri: gmailRedirectUri,
+      getSharedGoogleApp: async () => ({ clientId: "shared-id", clientSecret: "leaked-shared-secret" }),
+    });
+
+    const res = await app.request("/api/email/gmail/connect", { redirect: "manual" });
+
+    expect(res.status).toBe(302);
+    const location = new URL(res.headers.get("location")!);
+    expect(location.origin + location.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
+    expect(location.searchParams.get("client_id")).toBe("shared-id");
+    expect(location.searchParams.get("scope")).toBe("https://mail.google.com/ openid https://www.googleapis.com/auth/userinfo.email");
+    expect(location.searchParams.get("state")).toMatch(/\./);
+    expect(res.headers.get("location")).not.toContain("leaked-shared-secret");
+  });
+
+  it("returns a clear 400 with no Google app configured anywhere", async () => {
+    const { app } = await makeApp(async () => fakeClient(), { buildRedirectUri: gmailRedirectUri });
+
+    const res = await app.request("/api/email/gmail/connect");
+
+    expect(res.status).toBe(400);
+  });
+
+  it("returns a clear 400 for a half set override", async () => {
+    const { app, settingsService } = await makeApp(async () => fakeClient(), { buildRedirectUri: gmailRedirectUri });
+    await settingsService.set(userId, { "email.gmail.clientId": "override-id" });
+
+    const res = await app.request("/api/email/gmail/connect");
+
+    expect(res.status).toBe(400);
   });
 });

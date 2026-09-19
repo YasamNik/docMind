@@ -1,8 +1,12 @@
 import { Readable } from "node:stream";
+import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { errorHandler } from "../../shared/http/error-handler.js";
 import { createTestApp } from "../../shared/test/app.test-utils.js";
 import { googleDriveDriverDefinition } from "./drivers/google-drive/google-drive.driver.js";
-import { signOAuthState } from "./storage.models.js";
+import { signOAuthState, signState } from "./storage.models.js";
+import { registerStorageRoutes, type OAuthCallbackCompleter } from "./storage.routes.js";
+import { createStorageService } from "./storage.usecases.js";
 
 let t: Awaited<ReturnType<typeof createTestApp>>;
 let cookie: string;
@@ -117,5 +121,52 @@ describe("storage oauth routes", () => {
     } finally {
       exchange.mockRestore();
     }
+  });
+});
+
+describe("storage oauth callback dispatch", () => {
+  const secretHex = "56".repeat(32);
+
+  function makeDispatchApp(completers: Record<string, OAuthCallbackCompleter>) {
+    const storageService = createStorageService({
+      settingsService: { get: async () => undefined } as never,
+      countDocuments: async () => 0,
+    });
+    const app = new Hono();
+    app.onError(errorHandler);
+    registerStorageRoutes({ app, storageService, getUserId: () => "unused", settingsEncryptionKey: secretHex, completers });
+    return app;
+  }
+
+  it("reaches the injected completer for a non-storage purpose and redirects where it says", async () => {
+    const completer: OAuthCallbackCompleter = vi.fn(async () => ({ redirectTo: "/settings?tab=email&connected=gmail" }));
+    const app = makeDispatchApp({ "email:gmail": completer });
+    const state = signState({ userId: "user_1", purpose: "email:gmail", secretHex });
+
+    const res = await app.request(`/api/storage/drivers/googleDrive/callback?code=abc&state=${state}`, { redirect: "manual" });
+
+    expect(completer).toHaveBeenCalledWith({ code: "abc", state, origin: "http://localhost" });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/settings?tab=email&connected=gmail");
+  });
+
+  it("reaches the completer even when the unsigned path parameter names a different driver", async () => {
+    const completer: OAuthCallbackCompleter = vi.fn(async () => ({ redirectTo: "/settings?tab=email&connected=gmail" }));
+    const app = makeDispatchApp({ "email:gmail": completer });
+    const state = signState({ userId: "user_1", purpose: "email:gmail", secretHex });
+
+    const res = await app.request(`/api/storage/drivers/local/callback?code=abc&state=${state}`, { redirect: "manual" });
+
+    expect(completer).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(302);
+  });
+
+  it("rejects a purpose that is neither storage nor in the completer table, before calling anything", async () => {
+    const app = makeDispatchApp({});
+    const state = signState({ userId: "user_1", purpose: "calendar:google", secretHex });
+
+    const res = await app.request(`/api/storage/drivers/googleDrive/callback?code=abc&state=${state}`);
+
+    expect(res.status).toBe(400);
   });
 });
