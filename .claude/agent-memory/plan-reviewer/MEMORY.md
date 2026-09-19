@@ -16,3 +16,5 @@
 - [Background loop / notification gap lesson](lesson-background-loop-and-notification-gaps.md) -- no post-write settings hook, no job-completion hook, DNS-resolve-then-check needs a custom lookup function to close TOCTOU
 - [Assistant instructions/tool-calling spec review](review-spec-assistant-instructions.md) -- neither AI adapter supports tool calling today, confirmation state machine has no storage design, needs redesign
 - [Tool-calling / pending-confirmation lesson](lesson-tool-calling-and-pending-confirmation.md) -- check AiAdapter for real tools support before trusting "tools exist today"; propose-then-confirm needs a named pending-state store
+- [Assistant plan 2 review](review-plan-assistant-triage.md) -- capability registry and triage plan, sound with 4 fixes: narrow test gate, registry naming, runCommand validation, recordsTurn test
+- [runCommand validation / registry naming lesson](lesson-runcommand-validation-and-registry-naming.md) -- check both entry points of a two-path registry validate args; name registries *.registry.ts
