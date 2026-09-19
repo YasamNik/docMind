@@ -1,0 +1,9 @@
+From: Notifications <notify@example.com>
+To: Carol <carol@example.com>
+Subject: Your weekly digest
+Date: Tue, 06 Jan 2026 09:30:00 +0000
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+<html><body><p>This message only has an HTML body.</p><p>Second paragraph with <strong>bold</strong> text.</p></body></html>

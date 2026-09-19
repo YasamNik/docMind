@@ -1,0 +1,19 @@
+From: Attacker <attacker@example.com>
+To: Target <target@example.com>
+Subject: Please review
+Date: Sat, 10 Jan 2026 11:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="MIXED3"
+
+--MIXED3
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+See attached.
+--MIXED3
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="../../etc/passwd"
+Content-Transfer-Encoding: base64
+
+bm90IGFjdHVhbGx5IC9ldGMvcGFzc3dkLCBqdXN0IHRlc3QgYnl0ZXM=
+--MIXED3--
