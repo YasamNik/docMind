@@ -1,7 +1,7 @@
 import type { GenericSchema } from "valibot";
 import type { AiService } from "../ai/ai.usecases.js";
 import type { ChatService } from "../chat/chat.usecases.js";
-import type { Citation } from "../chat/chat.types.js";
+import type { Citation, PendingProposal } from "../chat/chat.types.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
 import type { SettingSource } from "../settings/settings.types.js";
 
@@ -66,5 +66,34 @@ export type Capability = {
   writes: boolean;
   destructive: boolean;
   recordsTurn: boolean; // whether a slash command's exchange joins the conversation
+  // Builds the sentence the user is shown before this capability's handler ever runs.
+  // Required in practice for a record that writes or deletes (a registry data test
+  // enforces it), optional on the type only because TypeScript cannot make a field
+  // conditional on another field's value without turning one record type into two.
+  confirm?: (args: unknown) => string;
   handler: (args: unknown, ctx: ToolContext) => Promise<ToolResult>;
+};
+
+// "yes" or "no" to a proposal, read either from a button or from a bare plain-text
+// reply (assistant.models.ts, readConfirmationAnswer).
+export type ProposalAnswer = "yes" | "no";
+
+// What runTurn returns. proposal is set only when this very turn just made a new
+// offer; a turn that answers one, or an ordinary turn, returns null here (the offer's
+// own state lives on the session's own column, not in this transient result).
+export type TurnResult = {
+  reply: string;
+  citations: Citation[];
+  toolUsed: string | null;
+  proposal: PendingProposal | null;
+};
+
+// What answering a proposal returns, whether through runTurn's own bare yes and no
+// shortcut or through answerProposal's own route. "stale" means this caller lost the
+// claim, or the id given no longer matches the one waiting: nothing was written.
+export type AnswerResult = {
+  status: "ran" | "declined" | "stale";
+  reply: string;
+  citations: Citation[];
+  toolUsed: string | null;
 };

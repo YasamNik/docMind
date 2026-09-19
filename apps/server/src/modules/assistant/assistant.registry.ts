@@ -10,6 +10,7 @@ import {
   missingNoteTextReply,
   newThreadReply,
   noteSourceFor,
+  quotedForConfirmation,
   receivedReply,
   requireSession,
   resolveQuestion,
@@ -35,6 +36,10 @@ function defineCapability<S extends GenericSchema>(capability: {
   writes: boolean;
   destructive: boolean;
   recordsTurn: boolean;
+  // The sentence the user is shown before this capability's handler ever runs (assistant
+  // confirmation plan). Required in practice for a record that writes or deletes, which
+  // "gives every record that writes or deletes a sentence to confirm with" below enforces.
+  confirm?: (args: v.InferOutput<S>) => string;
   handler: (args: v.InferOutput<S>, ctx: ToolContext) => Promise<ToolResult>;
 }): Capability {
   return capability as unknown as Capability;
@@ -70,6 +75,7 @@ const saveNote = defineCapability({
   writes: true,
   destructive: false,
   recordsTurn: false,
+  confirm: ({ text }) => `"${quotedForConfirmation(text)}"\n\nSave that as a note?`,
   async handler({ text }, ctx) {
     const trimmed = text.trim();
     if (!trimmed) return { reply: missingNoteTextReply(), citations: [] };

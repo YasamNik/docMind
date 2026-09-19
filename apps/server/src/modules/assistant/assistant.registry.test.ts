@@ -122,6 +122,42 @@ describe("assistant registry, as data", () => {
   });
 });
 
+describe("assistant registry, confirmation", () => {
+  // One sample argument per writing or destructive record, so the tests below are
+  // data driven over the registry rather than one assertion per capability: a new
+  // writing record with no sample here fails loudly instead of being skipped.
+  const sampleArgsByName: Record<string, unknown> = {
+    saveNote: { text: "buy milk before the shop closes" },
+  };
+
+  it("gives every record that writes or deletes a sentence to confirm with", () => {
+    for (const capability of Object.values(assistantCapabilities)) {
+      if (!capability.writes && !capability.destructive) continue;
+      const sample = sampleArgsByName[capability.name];
+      if (sample === undefined) throw new Error(`add a sample for ${capability.name}`);
+      expect(capability.confirm).toBeTypeOf("function");
+      expect(capability.confirm!(sample).length).toBeGreaterThan(0);
+    }
+  });
+
+  it("ends every confirm sentence with a question mark", () => {
+    for (const capability of Object.values(assistantCapabilities)) {
+      if (!capability.confirm) continue;
+      const sample = sampleArgsByName[capability.name];
+      expect(capability.confirm(sample).trim().endsWith("?")).toBe(true);
+    }
+  });
+
+  it("names the exact text in the sentence it asks about", () => {
+    const sentence = assistantCapabilities.saveNote.confirm!({ text: "buy milk before the shop closes" });
+    expect(sentence).toContain("buy milk before the shop closes");
+  });
+
+  it("still has no destructive record", () => {
+    expect(Object.values(assistantCapabilities).some((capability) => capability.destructive)).toBe(false);
+  });
+});
+
 describe("assistant registry, handlers", () => {
   it("saves a note as a document named from its first line", async () => {
     const { t, userId } = await setup();

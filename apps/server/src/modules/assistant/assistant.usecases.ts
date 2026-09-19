@@ -4,9 +4,9 @@ import { createLogger, type Logger } from "../../shared/logger/logger.js";
 import { buildModelUri } from "../ai/ai.models.js";
 import type { AiService } from "../ai/ai.usecases.js";
 import type { ChatMessage, ChatStreamPart, ToolDefinition } from "../ai/ai.types.js";
-import { MAX_HISTORY_MESSAGES } from "../chat/chat.models.js";
+import { MAX_HISTORY_MESSAGES, nowIso } from "../chat/chat.models.js";
 import type { ChatService } from "../chat/chat.usecases.js";
-import type { Citation } from "../chat/chat.types.js";
+import type { Citation, PendingProposal } from "../chat/chat.types.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
 import {
@@ -16,15 +16,52 @@ import {
   commandTurnText,
   DEFAULT_INSTRUCTIONS,
   MAX_INSTRUCTIONS_CHARS,
+  newProposalId,
+  proposalDeclinedReply,
   pushInstructionVersion,
+  readConfirmationAnswer,
+  requireSession,
+  requiresCommandConfirmation,
+  requiresConfirmation,
+  staleProposalReply,
   toolsUnsupportedNotice,
+  unavailableProposalReply,
   WARN_INSTRUCTIONS_CHARS,
 } from "./assistant.models.js";
 import { assistantCapabilities } from "./assistant.registry.js";
+import { pendingToolCallSchema } from "./assistant.schemas.js";
 import { INSTRUCTIONS_HISTORY_KEY, INSTRUCTIONS_KEY, TOOLS_UNSUPPORTED_NOTICE_FOR_KEY } from "./assistant.settings.js";
-import type { AssistantSurface, Capability, InstructionsView, InstructionVersion, ToolContext, ToolResult } from "./assistant.types.js";
+import type {
+  AnswerResult,
+  AssistantSurface,
+  Capability,
+  InstructionsView,
+  InstructionVersion,
+  ProposalAnswer,
+  ToolContext,
+  ToolResult,
+  TurnResult,
+} from "./assistant.types.js";
 
-type TurnResult = { reply: string; citations: Citation[]; toolUsed: string | null };
+// What the pending_tool_call column holds, parsed. args is unknown here on purpose
+// (assistant.schemas.ts): it is re-parsed against the named capability's own schema
+// before a handler ever sees it, in resolveProposal below.
+type PendingToolCall = v.InferOutput<typeof pendingToolCallSchema>;
+
+// Parses the raw column value as untrusted input: written by one version of the code,
+// read back by another, after a restart, a deploy, or a registry change. Degrades to
+// null on anything that does not parse, rather than throwing, since every caller of
+// this has its own idea of what a null pending call means (assistant confirmation
+// plan, "Three read failures").
+function parsePendingToolCall(raw: string): PendingToolCall | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const result = v.safeParse(pendingToolCallSchema, parsed);
+    return result.success ? result.output : null;
+  } catch {
+    return null;
+  }
+}
 
 function toToolDefinition(capability: Capability): ToolDefinition {
   return { name: capability.name, description: capability.description, schema: capability.schema };
@@ -53,11 +90,6 @@ export function createAssistantService({
   aiService,
   settingsService,
   capabilities = assistantCapabilities,
-  // Plan 3 flips this to true once chat_sessions.pending_tool_call exists. Until then
-  // no writing tool is offered to the model at all (Decision 1 in the assistant triage
-  // plan): a slash command can still run saveNote's handler directly, since typing the
-  // command is itself the confirmation.
-  allowWritingTools = false,
   logger = createLogger("assistant"),
 }: {
   chatService: ChatService;
@@ -65,11 +97,13 @@ export function createAssistantService({
   aiService: AiService;
   settingsService: SettingsService;
   capabilities?: Record<string, Capability>;
-  allowWritingTools?: boolean;
   logger?: Logger;
 }) {
-  const offeredCapabilities = Object.values(capabilities).filter((capability) => !capability.writes || allowWritingTools);
-  const offeredToolSpecs = offeredCapabilities.map(toToolDefinition);
+  // Every capability in the registry is offered to the model, including the ones that
+  // write or delete (assistant confirmation plan, Decision 1): what runs without a yes
+  // is requiresConfirmation's own read of the record's flags in runTurn below, not
+  // whether the model is told the tool exists at all.
+  const offeredToolSpecs = Object.values(capabilities).map(toToolDefinition);
 
   // Resolves the body through getResolved, not the raw get() loadInstructions uses for
   // a turn, so the view can tell the editor whether the user has ever saved at all
@@ -224,7 +258,71 @@ export function createAssistantService({
     const result = await runHandler({ name: "answerFromDocuments", args: { question: undefined }, ctx });
     const reply = notice ? `${notice}\n\n${result.reply}` : result.reply;
     await chatService.appendAssistantMessage({ userId, sessionId, content: reply, citations: result.citations });
-    return { reply, citations: result.citations, toolUsed: "answerFromDocuments" };
+    return { reply, citations: result.citations, toolUsed: "answerFromDocuments", proposal: null };
+  }
+
+  // The one place a "yes" or a "no" is ever actually resolved (assistant confirmation
+  // plan, Decision 4): claims the proposal with a conditional update before anything
+  // else runs, so two answers to the same offer produce one write and one stale reply.
+  // Shared by runTurn's own bare yes and no shortcut and by answerProposal, which
+  // differ only in appendUserTurn: runTurn has already appended the user's own text as
+  // their turn, so it passes false and does not add a second one.
+  //
+  // The claim happens before the handler runs, and the handler runs before anything
+  // else is appended to the conversation (Decision 4): appendUserMessage below resolves
+  // the session on its own and can throw chat.session_not_found, and that must never be
+  // able to lose a write the claim already committed to. That error is left to escape
+  // from here uncaught, exactly as it escapes from runHandler, for the same reason: it
+  // is not a sentence a user can act on.
+  async function resolveProposal({
+    userId,
+    sessionId,
+    surface,
+    pending,
+    rawValue,
+    decision,
+    appendUserTurn,
+    startNewThread,
+  }: {
+    userId: string;
+    sessionId: string;
+    surface: AssistantSurface;
+    pending: PendingToolCall;
+    rawValue: string;
+    decision: ProposalAnswer;
+    appendUserTurn: boolean;
+    startNewThread: () => Promise<void>;
+  }): Promise<AnswerResult> {
+    const claimed = await chatService.clearPendingToolCall({ userId, sessionId, expected: rawValue });
+    if (!claimed) {
+      return { status: "stale", reply: staleProposalReply(), citations: [], toolUsed: null };
+    }
+
+    if (decision === "no") {
+      if (appendUserTurn) await chatService.appendUserMessage({ userId, sessionId, content: "No" });
+      const reply = proposalDeclinedReply();
+      await chatService.appendAssistantMessage({ userId, sessionId, content: reply });
+      return { status: "declined", reply, citations: [], toolUsed: null };
+    }
+
+    // decision === "yes". The arguments are re-parsed against the capability's own
+    // schema here, never trusted from the stored envelope: it was written by one
+    // version of the code and may be read back by another, after a registry change.
+    const capability = capabilities[pending.tool];
+    const parsedArgs = capability ? v.safeParse(capability.schema, pending.args) : null;
+    if (!capability || !parsedArgs || !parsedArgs.success) {
+      if (appendUserTurn) await chatService.appendUserMessage({ userId, sessionId, content: "Yes" });
+      const reply = unavailableProposalReply();
+      await chatService.appendAssistantMessage({ userId, sessionId, content: reply });
+      return { status: "ran", reply, citations: [], toolUsed: null };
+    }
+
+    const ctx = await buildContext({ userId, sessionId, surface, userMessage: "", startNewThread });
+    const result = await runHandler({ name: pending.tool, args: parsedArgs.output, ctx });
+
+    if (appendUserTurn) await chatService.appendUserMessage({ userId, sessionId, content: "Yes" });
+    await chatService.appendAssistantMessage({ userId, sessionId, content: result.reply, citations: result.citations });
+    return { status: "ran", reply: result.reply, citations: result.citations, toolUsed: result.failed ? null : pending.tool };
   }
 
   async function runTurn({
@@ -248,10 +346,48 @@ export function createAssistantService({
     const ctx = await buildContext({ userId, sessionId, surface, userMessage: text, startNewThread });
 
     try {
+      // Listed once, here: the last assistant message's id and the history the model
+      // gets both come from this one read, so the pending check below costs no extra
+      // query on the path that ends in a model call.
+      const priorMessages = await chatService.listMessages({ userId, sessionId });
+      const lastAssistantMessage = [...priorMessages].reverse().find((message) => message.role === "assistant");
+
+      const rawPending = await chatService.readPendingToolCall({ userId, sessionId });
+      if (rawPending) {
+        const pending = parsePendingToolCall(rawPending);
+        if (!pending) {
+          // The value does not parse as the envelope: clear it and fall through, so
+          // this turn runs normally rather than being stuck behind a proposal nobody
+          // can ever answer.
+          logger.warn({ sessionId }, "Cleared a pending tool call that failed to parse");
+          await chatService.clearPendingToolCall({ userId, sessionId, expected: rawPending });
+        } else if (pending.messageId === lastAssistantMessage?.id) {
+          // Answerable by plain text only while it is still the last thing the
+          // assistant said (Decision 2). Once the conversation has moved on, even a
+          // bare "yes" is an ordinary turn, and the proposal stays pending for its
+          // button either way.
+          const answer = readConfirmationAnswer(text);
+          if (answer === "yes" || answer === "no") {
+            const outcome = await resolveProposal({
+              userId,
+              sessionId,
+              surface,
+              pending,
+              rawValue: rawPending,
+              decision: answer,
+              appendUserTurn: false,
+              startNewThread,
+            });
+            return { reply: outcome.reply, citations: outcome.citations, toolUsed: outcome.toolUsed, proposal: null };
+          }
+        }
+        // A mismatched messageId or an "unrelated" reply both fall through here with
+        // the column untouched: the offer stays standing for its button.
+      }
+
       const canUseTools = await aiService.supportsTools(userId);
       if (!canUseTools) return await answerWithoutTools({ ctx, userId, sessionId });
 
-      const priorMessages = await chatService.listMessages({ userId, sessionId });
       const history: ChatMessage[] = priorMessages.slice(-MAX_HISTORY_MESSAGES).map((message) => ({
         role: message.role === "assistant" ? "assistant" : "user",
         content: message.content,
@@ -264,7 +400,6 @@ export function createAssistantService({
       const prompt = buildAssistantPrompt({
         basePrompt,
         tools: offeredToolSpecs,
-        writesWithheld: !allowWritingTools,
         instructions: ctx.instructions,
       });
       const messages: ChatMessage[] = [{ role: "system", content: prompt }, ...history];
@@ -299,18 +434,49 @@ export function createAssistantService({
       if (!chosenCall) {
         const reply = accumulatedText.trim().length > 0 ? accumulatedText : assistantTroubleReply();
         await chatService.appendAssistantMessage({ userId, sessionId, content: reply });
-        return { reply, citations: [], toolUsed: null };
+        return { reply, citations: [], toolUsed: null, proposal: null };
       }
 
       // chosenCall.arguments was already validated against the tool's own schema inside
       // driveToolCallStream (ai.usecases.ts), so it is not re-parsed here. runCommand,
       // which never touches the AI layer, validates on its own path below instead.
+      const chosenCapability = capabilities[chosenCall.name];
+      if (chosenCapability && requiresConfirmation(chosenCapability)) {
+        // Fails closed rather than silently running an unconfirmed write: a record
+        // that writes or deletes with no confirm function is a registry mistake the
+        // registry's own data test exists to catch before this is ever reached.
+        if (!chosenCapability.confirm) {
+          throw createError({
+            code: "assistant.confirmation_unavailable",
+            message: `"${chosenCapability.name}" needs confirmation but has no way to describe itself.`,
+            status: 500,
+          });
+        }
+        const sentence = chosenCapability.confirm(chosenCall.arguments);
+        // The message is written before the column on purpose: if the column write
+        // fails, the user has been asked a question nothing is waiting on, and their
+        // yes becomes an ordinary turn the model will most likely answer by proposing
+        // again. The other order would leave a proposal pointing at a message that
+        // does not exist.
+        const assistantMessageId = await chatService.appendAssistantMessage({ userId, sessionId, content: sentence });
+        const proposal: PendingProposal = {
+          id: newProposalId(),
+          tool: chosenCapability.name,
+          text: sentence,
+          messageId: assistantMessageId,
+          proposedAt: nowIso(),
+        };
+        const envelope: PendingToolCall = { ...proposal, args: chosenCall.arguments };
+        await chatService.setPendingToolCall({ userId, sessionId, value: JSON.stringify(envelope) });
+        return { reply: sentence, citations: [], toolUsed: null, proposal };
+      }
+
       const result = await runHandler({ name: chosenCall.name, args: chosenCall.arguments, ctx });
       await chatService.appendAssistantMessage({ userId, sessionId, content: result.reply, citations: result.citations });
       // A handler that answered from its own failure path did not do the job the tool
       // names, so it is not reported as used. Otherwise a surface reading toolUsed
       // appends a success footer to a message explaining the tool could not run.
-      return { reply: result.reply, citations: result.citations, toolUsed: result.failed ? null : chosenCall.name };
+      return { reply: result.reply, citations: result.citations, toolUsed: result.failed ? null : chosenCall.name, proposal: null };
     } catch (error) {
       // Anything that escapes the paths above, such as the model call itself failing
       // outright, still gets a saved assistant turn: a user turn left unanswered would
@@ -320,7 +486,7 @@ export function createAssistantService({
         logger.error({ sessionId, err: error instanceof Error ? error.message : String(error) }, "Assistant turn failed unexpectedly");
       }
       await chatService.appendAssistantMessage({ userId, sessionId, content: reply });
-      return { reply, citations: [], toolUsed: null };
+      return { reply, citations: [], toolUsed: null, proposal: null };
     }
   }
 
@@ -346,6 +512,34 @@ export function createAssistantService({
     // No triage and no model call: a slash command is an exact instruction, so it goes
     // straight to the handler once its own arguments check out.
     const parsedArgs = parseCommandArgs(capability, args);
+
+    // A typed command is its own confirmation for a write, since typing it out is the
+    // deliberate act; deleting confirms on every path, including a typed one
+    // (requiresCommandConfirmation is destructive alone).
+    if (requiresCommandConfirmation(capability)) {
+      const confirmedSessionId = requireSession({ sessionId });
+      if (!capability.confirm) {
+        throw createError({
+          code: "assistant.confirmation_unavailable",
+          message: `"${capability.name}" needs confirmation but has no way to describe itself.`,
+          status: 500,
+        });
+      }
+      const sentence = capability.confirm(parsedArgs);
+      await chatService.appendUserMessage({ userId, sessionId: confirmedSessionId, content: commandTurnText({ tool, args: parsedArgs }) });
+      const assistantMessageId = await chatService.appendAssistantMessage({ userId, sessionId: confirmedSessionId, content: sentence });
+      const envelope: PendingToolCall = {
+        id: newProposalId(),
+        tool: capability.name,
+        args: parsedArgs,
+        text: sentence,
+        messageId: assistantMessageId,
+        proposedAt: nowIso(),
+      };
+      await chatService.setPendingToolCall({ userId, sessionId: confirmedSessionId, value: JSON.stringify(envelope) });
+      return { reply: sentence, citations: [], toolUsed: null };
+    }
+
     const ctx = await buildContext({ userId, sessionId, surface, userMessage: "", startNewThread });
 
     const result = await runHandler({ name: tool, args: parsedArgs, ctx });
@@ -366,7 +560,54 @@ export function createAssistantService({
     return { reply: result.reply, citations: result.citations, toolUsed: result.failed ? null : tool };
   }
 
-  return { runTurn, runCommand, getInstructions, saveInstructions, restoreInstructions };
+  // Answers a proposal made through the button or through the app's own HTTP route.
+  // Does not require the proposal to be the last assistant message: Decision 2's
+  // freshness rule applies to plain text only, and a button pressed after the
+  // conversation moved on is a deliberate act that is honoured. Unlike runTurn, this
+  // is not wrapped in a try/catch that turns chat.session_not_found into reply text:
+  // it is left to escape exactly as it escapes from runHandler, and nothing here
+  // retries on a fresh session the way handleAssistantTurn retries an ordinary turn,
+  // since a fresh session has no pending proposal to answer.
+  async function answerProposal({
+    userId,
+    sessionId,
+    proposalId,
+    decision,
+    surface,
+    startNewThread,
+  }: {
+    userId: string;
+    sessionId: string;
+    proposalId: string;
+    decision: ProposalAnswer;
+    surface: AssistantSurface;
+    startNewThread: () => Promise<void>;
+  }): Promise<AnswerResult> {
+    const rawPending = await chatService.readPendingToolCall({ userId, sessionId });
+    const pending = rawPending ? parsePendingToolCall(rawPending) : null;
+    if (!rawPending || !pending || pending.id !== proposalId) {
+      return { status: "stale", reply: staleProposalReply(), citations: [], toolUsed: null };
+    }
+    return resolveProposal({ userId, sessionId, surface, pending, rawValue: rawPending, decision, appendUserTurn: true, startNewThread });
+  }
+
+  // Reads the same column as answerProposal's own first step, and degrades the same
+  // way: a value that fails to parse, names a capability that is gone, or carries
+  // arguments that no longer fit that capability's schema reads as null, since looking
+  // is not answering and nothing here writes anything.
+  async function getPendingProposal({ userId, sessionId }: { userId: string; sessionId: string }): Promise<PendingProposal | null> {
+    const rawPending = await chatService.readPendingToolCall({ userId, sessionId });
+    if (!rawPending) return null;
+    const pending = parsePendingToolCall(rawPending);
+    if (!pending) return null;
+    const capability = capabilities[pending.tool];
+    if (!capability) return null;
+    const parsedArgs = v.safeParse(capability.schema, pending.args);
+    if (!parsedArgs.success) return null;
+    return { id: pending.id, tool: pending.tool, text: pending.text, messageId: pending.messageId, proposedAt: pending.proposedAt };
+  }
+
+  return { runTurn, runCommand, answerProposal, getPendingProposal, getInstructions, saveInstructions, restoreInstructions };
 }
 
 export type AssistantService = ReturnType<typeof createAssistantService>;

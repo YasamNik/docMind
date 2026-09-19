@@ -176,8 +176,6 @@ export function createServer({
   const summaryService = createSummaryService({ db, aiService });
   const fieldsRepository = createFieldsRepository({ db });
   const chatService = createChatService({ db, aiService, searchService });
-  // allowWritingTools stays at its default of false (Decision 1 in the assistant
-  // triage plan) until chat_sessions.pending_tool_call exists.
   const assistantService = createAssistantService({ chatService, documentsService, aiService, settingsService });
   const jobRunner = createJobRunner({
     db,

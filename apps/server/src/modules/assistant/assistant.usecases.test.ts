@@ -9,6 +9,7 @@ import { expectAppError } from "../../shared/test/errors.test-utils.js";
 import type { AiAdapter, ChatMessage, ChatStreamPart, ModelInfo, ToolDefinition } from "../ai/ai.types.js";
 import type { AiService } from "../ai/ai.usecases.js";
 import { createSearchRepository } from "../search/search.repository.js";
+import type { ChatService } from "../chat/chat.usecases.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
 import {
   assistantTroubleReply,
@@ -16,7 +17,10 @@ import {
   MAX_INSTRUCTIONS_CHARS,
   MAX_INSTRUCTION_VERSIONS,
   newThreadReply,
+  proposalDeclinedReply,
+  staleProposalReply,
   toolsUnsupportedNotice,
+  unavailableProposalReply,
 } from "./assistant.models.js";
 import { assistantCapabilities } from "./assistant.registry.js";
 import { INSTRUCTIONS_HISTORY_KEY, INSTRUCTIONS_KEY } from "./assistant.settings.js";
@@ -48,6 +52,12 @@ async function setup({
 }
 
 type TestApp = Awaited<ReturnType<typeof setup>>["t"];
+
+async function readAll(stream: Readable) {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString();
+}
 
 async function uploadWithChunk(t: TestApp, userId: string, name: string, text: string) {
   const { document } = await t.services.documentsService.upload({ userId, name, mimeType: "text/plain", body: Readable.from([text]) });
@@ -102,7 +112,7 @@ describe("assistant service, runTurn", () => {
     expect(result.citations).toEqual([]);
   });
 
-  it("does not offer saveNote to the model while writes are withheld", async () => {
+  it("offers every capability in the registry to the model, including the ones that write", async () => {
     let capturedTools: ToolDefinition[] = [];
     const streamChat = vi.fn(async (args: { tools?: ToolDefinition[] }) => {
       capturedTools = args.tools ?? [];
@@ -120,35 +130,9 @@ describe("assistant service, runTurn", () => {
       startNewThread: vi.fn(async () => {}),
     });
 
-    expect(capturedTools.map((tool) => tool.name)).not.toContain("saveNote");
-  });
-
-  it("offers saveNote once writing tools are allowed", async () => {
-    let capturedTools: ToolDefinition[] = [];
-    const streamChat = vi.fn(async (args: { tools?: ToolDefinition[] }) => {
-      capturedTools = args.tools ?? [];
-      return chatStreamPartsOf(["ok"]);
-    });
-    const { t, userId } = await setup({ streamChat });
-    const assistantService = createAssistantService({
-      chatService: t.services.chatService,
-      documentsService: t.services.documentsService,
-      aiService: t.services.aiService,
-      settingsService: t.services.settingsService,
-      allowWritingTools: true,
-    });
-    const session = await t.services.chatService.createSession({ userId });
-
-    await assistantService.runTurn({
-      userId,
-      sessionId: session.id,
-      surface: "telegram",
-      text: "hi",
-      basePrompt: BASE_PROMPT,
-      startNewThread: vi.fn(async () => {}),
-    });
-
-    expect(capturedTools.map((tool) => tool.name)).toContain("saveNote");
+    const offeredNames = capturedTools.map((tool) => tool.name);
+    expect(offeredNames.sort()).toEqual(Object.keys(assistantCapabilities).sort());
+    expect(offeredNames).toContain("saveNote");
   });
 
   it("never puts document text in the call that can call a tool", async () => {
@@ -405,6 +389,580 @@ describe("assistant service, runTurn", () => {
   });
 });
 
+describe("assistant service, a write waits for a yes", () => {
+  it("proposes instead of saving when the model chooses saveNote", async () => {
+    const streamChat = vi.fn(async () => toolCallStream("saveNote", { text: "buy milk before the shop closes" }));
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+
+    const result = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "save a note to buy milk before the shop closes",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.reply).toMatch(/save that as a note\?/i);
+    expect(result.proposal).not.toBeNull();
+    const documents = await t.services.documentsService.list({ userId });
+    expect(documents).toHaveLength(0);
+  });
+
+  it("does not report a proposal as a tool that ran", async () => {
+    const streamChat = vi.fn(async () => toolCallStream("saveNote", { text: "buy milk" }));
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+
+    const result = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "note buy milk",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.toolUsed).toBeNull();
+  });
+
+  // Decision 1's own invariant, built against a test registry rather than against
+  // saveNote: dispatch is on capability.writes and capability.destructive, not on a
+  // tool's name, so a capability added later is covered by this test on the day it
+  // joins the registry.
+  it("runs no handler that writes or deletes until a proposal has been claimed", async () => {
+    const writesHandler = vi.fn(async () => ({ reply: "wrote it", citations: [] }));
+    const destructiveHandler = vi.fn(async () => ({ reply: "deleted it", citations: [] }));
+    const testRegistry: Record<string, Capability> = {
+      ...assistantCapabilities,
+      testWrites: {
+        name: "testWrites",
+        description: "Writes something for the user, used only to test the confirmation guard.",
+        schema: v.object({ label: v.string() }),
+        writes: true,
+        destructive: false,
+        recordsTurn: false,
+        confirm: (args) => `Save "${(args as { label: string }).label}" for testing?`,
+        handler: writesHandler,
+      },
+      testDeletes: {
+        name: "testDeletes",
+        description: "Deletes something for the user, used only to test the confirmation guard.",
+        schema: v.object({ label: v.string() }),
+        writes: false,
+        destructive: true,
+        recordsTurn: false,
+        confirm: (args) => `Delete "${(args as { label: string }).label}" for testing?`,
+        handler: destructiveHandler,
+      },
+    };
+    const handlersByName: Record<string, ReturnType<typeof vi.fn>> = { testWrites: writesHandler, testDeletes: destructiveHandler };
+
+    for (const name of ["testWrites", "testDeletes"] as const) {
+      const streamChat = vi.fn(async () => toolCallStream(name, { label: "sample" }));
+      const { t, userId } = await setup({ streamChat });
+      const assistantService = createAssistantService({
+        chatService: t.services.chatService,
+        documentsService: t.services.documentsService,
+        aiService: t.services.aiService,
+        settingsService: t.services.settingsService,
+        capabilities: testRegistry,
+      });
+      const session = await t.services.chatService.createSession({ userId });
+
+      const result = await assistantService.runTurn({
+        userId,
+        sessionId: session.id,
+        surface: "telegram",
+        text: "please do the thing",
+        basePrompt: BASE_PROMPT,
+        startNewThread: vi.fn(async () => {}),
+      });
+
+      expect(handlersByName[name]).not.toHaveBeenCalled();
+      expect(result.toolUsed).toBeNull();
+      expect(result.reply).toBe(testRegistry[name]!.confirm!({ label: "sample" }));
+      expect(result.proposal).not.toBeNull();
+      const pending = await assistantService.getPendingProposal({ userId, sessionId: session.id });
+      expect(pending?.tool).toBe(name);
+    }
+  });
+
+  it("saves the note after a bare yes, with no model call at all", async () => {
+    const streamChat = vi.fn(async () => toolCallStream("saveNote", { text: "buy milk before the shop closes" }));
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+
+    await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "save a note",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+    streamChat.mockClear();
+
+    const result = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "yes",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(streamChat).not.toHaveBeenCalled();
+    expect(result.toolUsed).toBe("saveNote");
+    const documents = await t.services.documentsService.list({ userId });
+    expect(documents).toHaveLength(1);
+  });
+
+  it("writes nothing after a bare no, and says so", async () => {
+    const streamChat = vi.fn(async () => toolCallStream("saveNote", { text: "buy milk" }));
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+
+    await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "save a note",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+    const result = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "no",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.reply).toBe(proposalDeclinedReply());
+    const documents = await t.services.documentsService.list({ userId });
+    expect(documents).toHaveLength(0);
+  });
+
+  it("answers an unrelated message normally and leaves the proposal waiting", async () => {
+    let callCount = 0;
+    const streamChat = vi.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) return toolCallStream("saveNote", { text: "buy milk" });
+      return chatStreamPartsOf(["Sure, here's something else."]);
+    });
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+
+    const proposeResult = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "save a note",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+    const result = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "what's the weather",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.reply).toBe("Sure, here's something else.");
+    const pending = await t.services.assistantService.getPendingProposal({ userId, sessionId: session.id });
+    expect(pending?.id).toBe(proposeResult.proposal?.id);
+  });
+
+  it("does not read a bare yes as an answer once the conversation has moved on", async () => {
+    let callCount = 0;
+    const streamChat = vi.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) return toolCallStream("saveNote", { text: "buy milk" });
+      if (callCount === 2) return chatStreamPartsOf(["Sure, ask away."]);
+      return chatStreamPartsOf(["An ordinary reply to yes."]);
+    });
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+
+    const proposeResult = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "save a note",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+    await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "what's the weather",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+    const result = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "yes",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.reply).toBe("An ordinary reply to yes.");
+    expect(callCount).toBe(3);
+    const documents = await t.services.documentsService.list({ userId });
+    expect(documents).toHaveLength(0);
+    const pending = await t.services.assistantService.getPendingProposal({ userId, sessionId: session.id });
+    expect(pending?.id).toBe(proposeResult.proposal?.id);
+  });
+
+  it("replaces a waiting proposal when it makes a second one", async () => {
+    let callCount = 0;
+    const streamChat = vi.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) return toolCallStream("saveNote", { text: "first note" });
+      return toolCallStream("saveNote", { text: "second note" });
+    });
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+
+    const first = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "note the first thing",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+    const second = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "note the second thing instead",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    const pending = await t.services.assistantService.getPendingProposal({ userId, sessionId: session.id });
+    expect(pending?.id).toBe(second.proposal?.id);
+    expect(pending?.id).not.toBe(first.proposal?.id);
+  });
+
+  it("tells the user a replaced proposal is no longer waiting", async () => {
+    let callCount = 0;
+    const streamChat = vi.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) return toolCallStream("saveNote", { text: "first note" });
+      return toolCallStream("saveNote", { text: "second note" });
+    });
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+
+    const first = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "note the first thing",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+    await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "note the second thing instead",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    const answer = await t.services.assistantService.answerProposal({
+      userId,
+      sessionId: session.id,
+      proposalId: first.proposal!.id,
+      decision: "yes",
+      surface: "telegram",
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(answer.status).toBe("stale");
+    expect(answer.reply).toBe(staleProposalReply());
+    const documents = await t.services.documentsService.list({ userId });
+    expect(documents).toHaveLength(0);
+  });
+
+  it("answers the same proposal only once", async () => {
+    const streamChat = vi.fn(async () => toolCallStream("saveNote", { text: "buy milk" }));
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+    const proposeResult = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "note buy milk",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    const first = await t.services.assistantService.answerProposal({
+      userId,
+      sessionId: session.id,
+      proposalId: proposeResult.proposal!.id,
+      decision: "yes",
+      surface: "telegram",
+      startNewThread: vi.fn(async () => {}),
+    });
+    const second = await t.services.assistantService.answerProposal({
+      userId,
+      sessionId: session.id,
+      proposalId: proposeResult.proposal!.id,
+      decision: "yes",
+      surface: "telegram",
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(first.status).toBe("ran");
+    expect(second.status).toBe("stale");
+    const documents = await t.services.documentsService.list({ userId });
+    expect(documents).toHaveLength(1);
+  });
+
+  it("writes nothing to the conversation for a stale answer", async () => {
+    const streamChat = vi.fn(async () => toolCallStream("saveNote", { text: "buy milk" }));
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+    const proposeResult = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "note buy milk",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+    await t.services.assistantService.answerProposal({
+      userId,
+      sessionId: session.id,
+      proposalId: proposeResult.proposal!.id,
+      decision: "yes",
+      surface: "telegram",
+      startNewThread: vi.fn(async () => {}),
+    });
+    const messagesAfterFirstAnswer = await t.services.chatService.listMessages({ userId, sessionId: session.id });
+
+    await t.services.assistantService.answerProposal({
+      userId,
+      sessionId: session.id,
+      proposalId: proposeResult.proposal!.id,
+      decision: "yes",
+      surface: "telegram",
+      startNewThread: vi.fn(async () => {}),
+    });
+    const messagesAfterSecondAnswer = await t.services.chatService.listMessages({ userId, sessionId: session.id });
+
+    expect(messagesAfterSecondAnswer).toHaveLength(messagesAfterFirstAnswer.length);
+  });
+
+  it("keeps the note it already saved even when recording the answer then fails", async () => {
+    const streamChat = vi.fn(async () => toolCallStream("saveNote", { text: "buy milk" }));
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+    const proposeResult = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "note buy milk",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    const failingChatService: ChatService = {
+      ...t.services.chatService,
+      appendUserMessage: vi.fn(async () => {
+        throw createError({ code: "chat.session_not_found", message: `Chat session "${session.id}" not found`, status: 404 });
+      }),
+    };
+    const assistantService = createAssistantService({
+      chatService: failingChatService,
+      documentsService: t.services.documentsService,
+      aiService: t.services.aiService,
+      settingsService: t.services.settingsService,
+    });
+
+    await expectAppError(
+      () =>
+        assistantService.answerProposal({
+          userId,
+          sessionId: session.id,
+          proposalId: proposeResult.proposal!.id,
+          decision: "yes",
+          surface: "telegram",
+          startNewThread: vi.fn(async () => {}),
+        }),
+      "chat.session_not_found",
+    );
+
+    const documents = await t.services.documentsService.list({ userId });
+    expect(documents).toHaveLength(1);
+  });
+
+  it("answers a proposal made before a restart", async () => {
+    const streamChat = vi.fn(async () => toolCallStream("saveNote", { text: "buy milk" }));
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+    const first = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "note buy milk",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    // A second, entirely fresh service over the same database: nothing kept in memory
+    // survives, and this still answers the first service's own proposal.
+    const restartedAssistantService = createAssistantService({
+      chatService: t.services.chatService,
+      documentsService: t.services.documentsService,
+      aiService: t.services.aiService,
+      settingsService: t.services.settingsService,
+    });
+
+    const answer = await restartedAssistantService.answerProposal({
+      userId,
+      sessionId: session.id,
+      proposalId: first.proposal!.id,
+      decision: "yes",
+      surface: "telegram",
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(answer.status).toBe("ran");
+    const documents = await t.services.documentsService.list({ userId });
+    expect(documents).toHaveLength(1);
+  });
+
+  it("clears a pending value it cannot parse and answers the turn normally", async () => {
+    const streamChat = vi.fn(async () => chatStreamPartsOf(["An ordinary reply."]));
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+    await t.services.chatService.setPendingToolCall({ userId, sessionId: session.id, value: "not json at all" });
+
+    const result = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "yes",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.reply).toBe("An ordinary reply.");
+    const pending = await t.services.assistantService.getPendingProposal({ userId, sessionId: session.id });
+    expect(pending).toBeNull();
+  });
+
+  it("says plainly when the proposed tool no longer exists", async () => {
+    const { t, userId } = await setup();
+    const session = await t.services.chatService.createSession({ userId });
+    const assistantMessageId = await t.services.chatService.appendAssistantMessage({
+      userId,
+      sessionId: session.id,
+      content: "Save that as a note?",
+    });
+    const envelope = {
+      id: "prop_test0000",
+      tool: "aToolThatIsGone",
+      args: { text: "buy milk" },
+      text: "Save that as a note?",
+      messageId: assistantMessageId,
+      proposedAt: new Date().toISOString(),
+    };
+    await t.services.chatService.setPendingToolCall({ userId, sessionId: session.id, value: JSON.stringify(envelope) });
+
+    const result = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "yes",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.reply).toBe(unavailableProposalReply());
+    const documents = await t.services.documentsService.list({ userId });
+    expect(documents).toHaveLength(0);
+  });
+
+  it("re-parses the stored arguments before running them", async () => {
+    const { t, userId } = await setup();
+    const session = await t.services.chatService.createSession({ userId });
+    const assistantMessageId = await t.services.chatService.appendAssistantMessage({
+      userId,
+      sessionId: session.id,
+      content: "Save that as a note?",
+    });
+    const envelope = {
+      id: "prop_test0001",
+      tool: "saveNote",
+      args: { text: 12345 },
+      text: "Save that as a note?",
+      messageId: assistantMessageId,
+      proposedAt: new Date().toISOString(),
+    };
+    await t.services.chatService.setPendingToolCall({ userId, sessionId: session.id, value: JSON.stringify(envelope) });
+
+    const result = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "yes",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.reply).toBe(unavailableProposalReply());
+    const documents = await t.services.documentsService.list({ userId });
+    expect(documents).toHaveLength(0);
+  });
+
+  it("saves the whole note even when the question quoted only part of it", async () => {
+    const longText = "x".repeat(3000);
+    const streamChat = vi.fn(async () => toolCallStream("saveNote", { text: longText }));
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+
+    const proposeResult = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "note this long thing",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+    expect(proposeResult.reply.length).toBeLessThan(longText.length);
+
+    const answer = await t.services.assistantService.answerProposal({
+      userId,
+      sessionId: session.id,
+      proposalId: proposeResult.proposal!.id,
+      decision: "yes",
+      surface: "telegram",
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(answer.status).toBe("ran");
+    const documents = await t.services.documentsService.list({ userId });
+    expect(documents).toHaveLength(1);
+    const { stream } = await t.services.documentsService.openFile({ userId, documentId: documents[0]!.id });
+    expect(await readAll(stream)).toBe(longText);
+  });
+});
+
 describe("assistant service, instructions reach every call", () => {
   it("sends the saved instructions on the call that chooses a tool", async () => {
     const capturedMessages: ChatMessage[][] = [];
@@ -616,12 +1174,9 @@ describe("assistant service, instructions reach every call", () => {
   });
 
   // Decision 8's own regression guard: which capabilities are offered comes from the
-  // registry and allowWritingTools alone, never from the document, whatever it asks
-  // for. Built with allowWritingTools true, the same way the existing "offers saveNote
-  // once writing tools are allowed" test is: with the default false, saveNote is
-  // filtered out regardless of the document, so the test would pass against a broken
-  // implementation too. With the flag on, the tools array a document that tries hardest
-  // to loosen it still has to match the one from a turn with no document at all.
+  // registry alone, never from the document, whatever it asks for. A document that
+  // tries hardest to loosen it still gets the exact same tools array as a turn with no
+  // document at all.
   it("does not offer a writing tool because the document asked for one", async () => {
     async function offeredToolNames(body: string | null) {
       let capturedTools: ToolDefinition[] = [];
@@ -631,15 +1186,8 @@ describe("assistant service, instructions reach every call", () => {
       });
       const { t, userId } = await setup({ streamChat });
       if (body) await t.services.assistantService.saveInstructions({ userId, body });
-      const assistantService = createAssistantService({
-        chatService: t.services.chatService,
-        documentsService: t.services.documentsService,
-        aiService: t.services.aiService,
-        settingsService: t.services.settingsService,
-        allowWritingTools: true,
-      });
       const session = await t.services.chatService.createSession({ userId });
-      await assistantService.runTurn({
+      await t.services.assistantService.runTurn({
         userId,
         sessionId: session.id,
         surface: "telegram",
@@ -871,6 +1419,66 @@ describe("assistant service, runCommand", () => {
         }),
       "chat.session_not_found",
     );
+  });
+
+  it("still writes a note immediately for /note", async () => {
+    const { t, userId, adapter } = await setup();
+
+    const result = await t.services.assistantService.runCommand({
+      userId,
+      sessionId: null,
+      surface: "telegram",
+      tool: "saveNote",
+      args: { text: "buy milk" },
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.toolUsed).toBe("saveNote");
+    expect(adapter.streamChat).not.toHaveBeenCalled();
+    const documents = await t.services.documentsService.list({ userId });
+    expect(documents).toHaveLength(1);
+  });
+
+  // A typed command that deletes still waits: requiresCommandConfirmation reads
+  // destructive alone, so a slash command is never an exception to it the way it is
+  // for a write (Global Constraints, "a slash command is its own confirmation, except
+  // for a delete").
+  it("still confirms a command that deletes", async () => {
+    const { t, userId } = await setup();
+    const handler = vi.fn(async () => ({ reply: "deleted it", citations: [] }));
+    const deleteCapability: Capability = {
+      name: "deleteThing",
+      description: "Deletes something for the user, used only to test the confirmation guard on a typed command.",
+      schema: v.object({ label: v.string() }),
+      writes: false,
+      destructive: true,
+      recordsTurn: false,
+      confirm: (args) => `Delete "${(args as { label: string }).label}" for testing?`,
+      handler,
+    };
+    const assistantService = createAssistantService({
+      chatService: t.services.chatService,
+      documentsService: t.services.documentsService,
+      aiService: t.services.aiService,
+      settingsService: t.services.settingsService,
+      capabilities: { deleteThing: deleteCapability },
+    });
+    const session = await t.services.chatService.createSession({ userId });
+
+    const result = await assistantService.runCommand({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      tool: "deleteThing",
+      args: { label: "old note" },
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(result.toolUsed).toBeNull();
+    expect(result.reply).toBe(deleteCapability.confirm!({ label: "old note" }));
+    const pending = await assistantService.getPendingProposal({ userId, sessionId: session.id });
+    expect(pending?.tool).toBe("deleteThing");
   });
 });
 

@@ -17,14 +17,22 @@ import {
   MAX_INSTRUCTION_VERSIONS,
   MAX_INSTRUCTIONS_CHARS,
   missingNoteTextReply,
+  newProposalId,
   newThreadReply,
   noteSourceFor,
+  proposalDeclinedReply,
   pushInstructionVersion,
+  quotedForConfirmation,
+  readConfirmationAnswer,
   receivedReply,
   requireSession,
+  requiresCommandConfirmation,
+  requiresConfirmation,
   resolveQuestion,
+  staleProposalReply,
   textDocumentName,
   toolsUnsupportedNotice,
+  unavailableProposalReply,
   WARN_INSTRUCTIONS_CHARS,
   withInstructions,
 } from "./assistant.models.js";
@@ -78,7 +86,7 @@ describe("assistant models", () => {
       { name: "startNewThread", description: "Clear the current conversation.", schema: {} as ToolDefinition["schema"] },
     ];
 
-    const prompt = buildAssistantPrompt({ basePrompt: "Base prompt.", tools, writesWithheld: false });
+    const prompt = buildAssistantPrompt({ basePrompt: "Base prompt.", tools });
 
     expect(prompt).toContain("Base prompt.");
     expect(prompt).toContain("answerFromDocuments");
@@ -87,10 +95,11 @@ describe("assistant models", () => {
     expect(prompt).not.toMatch(/\/note/);
   });
 
-  it("points to /note in the prompt when writes are withheld, and says nothing about it otherwise", () => {
-    const tools: ToolDefinition[] = [];
-    expect(buildAssistantPrompt({ basePrompt: "Base.", tools, writesWithheld: true })).toMatch(/\/note/);
-    expect(buildAssistantPrompt({ basePrompt: "Base.", tools, writesWithheld: false })).not.toMatch(/\/note/);
+  it("tells the model a write waits for the user, and says nothing about /note any more", () => {
+    const prompt = buildAssistantPrompt({ basePrompt: "Base.", tools: [] });
+    expect(prompt).toMatch(/waits for their answer/i);
+    expect(prompt).toMatch(/never say you have done it/i);
+    expect(prompt).not.toMatch(/\/note/);
   });
 
   it("names Settings in the no-tools notice, since that is where to fix it", () => {
@@ -223,14 +232,13 @@ describe("assistant models, the instructions prompt section", () => {
     expect(instructionsSection("   ")).toBe("");
   });
 
-  it("keeps the withheld-writes notice above the instructions", () => {
+  it("keeps the confirmation paragraph above the user's instructions", () => {
     const prompt = buildAssistantPrompt({
       basePrompt: "Base.",
       tools: [],
-      writesWithheld: true,
       instructions: "Keep replies short.",
     });
-    const noticeIndex = prompt.indexOf("/note");
+    const noticeIndex = prompt.indexOf("waits for their answer");
     const instructionsIndex = prompt.indexOf("user's standing instructions");
     expect(noticeIndex).toBeGreaterThan(-1);
     expect(instructionsIndex).toBeGreaterThan(-1);
@@ -238,7 +246,7 @@ describe("assistant models, the instructions prompt section", () => {
   });
 
   it("leaves buildAssistantPrompt's own output unchanged when no instructions are given", () => {
-    const prompt = buildAssistantPrompt({ basePrompt: "Base.", tools: [], writesWithheld: false });
+    const prompt = buildAssistantPrompt({ basePrompt: "Base.", tools: [] });
     expect(prompt).not.toContain("user's standing instructions");
   });
 });
@@ -262,5 +270,77 @@ describe("assistant models, withInstructions", () => {
 
   it("returns the base prompt unchanged for a blank document", () => {
     expect(withInstructions("Base prompt.", "")).toBe("Base prompt.");
+  });
+});
+
+describe("assistant models, requiresConfirmation", () => {
+  it("requires confirmation for a capability that writes or that deletes", () => {
+    expect(requiresConfirmation({ writes: true, destructive: false })).toBe(true);
+    expect(requiresConfirmation({ writes: false, destructive: true })).toBe(true);
+    expect(requiresConfirmation({ writes: true, destructive: true })).toBe(true);
+  });
+
+  it("requires no confirmation for a capability that neither writes nor deletes", () => {
+    expect(requiresConfirmation({ writes: false, destructive: false })).toBe(false);
+  });
+
+  it("requires a command's own confirmation only when the capability is destructive", () => {
+    expect(requiresCommandConfirmation({ destructive: true })).toBe(true);
+    expect(requiresCommandConfirmation({ destructive: false })).toBe(false);
+  });
+});
+
+describe("assistant models, reading a plain-text answer", () => {
+  it("reads a message that is only an affirmation as yes", () => {
+    for (const text of ["yes", "Yeah", "yep", "yup", "ok", "Okay", "sure", "go ahead", "do it", "  yes  ", "Yes!"]) {
+      expect(readConfirmationAnswer(text)).toBe("yes");
+    }
+  });
+
+  it("reads a message that is only a refusal as no", () => {
+    for (const text of ["no", "Nope", "nah", "cancel", "never mind", "don't", "No."]) {
+      expect(readConfirmationAnswer(text)).toBe("no");
+    }
+  });
+
+  it("does not read a sentence that merely contains yes as an answer", () => {
+    expect(readConfirmationAnswer("yes, and what is my excess?")).toBe("unrelated");
+    expect(readConfirmationAnswer("yes but not today")).toBe("unrelated");
+  });
+
+  it("reads an empty or punctuation-only message as unrelated", () => {
+    expect(readConfirmationAnswer("")).toBe("unrelated");
+    expect(readConfirmationAnswer("   ")).toBe("unrelated");
+    expect(readConfirmationAnswer("...")).toBe("unrelated");
+    expect(readConfirmationAnswer("???")).toBe("unrelated");
+  });
+});
+
+describe("assistant models, quotedForConfirmation", () => {
+  it("shortens a long quote in a confirm sentence", () => {
+    const longText = "x".repeat(3000);
+
+    const quoted = quotedForConfirmation(longText);
+
+    expect(quoted.length).toBeLessThan(longText.length);
+    expect(quoted.endsWith("...")).toBe(true);
+    expect(quoted.startsWith("x".repeat(400))).toBe(true);
+  });
+
+  it("leaves a short quote unchanged", () => {
+    expect(quotedForConfirmation("buy milk")).toBe("buy milk");
+  });
+});
+
+describe("assistant models, proposal ids and replies", () => {
+  it("generates a proposal id with a stable prefix, never the same one twice", () => {
+    expect(newProposalId()).toMatch(/^prop_[0-9a-f]{12}$/);
+    expect(newProposalId()).not.toBe(newProposalId());
+  });
+
+  it("declines, tells a stale answer apart, and says a tool is gone, all in plain sentences", () => {
+    expect(proposalDeclinedReply().length).toBeGreaterThan(0);
+    expect(staleProposalReply().length).toBeGreaterThan(0);
+    expect(unavailableProposalReply().length).toBeGreaterThan(0);
   });
 });
