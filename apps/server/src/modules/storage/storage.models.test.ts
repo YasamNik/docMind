@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { signOAuthState, verifyOAuthState } from "./storage.models.js";
+import { buildOAuthRedirectUri, signOAuthState, verifyOAuthState } from "./storage.models.js";
 
 const secretHex = "11".repeat(32);
+
+describe("oauth redirect uri", () => {
+  it("builds the callback url for a driver from the request origin", () => {
+    expect(buildOAuthRedirectUri({ origin: "https://docmind.example.com", driverId: "googleDrive" })).toBe(
+      "https://docmind.example.com/api/storage/drivers/googleDrive/callback",
+    );
+  });
+});
 
 describe("oauth state", () => {
   it("round trips the user and driver it was issued for", () => {

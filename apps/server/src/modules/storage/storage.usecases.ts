@@ -2,7 +2,20 @@ import { basename } from "node:path";
 import { createError } from "../../shared/errors/errors.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
 import { storageDriverRegistry, type StorageDriverId } from "./storage.registry.js";
+import { buildOAuthRedirectUri, signOAuthState, verifyOAuthState } from "./storage.models.js";
 import type { StorageDriverDefinition } from "./storage.types.js";
+
+function oauthDefinitionOrThrow(driverId: string) {
+  const definition = storageDriverRegistry[driverId as StorageDriverId];
+  if (!definition?.oauth) {
+    throw createError({
+      code: "storage.oauth_not_supported",
+      message: `"${definition?.label ?? driverId}" does not connect through an account`,
+      status: 400,
+    });
+  }
+  return { definition, oauth: definition.oauth };
+}
 
 export function buildStorageKey({
   userId,
@@ -60,8 +73,10 @@ export function createStorageService({
     },
 
     // One call renders the whole picker: what exists, what is ready, what it holds, and
-    // the guide that explains the fields.
-    async listDriverSummaries(userId: string) {
+    // the guide that explains the fields. redirectUri and accountEmail are only set for
+    // a driver with an oauth hook, which is also how the settings page tells an oauth
+    // driver apart from one configured by hand.
+    async listDriverSummaries(userId: string, args?: { origin?: string }) {
       const active = await this.getActiveDriverId(userId);
       return Promise.all(
         Object.values(storageDriverRegistry).map(async (definition) => ({
@@ -71,12 +86,79 @@ export function createStorageService({
           configured: await isConfigured({ definition, userId }),
           documentCount: await countDocuments({ userId, storageDriver: definition.id }),
           active: definition.id === active,
+          redirectUri:
+            definition.oauth && args?.origin ? buildOAuthRedirectUri({ origin: args.origin, driverId: definition.id }) : undefined,
+          accountEmail: definition.oauth ? await settingsService.get<string>(userId, definition.oauth.keys.accountEmail) : undefined,
         })),
       );
     },
 
     async testDriver({ userId, driverId }: { userId: string; driverId: string }) {
       return (await this.getDriver(userId, driverId)).healthCheck();
+    },
+
+    // Sends the browser to the provider. The state carries the user's identity because
+    // the callback that follows arrives with no session of its own.
+    async buildAuthorizeUrl({ userId, driverId, origin, secretHex }: { userId: string; driverId: string; origin: string; secretHex: string }) {
+      const { definition, oauth } = oauthDefinitionOrThrow(driverId);
+      const clientId = await settingsService.get<string>(userId, oauth.keys.clientId);
+      if (!clientId) {
+        throw createError({
+          code: "storage.driver_not_configured",
+          message: `Set the client id for "${definition.label}" before connecting`,
+          status: 400,
+        });
+      }
+      const redirectUri = buildOAuthRedirectUri({ origin, driverId });
+      const state = signOAuthState({ userId, driverId, secretHex });
+      return oauth.authorizeUrl({ clientId, redirectUri, state });
+    },
+
+    // Verifies the signed state before touching anything else, since it is the only
+    // thing that says which user this browser redirect belongs to. Rejects a state that
+    // was issued for a different driver than the one in the path.
+    async completeOAuthConnection({
+      driverId,
+      code,
+      state,
+      origin,
+      secretHex,
+    }: {
+      driverId: string;
+      code: string;
+      state: string;
+      origin: string;
+      secretHex: string;
+    }) {
+      const verified = verifyOAuthState({ state, secretHex });
+      if (verified.driverId !== driverId) {
+        throw createError({
+          code: "storage.invalid_state",
+          message: "Oauth state was issued for a different storage driver",
+          status: 400,
+        });
+      }
+
+      const { oauth } = oauthDefinitionOrThrow(driverId);
+      const userId = verified.userId;
+      const clientId = await settingsService.get<string>(userId, oauth.keys.clientId);
+      const clientSecret = await settingsService.get<string>(userId, oauth.keys.clientSecret);
+      if (!clientId || !clientSecret) {
+        throw createError({
+          code: "storage.driver_not_configured",
+          message: `Set the client id and secret for "${driverId}" before connecting`,
+          status: 400,
+        });
+      }
+
+      const redirectUri = buildOAuthRedirectUri({ origin, driverId });
+      const { refreshToken, accountEmail } = await oauth.exchange({ code, clientId, clientSecret, redirectUri });
+      await settingsService.set(userId, {
+        [oauth.keys.refreshToken]: refreshToken,
+        [oauth.keys.accountEmail]: accountEmail,
+      });
+
+      return { driverId };
     },
   };
 }

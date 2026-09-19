@@ -191,7 +191,7 @@ export function createServer({
   registerSummaryRoutes({ app, summaryService, getUserId });
   registerFieldsRoutes({ app, fieldsRepository, summaryService, getUserId });
   registerChatRoutes({ app, chatService, getUserId });
-  registerStorageRoutes({ app, storageService, getUserId });
+  registerStorageRoutes({ app, storageService, getUserId, settingsEncryptionKey: config.settingsEncryptionKey });
 
   const exportService = createExportService({ db, storageService });
   registerExportRoutes({ app, exportService, getUserId });

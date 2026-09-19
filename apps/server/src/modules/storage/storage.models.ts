@@ -50,6 +50,13 @@ export function signOAuthState(args: { userId: string; driverId: string; secretH
   return `${payloadBase64Url}.${signature}`;
 }
 
+// The redirect URI Google (or any future OAuth provider) sends the browser back to. It
+// has to be built from the request that is actually serving the app, since a hardcoded
+// value would break the moment the app is reached through a different host.
+export function buildOAuthRedirectUri(args: { origin: string; driverId: string }) {
+  return `${args.origin}/api/storage/drivers/${args.driverId}/callback`;
+}
+
 export function verifyOAuthState(args: { state: string; secretHex: string; now?: Date }) {
   const parts = args.state.split(".");
   if (parts.length !== 2) throw invalidStateError();
