@@ -40,6 +40,9 @@ const documentDetail = {
   updatedAt: "2026-01-01T00:00:00.000Z",
   storageLocation: null as { label: string; url?: string } | null,
   storageDriver: "local",
+  parentDocumentId: null as string | null,
+  parent: null as { id: string; name: string } | null,
+  children: [] as { id: string; name: string }[],
 };
 
 const getMock = vi.fn(async () => documentDetail);
@@ -168,6 +171,39 @@ describe("DocumentDetailPage storage location", () => {
 
     expect(await screen.findByText("Rent")).toBeInTheDocument();
     expect(screen.getByText("some text")).toBeInTheDocument();
+  });
+});
+
+describe("DocumentDetailPage related documents", () => {
+  afterEach(() => {
+    getMock.mockImplementation(async () => documentDetail);
+  });
+
+  it("links to the parent mail when this document is an attachment", async () => {
+    getMock.mockImplementationOnce(async () => ({ ...documentDetail, parent: { id: "doc_mail", name: "mail.txt" } }));
+    renderPage();
+    const link = await screen.findByRole("link", { name: "mail.txt" });
+    expect(link).toHaveAttribute("href", "/documents/doc_mail");
+  });
+
+  it("links to each attachment when this document is a mail", async () => {
+    getMock.mockImplementationOnce(async () => ({
+      ...documentDetail,
+      children: [
+        { id: "doc_att1", name: "invoice.pdf" },
+        { id: "doc_att2", name: "receipt.pdf" },
+      ],
+    }));
+    renderPage();
+    expect(await screen.findByRole("link", { name: "invoice.pdf" })).toHaveAttribute("href", "/documents/doc_att1");
+    expect(screen.getByRole("link", { name: "receipt.pdf" })).toHaveAttribute("href", "/documents/doc_att2");
+  });
+
+  it("shows nothing when there is no parent and no attachments", async () => {
+    renderPage();
+    await screen.findByText("Rent");
+    expect(screen.queryByText(/Attachment to/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Attachments:/)).not.toBeInTheDocument();
   });
 });
 

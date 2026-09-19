@@ -163,6 +163,120 @@ describe("documents service", () => {
   });
 });
 
+describe("documents service trash and purge cascade", () => {
+  async function uploadMailAndAttachment() {
+    const { document: mail } = await documents.upload({ userId, name: "mail.txt", mimeType: "text/plain", body: Readable.from(["body"]), source: "email" });
+    const { document: attachment } = await documents.upload({
+      userId, name: "invoice.pdf", mimeType: "application/pdf", body: Readable.from(["pdf"]),
+      source: "email", parentDocumentId: mail.id,
+    });
+    return { mail, attachment };
+  }
+
+  it("trashes a mail's attachment along with it", async () => {
+    const { mail, attachment } = await uploadMailAndAttachment();
+
+    await documents.remove({ userId, documentId: mail.id });
+
+    const repository = createDocumentsRepository({ db });
+    expect((await repository.findById({ userId, documentId: mail.id }))?.deletedAt).not.toBeNull();
+    expect((await repository.findById({ userId, documentId: attachment.id }))?.deletedAt).not.toBeNull();
+    // Not shown as active in the library any more, but not gone either.
+    await expect(documents.get({ userId, documentId: attachment.id })).rejects.toMatchObject({ code: "documents.not_found" });
+  });
+
+  it("restores a mail and the attachment trashed with it in the same cascade", async () => {
+    const { mail, attachment } = await uploadMailAndAttachment();
+    await documents.remove({ userId, documentId: mail.id });
+
+    await documents.restore({ userId, documentId: mail.id });
+
+    expect((await documents.get({ userId, documentId: mail.id })).deletedAt).toBeNull();
+    expect((await documents.get({ userId, documentId: attachment.id })).deletedAt).toBeNull();
+  });
+
+  it("does not restore a child that was trashed on its own before its parent", async () => {
+    const { mail, attachment } = await uploadMailAndAttachment();
+    const repository = createDocumentsRepository({ db });
+    // The attachment goes to trash by itself first, well before the mail does.
+    await documents.remove({ userId, documentId: attachment.id });
+    await repository.update({ userId, documentId: attachment.id, patch: { deletedAt: "2020-01-01T00:00:00.000Z" } });
+
+    await documents.remove({ userId, documentId: mail.id });
+    await documents.restore({ userId, documentId: mail.id });
+
+    expect((await documents.get({ userId, documentId: mail.id })).deletedAt).toBeNull();
+    // Restoring the mail is not a decision about an attachment the user trashed on its
+    // own earlier, so it stays right where the user put it.
+    const stillTrashed = await repository.findById({ userId, documentId: attachment.id });
+    expect(stillTrashed?.deletedAt).toBe("2020-01-01T00:00:00.000Z");
+  });
+
+  it("purging a trashed mail deletes exactly the subtree that was trashed with it", async () => {
+    const { mail, attachment } = await uploadMailAndAttachment();
+    const { document: unrelated } = await documents.upload({ userId, name: "unrelated.txt", mimeType: "text/plain", body: Readable.from(["x"]) });
+
+    await documents.remove({ userId, documentId: mail.id });
+    await documents.purge({ userId, documentId: mail.id });
+
+    const repository = createDocumentsRepository({ db });
+    expect(await repository.findById({ userId, documentId: mail.id })).toBeNull();
+    expect(await repository.findById({ userId, documentId: attachment.id })).toBeNull();
+    expect(await repository.findById({ userId, documentId: unrelated.id })).not.toBeNull();
+  });
+
+  it("bulkDelete cascades trash to a document's children too", async () => {
+    const { mail, attachment } = await uploadMailAndAttachment();
+
+    const { count } = await documents.bulkDelete({ userId, documentIds: [mail.id] });
+
+    expect(count).toBe(1);
+    const repository = createDocumentsRepository({ db });
+    expect((await repository.findById({ userId, documentId: attachment.id }))?.deletedAt).not.toBeNull();
+  });
+
+  it("collectSubtree tolerates a parentDocumentId cycle instead of looping forever", async () => {
+    const repository = createDocumentsRepository({ db });
+    const t = new Date().toISOString();
+    const base: Omit<NewDocument, "id" | "name" | "parentDocumentId"> = {
+      userId, mimeType: "text/plain", sizeBytes: 1, contentHash: null, storageDriver: "local", storageKey: "k",
+      extractedText: "", extractionStatus: "done", extractionError: null, ruleStatus: "done", ruleError: null,
+      embeddingStatus: "pending", embeddingError: null, categoryId: null, categorySource: null,
+      triageStatus: "reviewed", createdAt: t, updatedAt: t,
+    };
+    await repository.insert({ ...base, id: "doc_a000000000000001", name: "a", storageKey: "a-key", parentDocumentId: null });
+    await repository.insert({ ...base, id: "doc_b000000000000002", name: "b", storageKey: "b-key", parentDocumentId: "doc_a000000000000001" });
+    // Manually wires the cycle: parentDocumentId is only ever set at creation to an
+    // existing document in the real application flow, never edited afterward.
+    await repository.update({ userId, documentId: "doc_a000000000000001", patch: { parentDocumentId: "doc_b000000000000002" } });
+
+    await documents.purge({ userId, documentId: "doc_a000000000000001" });
+
+    expect(await repository.findById({ userId, documentId: "doc_a000000000000001" })).toBeNull();
+    expect(await repository.findById({ userId, documentId: "doc_b000000000000002" })).toBeNull();
+  });
+
+  it("collectSubtree stops at a depth cap rather than recursing without bound", async () => {
+    const repository = createDocumentsRepository({ db });
+    const t = new Date().toISOString();
+    let parentDocumentId: string | null = null;
+    for (let i = 0; i < 60; i++) {
+      const id = `doc_${i.toString(16).padStart(16, "0")}`;
+      await repository.insert({
+        id, userId, name: `n${i}`, mimeType: "text/plain", sizeBytes: 1, contentHash: null,
+        storageDriver: "local", storageKey: `key-${i}`, extractedText: "", extractionStatus: "done",
+        extractionError: null, ruleStatus: "done", ruleError: null, embeddingStatus: "pending",
+        embeddingError: null, categoryId: null, categorySource: null, triageStatus: "reviewed",
+        parentDocumentId, createdAt: t, updatedAt: t,
+      });
+      parentDocumentId = id;
+    }
+    const rootId = "doc_0000000000000000";
+
+    await expect(documents.purge({ userId, documentId: rootId })).rejects.toMatchObject({ code: "documents.subtree_too_deep" });
+  });
+});
+
 describe("documents service filters and enrichment", () => {
   it("filters by view: inbox is triageStatus pending, needs_review is done with no category", async () => {
     const { document: inInbox } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
@@ -328,6 +442,41 @@ describe("documents service filters and enrichment", () => {
     await tags.setDocumentCategory({ userId, documentId: document.id, categoryId: category.id });
     const detail = await documents.get({ userId, documentId: document.id });
     expect(detail).toMatchObject({ categoryId: category.id, categoryPath: "Finance", tags: [] });
+  });
+
+  it("get() names the mail behind an attachment, and the attachments filed with a mail", async () => {
+    const { document: mail } = await documents.upload({ userId, name: "mail.txt", mimeType: "text/plain", body: Readable.from(["body"]), source: "email" });
+    const { document: attachment } = await documents.upload({
+      userId, name: "invoice.pdf", mimeType: "application/pdf", body: Readable.from(["pdf"]),
+      source: "email", parentDocumentId: mail.id,
+    });
+
+    const mailDetail = await documents.get({ userId, documentId: mail.id });
+    expect(mailDetail.parent).toBeNull();
+    expect(mailDetail.children).toEqual([{ id: attachment.id, name: "invoice.pdf" }]);
+
+    const attachmentDetail = await documents.get({ userId, documentId: attachment.id });
+    expect(attachmentDetail.parent).toEqual({ id: mail.id, name: "mail.txt" });
+    expect(attachmentDetail.children).toEqual([]);
+  });
+
+  it("get() leaves out a child that has been trashed", async () => {
+    const { document: mail } = await documents.upload({ userId, name: "mail.txt", mimeType: "text/plain", body: Readable.from(["body"]), source: "email" });
+    const { document: attachment } = await documents.upload({
+      userId, name: "invoice.pdf", mimeType: "application/pdf", body: Readable.from(["pdf"]),
+      source: "email", parentDocumentId: mail.id,
+    });
+    await documents.remove({ userId, documentId: attachment.id });
+
+    const mailDetail = await documents.get({ userId, documentId: mail.id });
+    expect(mailDetail.children).toEqual([]);
+  });
+
+  it("get() has no parent or children for a document with neither", async () => {
+    const { document } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    const detail = await documents.get({ userId, documentId: document.id });
+    expect(detail.parent).toBeNull();
+    expect(detail.children).toEqual([]);
   });
 
   it("get() and list() embed the document's smart fields", async () => {

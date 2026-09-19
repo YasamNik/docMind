@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -41,6 +41,39 @@ function ExtractedFieldsCard({ fields }: { fields: ExtractedField[] }) {
         </dl>
       </CardContent>
     </Card>
+  );
+}
+
+// The parent mail and attachment links that made this bug findable, and the fix
+// visible: an attachment is filed on its own so it turns up in search and sorting by
+// itself, but the mail it arrived in is one click away, and vice versa.
+function RelatedDocuments({ parent, attachments }: { parent: { id: string; name: string } | null; attachments: { id: string; name: string }[] }) {
+  if (!parent && attachments.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-1 text-sm text-muted-foreground">
+      {parent && (
+        <p>
+          Attachment to{" "}
+          <Link to={`/documents/${parent.id}`} className="text-foreground underline-offset-2 hover:underline">
+            {parent.name}
+          </Link>
+        </p>
+      )}
+      {attachments.length > 0 && (
+        <p>
+          Attachments:{" "}
+          {attachments.map((attachment, index) => (
+            <span key={attachment.id}>
+              <Link to={`/documents/${attachment.id}`} className="text-foreground underline-offset-2 hover:underline">
+                {attachment.name}
+              </Link>
+              {index < attachments.length - 1 ? ", " : ""}
+            </span>
+          ))}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -375,6 +408,9 @@ export function DocumentDetailPage() {
             {document.mimeType ?? "unknown type"} · {document.sizeBytes == null ? "" : formatBytes(document.sizeBytes)} · added {formatDate(document.createdAt)}
             {document.documentDate && <> · document date {formatDocumentDate(document.documentDate)}</>}
           </p>
+          <div className="mt-1">
+            <RelatedDocuments parent={document.parent} attachments={document.children} />
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           {document.triageStatus === "pending" && (

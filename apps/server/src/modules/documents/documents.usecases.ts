@@ -48,21 +48,69 @@ export function createDocumentsService({
 
   // A document plus every descendant reached through parentDocumentId, root first. Used
   // by purge() so deleting a mail takes its attachments with it as an explicit
-  // application step, not just as a side effect of the schema's own cascade.
-  async function collectSubtree(userId: string, documentId: string): Promise<Document[]> {
+  // application step, not just as a side effect of the schema's own cascade, and by the
+  // trash and restore cascades below.
+  //
+  // parentDocumentId is only ever set at creation to an existing document today, so a
+  // cycle cannot happen through normal use, but it is one direct edit of that column
+  // away from turning this into unbounded recursion. The visited set makes a cycle a
+  // no-op instead of a stack overflow, and the depth cap catches a runaway chain of
+  // ordinary parent links before it does real damage.
+  const MAX_SUBTREE_DEPTH = 50;
+
+  async function collectSubtree(userId: string, documentId: string, visited = new Set<string>(), depth = 0): Promise<Document[]> {
+    if (depth > MAX_SUBTREE_DEPTH) {
+      throw createError({
+        code: "documents.subtree_too_deep",
+        message: "This document's parent chain is nested too deep to process",
+        status: 500,
+      });
+    }
+    if (visited.has(documentId)) return [];
+    visited.add(documentId);
     const document = await repository.findById({ userId, documentId });
     if (!document) throw notFound(documentId);
     const children = await repository.findChildren({ userId, documentId });
     const subtree = [document];
-    for (const child of children) subtree.push(...(await collectSubtree(userId, child.id)));
+    for (const child of children) subtree.push(...(await collectSubtree(userId, child.id, visited, depth + 1)));
     return subtree;
+  }
+
+  // Trashes documentId and every descendant that is not already in trash, all stamped
+  // with the same deletedAt. Restoring reads that shared timestamp back to tell which
+  // children moved to trash together with this document, as opposed to a child that was
+  // already there on its own before this cascade ran.
+  async function trashSubtree(userId: string, documentId: string) {
+    const subtree = await collectSubtree(userId, documentId);
+    const deletedAt = nowIso();
+    await db.transaction(async (tx) => {
+      const txDb = asTxDb(tx);
+      for (const doc of subtree) {
+        if (doc.deletedAt) continue;
+        await repository.update({ userId, documentId: doc.id, patch: { deletedAt, updatedAt: deletedAt }, tx: txDb });
+      }
+    });
+  }
+
+  // The mail behind an attachment, and the attachments filed with a mail, so the detail
+  // page can show the two as links instead of parentDocumentId sitting invisibly on the
+  // row. Only active documents are named here: a trashed one is not shown as related
+  // until it is either restored or gone for good.
+  async function describeRelatives(userId: string, document: Document) {
+    let parent: { id: string; name: string } | null = null;
+    if (document.parentDocumentId) {
+      const parentDoc = await repository.findById({ userId, documentId: document.parentDocumentId });
+      if (parentDoc && !parentDoc.deletedAt) parent = { id: parentDoc.id, name: parentDoc.name };
+    }
+    const children = await repository.findChildren({ userId, documentId: document.id });
+    return { parent, children: children.filter((c) => !c.deletedAt).map((c) => ({ id: c.id, name: c.name })) };
   }
 
   async function getEnrichedOrThrow(userId: string, documentId: string) {
     const row = await repository.findByIdWithExtras({ userId, documentId });
     if (!row || row.deletedAt) throw notFound(documentId);
-    const storageLocation = await describeStorageLocation(userId, row);
-    return { ...row, storageLocation };
+    const [storageLocation, relatives] = await Promise.all([describeStorageLocation(userId, row), describeRelatives(userId, row)]);
+    return { ...row, storageLocation, ...relatives };
   }
 
   // The bytes need their storage, the metadata does not. A document on an inactive
@@ -206,14 +254,29 @@ export function createDocumentsService({
 
     async remove({ userId, documentId }: { userId: string; documentId: string }) {
       await getOrThrow(userId, documentId);
-      await repository.update({ userId, documentId, patch: { deletedAt: nowIso(), updatedAt: nowIso() } });
+      // A mail and the attachments it arrived with move to trash together, so purge
+      // later never has to reach past the trash to destroy something still active.
+      await trashSubtree(userId, documentId);
     },
 
     async restore({ userId, documentId }: { userId: string; documentId: string }) {
       const document = await repository.findById({ userId, documentId });
       if (!document) throw notFound(documentId);
       if (!document.deletedAt) throw createError({ code: "documents.not_deleted", message: "Document is not in trash", status: 400 });
-      await repository.update({ userId, documentId, patch: { deletedAt: null, updatedAt: nowIso() } });
+      // Only descendants stamped with this document's own deletedAt come back with it:
+      // those trashed in the same cascade. A child trashed on its own, at a different
+      // time, keeps its own trash timestamp and stays in trash. Restoring a parent is
+      // not a decision the user made about a child they trashed separately.
+      const trashedAt = document.deletedAt;
+      const subtree = await collectSubtree(userId, documentId);
+      const updatedAt = nowIso();
+      await db.transaction(async (tx) => {
+        const txDb = asTxDb(tx);
+        for (const doc of subtree) {
+          if (doc.deletedAt !== trashedAt) continue;
+          await repository.update({ userId, documentId: doc.id, patch: { deletedAt: null, updatedAt }, tx: txDb });
+        }
+      });
       return getEnrichedOrThrow(userId, documentId);
     },
 
@@ -260,12 +323,12 @@ export function createDocumentsService({
     },
 
     async bulkDelete({ userId, documentIds }: { userId: string; documentIds: string[] }) {
-      const now = nowIso();
       let count = 0;
       for (const documentId of documentIds) {
         const doc = await repository.findById({ userId, documentId });
         if (doc && !doc.deletedAt) {
-          await repository.update({ userId, documentId, patch: { deletedAt: now, updatedAt: now } });
+          // Same cascade as remove(): a document's children go to trash with it.
+          await trashSubtree(userId, documentId);
           count++;
         }
       }

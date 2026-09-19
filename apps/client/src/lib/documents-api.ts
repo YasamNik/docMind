@@ -37,6 +37,8 @@ export type DocumentRow = {
   summaryError: string | null;
   documentDate: string | null;
   triageStatus: "pending" | "reviewed";
+  // Set on an attachment, pointing at the mail it arrived in. Null on everything else.
+  parentDocumentId: string | null;
   deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -62,6 +64,12 @@ export type DocumentDetail = DocumentRow & {
   extractedText: string | null;
   categorySource: "manual" | "auto" | null;
   storageLocation: { label: string; url?: string } | null;
+  // The mail this document is an attachment of, when it is one. Null otherwise, and
+  // null if the mail itself is no longer active.
+  parent: { id: string; name: string } | null;
+  // The attachments filed with this document when it is a mail. Empty otherwise, and
+  // never includes an attachment that is no longer active.
+  children: { id: string; name: string }[];
 };
 
 export type UploadResult = { document: DocumentDetail; duplicateOf?: string };
