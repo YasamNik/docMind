@@ -9,10 +9,19 @@ import type { ChatService } from "../chat/chat.usecases.js";
 import type { Citation } from "../chat/chat.types.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
-import { assistantTroubleReply, buildAssistantPrompt, commandTurnText, toolsUnsupportedNotice } from "./assistant.models.js";
+import {
+  assertInstructionsWithinCap,
+  assistantTroubleReply,
+  buildAssistantPrompt,
+  commandTurnText,
+  MAX_INSTRUCTIONS_CHARS,
+  pushInstructionVersion,
+  toolsUnsupportedNotice,
+  WARN_INSTRUCTIONS_CHARS,
+} from "./assistant.models.js";
 import { assistantCapabilities } from "./assistant.registry.js";
-import { TOOLS_UNSUPPORTED_NOTICE_FOR_KEY } from "./assistant.settings.js";
-import type { AssistantSurface, Capability, ToolContext, ToolResult } from "./assistant.types.js";
+import { INSTRUCTIONS_HISTORY_KEY, INSTRUCTIONS_KEY, TOOLS_UNSUPPORTED_NOTICE_FOR_KEY } from "./assistant.settings.js";
+import type { AssistantSurface, Capability, InstructionsView, InstructionVersion, ToolContext, ToolResult } from "./assistant.types.js";
 
 type TurnResult = { reply: string; citations: Citation[]; toolUsed: string | null };
 
@@ -61,7 +70,78 @@ export function createAssistantService({
   const offeredCapabilities = Object.values(capabilities).filter((capability) => !capability.writes || allowWritingTools);
   const offeredToolSpecs = offeredCapabilities.map(toToolDefinition);
 
-  function buildContext({
+  // Resolves the body through getResolved, not the raw get() loadInstructions uses for
+  // a turn, so the view can tell the editor whether the user has ever saved at all
+  // (assistant instructions plan, Task 1). The history is a second, separate read that
+  // defaults to an empty array until the first save ever pushes onto it.
+  async function getInstructions({ userId }: { userId: string }): Promise<InstructionsView> {
+    const resolved = await settingsService.getResolved(userId, INSTRUCTIONS_KEY);
+    const history = (await settingsService.get<InstructionVersion[]>(userId, INSTRUCTIONS_HISTORY_KEY)) ?? [];
+    return {
+      body: resolved.value as string,
+      source: resolved.source,
+      maxChars: MAX_INSTRUCTIONS_CHARS,
+      warnChars: WARN_INSTRUCTIONS_CHARS,
+      history,
+    };
+  }
+
+  // Trims trailing whitespace, caps, and writes nothing at all when the body is
+  // unchanged from what a read returns right now, which on a first save is the shipped
+  // default rather than a stored row: comparing against getInstructions's own resolved
+  // body, not against a raw stored value, is what keeps a first, unedited save a no-op
+  // instead of a default-to-default history entry. The history is written before the
+  // body: if the second write fails, the history holds a harmless duplicate of the
+  // still-current body rather than losing a version.
+  async function saveInstructions({ userId, body }: { userId: string; body: string }): Promise<InstructionsView> {
+    const trimmedBody = body.trimEnd();
+    assertInstructionsWithinCap(trimmedBody);
+    const current = await getInstructions({ userId });
+    if (trimmedBody === current.body) return current;
+
+    const history = pushInstructionVersion({ history: current.history, body: current.body, replacedAt: new Date().toISOString() });
+    await settingsService.setInternal(userId, INSTRUCTIONS_HISTORY_KEY, history);
+    await settingsService.setInternal(userId, INSTRUCTIONS_KEY, trimmedBody);
+    return getInstructions({ userId });
+  }
+
+  // A restore is a save, not a rewind (Decision 5): it goes through saveInstructions
+  // with the found body, so the body it replaces joins the history in exactly the same
+  // way an edit from Settings would. Identified by replacedAt, not by index, so the
+  // list moving under a save between a read and a restore can never restore the wrong
+  // one.
+  async function restoreInstructions({ userId, replacedAt }: { userId: string; replacedAt: string }): Promise<InstructionsView> {
+    const current = await getInstructions({ userId });
+    const version = current.history.find((entry) => entry.replacedAt === replacedAt);
+    if (!version) {
+      throw createError({
+        code: "assistant.instruction_version_not_found",
+        message: `No saved version of your instructions was replaced at "${replacedAt}".`,
+        status: 404,
+      });
+    }
+    return saveInstructions({ userId, body: version.body });
+  }
+
+  // Reads assistant.instructions only, never getInstructions(): a turn has no use for
+  // the history array getInstructions also parses, and reading it on every single
+  // message is exactly the hot path Decision 4 says stays a map lookup, not a second
+  // key's worth of JSON parsing. A read that fails degrades to no instructions rather
+  // than a failed turn (Decision 7): logged with the key, never with the body.
+  async function loadInstructions(userId: string): Promise<string> {
+    try {
+      const body = await settingsService.get<string>(userId, INSTRUCTIONS_KEY);
+      return body ?? "";
+    } catch (error) {
+      logger.error(
+        { userId, key: INSTRUCTIONS_KEY, err: error instanceof Error ? error.message : String(error) },
+        "Failed to load the assistant's instructions for a turn",
+      );
+      return "";
+    }
+  }
+
+  async function buildContext({
     userId,
     sessionId,
     surface,
@@ -73,7 +153,8 @@ export function createAssistantService({
     surface: AssistantSurface;
     userMessage: string;
     startNewThread: () => Promise<void>;
-  }): ToolContext {
+  }): Promise<ToolContext> {
+    const instructions = await loadInstructions(userId);
     return {
       userId,
       sessionId,
@@ -81,6 +162,7 @@ export function createAssistantService({
       userMessage,
       services: { chat: chatService, documents: documentsService, ai: aiService },
       startNewThread,
+      instructions,
     };
   }
 
@@ -161,7 +243,7 @@ export function createAssistantService({
     // Appended first, so the model's history includes this turn's own question and the
     // app's chat page shows it even if everything after this fails (behavior step 1).
     await chatService.appendUserMessage({ userId, sessionId, content: text });
-    const ctx = buildContext({ userId, sessionId, surface, userMessage: text, startNewThread });
+    const ctx = await buildContext({ userId, sessionId, surface, userMessage: text, startNewThread });
 
     try {
       const canUseTools = await aiService.supportsTools(userId);
@@ -174,8 +256,15 @@ export function createAssistantService({
       }));
       // No retrieved chunks here (Decision 2): retrieval lives inside
       // answerFromDocuments's own handler, so the call that can emit a tool call never
-      // sees document text, only the system prompt and the conversation so far.
-      const prompt = buildAssistantPrompt({ basePrompt, tools: offeredToolSpecs, writesWithheld: !allowWritingTools });
+      // sees document text, only the system prompt, the conversation so far, and the
+      // user's own instructions, appended last (Decision 6 in the assistant
+      // instructions plan).
+      const prompt = buildAssistantPrompt({
+        basePrompt,
+        tools: offeredToolSpecs,
+        writesWithheld: !allowWritingTools,
+        instructions: ctx.instructions,
+      });
       const messages: ChatMessage[] = [{ role: "system", content: prompt }, ...history];
 
       let stream: AsyncIterable<ChatStreamPart>;
@@ -255,7 +344,7 @@ export function createAssistantService({
     // No triage and no model call: a slash command is an exact instruction, so it goes
     // straight to the handler once its own arguments check out.
     const parsedArgs = parseCommandArgs(capability, args);
-    const ctx = buildContext({ userId, sessionId, surface, userMessage: "", startNewThread });
+    const ctx = await buildContext({ userId, sessionId, surface, userMessage: "", startNewThread });
 
     const result = await runHandler({ name: tool, args: parsedArgs, ctx });
 
@@ -275,7 +364,7 @@ export function createAssistantService({
     return { reply: result.reply, citations: result.citations, toolUsed: result.failed ? null : tool };
   }
 
-  return { runTurn, runCommand };
+  return { runTurn, runCommand, getInstructions, saveInstructions, restoreInstructions };
 }
 
 export type AssistantService = ReturnType<typeof createAssistantService>;

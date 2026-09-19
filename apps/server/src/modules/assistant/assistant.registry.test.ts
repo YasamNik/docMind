@@ -59,6 +59,7 @@ function buildCtx({
   surface = "telegram",
   userMessage = "",
   startNewThread = vi.fn(async () => {}),
+  instructions = "",
 }: {
   t: TestApp;
   userId: string;
@@ -66,6 +67,7 @@ function buildCtx({
   surface?: ToolContext["surface"];
   userMessage?: string;
   startNewThread?: ToolContext["startNewThread"];
+  instructions?: string;
 }): ToolContext {
   return {
     userId,
@@ -74,6 +76,7 @@ function buildCtx({
     userMessage,
     services: { chat: t.services.chatService, documents: t.services.documentsService, ai: t.services.aiService },
     startNewThread,
+    instructions,
   };
 }
 
@@ -169,6 +172,18 @@ describe("assistant registry, handlers", () => {
     expect(result.citations[0]?.documentId).toBe(documentId);
   });
 
+  it("carries the user's own instructions onto the answering call", async () => {
+    const { t, userId } = await setup(vi.fn(async () => asyncIterableOf(["An answer."])));
+    const session = await t.services.chatService.createSession({ userId });
+    await t.services.chatService.appendUserMessage({ userId, sessionId: session.id, content: "anything" });
+    const answerSpy = vi.spyOn(t.services.chatService, "answerFromDocuments");
+    const ctx = buildCtx({ t, userId, sessionId: session.id, userMessage: "anything", instructions: "Reply in one word." });
+
+    await assistantCapabilities.answerFromDocuments.handler({ question: "anything" }, ctx);
+
+    expect(answerSpy).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: expect.stringContaining("Reply in one word.") }));
+  });
+
   it("searches the web through the same answering path, with web set", async () => {
     const chatStream = vi.fn(async () => asyncIterableOf(["Sunny and 20C."]));
     const { t, userId } = await setup(chatStream);
@@ -180,6 +195,18 @@ describe("assistant registry, handlers", () => {
 
     expect(result.reply).toBe("Sunny and 20C.");
     expect(chatStream).toHaveBeenCalledWith(expect.objectContaining({ model: "test-chat-model:online" }));
+  });
+
+  it("carries the user's own instructions onto the web search's answering call too", async () => {
+    const { t, userId } = await setup(vi.fn(async () => asyncIterableOf(["Sunny and 20C."])));
+    const session = await t.services.chatService.createSession({ userId });
+    await t.services.chatService.appendUserMessage({ userId, sessionId: session.id, content: "weather today" });
+    const answerSpy = vi.spyOn(t.services.chatService, "answerFromDocuments");
+    const ctx = buildCtx({ t, userId, sessionId: session.id, userMessage: "weather today", instructions: "Reply in one word." });
+
+    await assistantCapabilities.searchWeb.handler({ question: "weather today" }, ctx);
+
+    expect(answerSpy).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: expect.stringContaining("Reply in one word.") }));
   });
 
   it("says plainly that the web needs an OpenRouter chat model, instead of throwing", async () => {

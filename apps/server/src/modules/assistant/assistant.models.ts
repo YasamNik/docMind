@@ -1,11 +1,75 @@
 import { createError } from "../../shared/errors/errors.js";
 import type { ToolDefinition } from "../ai/ai.types.js";
-import type { AssistantSurface, ToolContext } from "./assistant.types.js";
+import type { AssistantSurface, InstructionVersion, ToolContext } from "./assistant.types.js";
 
 // textDocumentName, missingNoteTextReply and newThreadReply moved here from
 // telegram.models.ts: /note and the saveNote tool share the first two, /new and the
 // startNewThread tool share the third, and the assistant module is where both a slash
 // command and a model-chosen tool now meet. Telegram imports them back from here.
+
+// The instructions document (assistant instructions plan, Decision 3): the cap is
+// enforced here, not in the setting's own valibot schema, so lowering it later never
+// makes an already-stored document unreadable on every turn.
+export const MAX_INSTRUCTIONS_CHARS = 8000;
+export const WARN_INSTRUCTIONS_CHARS = 6000;
+export const MAX_INSTRUCTION_VERSIONS = 20;
+
+// Read on the tab's first open, and the body a fresh install starts every turn with.
+// Written in the user's own voice, since it is their document once they touch it. No
+// line here pretends to control something Decision 8 keeps in code: not a tool, not a
+// confirmation.
+export const DEFAULT_INSTRUCTIONS = `# My instructions for the assistant
+
+These are my standing instructions. Follow them on every message, in the app and in
+Telegram.
+
+## How to talk to me
+- Keep replies short, like a text message, not a report.
+- Lead with the answer. Background only if I ask for it.
+- No em dashes. Use a comma, a colon, or a new sentence.
+- If my message is too vague to act on, ask me one short question instead of guessing.
+
+## My documents
+- When a question could be about something I have filed, look in my documents first and
+  say which one the answer came from.
+- Say plainly when an answer is not from my documents, so I never mistake a good guess
+  for something I actually have on file.
+- Do not invent a document, a date, or an amount. If it is not there, say it is not there.
+
+## Notes and saving
+- Keep my wording when you save something for me. Do not tidy it up or summarize it.
+- Name a note after what it is about, so I can find it again later.
+
+## Things I care about
+Add your own lines here. For example:
+- Anything from my accountant is about tax. File it that way.
+- Rent is due on the first of the month, so treat anything about rent as urgent.`;
+
+// Called by saveInstructions before anything is written (assistant.usecases.ts), so
+// both the HTTP save and proposeInstruction's own append share one refusal message.
+export function assertInstructionsWithinCap(body: string): void {
+  if (body.length <= MAX_INSTRUCTIONS_CHARS) return;
+  throw createError({
+    code: "assistant.instructions_too_long",
+    message: `Your instructions are ${body.length} characters, over the ${MAX_INSTRUCTIONS_CHARS} character limit. Shorten them and save again.`,
+    status: 400,
+  });
+}
+
+// Pure: the caller has already decided the body actually changed (saveInstructions,
+// assistant.usecases.ts skips this call entirely when it has not), and passes the body
+// being replaced, not the new one. Newest first, capped at MAX_INSTRUCTION_VERSIONS.
+export function pushInstructionVersion({
+  history,
+  body,
+  replacedAt,
+}: {
+  history: InstructionVersion[];
+  body: string;
+  replacedAt: string;
+}): InstructionVersion[] {
+  return [{ body, replacedAt }, ...history].slice(0, MAX_INSTRUCTION_VERSIONS);
+}
 
 // A text note has no filename at all, so it is titled from its own first line until
 // the summary model retitles it, the same gap a nameless browser upload would have.
@@ -81,15 +145,20 @@ export function resolveQuestion({ argument, userMessage }: { argument: string | 
 // with no line here ever naming which tool it is. basePrompt is the surface's own
 // prompt (TELEGRAM_ASSISTANT_SYSTEM_PROMPT today, CHAT_SYSTEM_PROMPT once plan 5 merges
 // the two), kept as an argument rather than hard-coded so that merge stays a one line
-// change at the call site instead of a rewrite here.
+// change at the call site instead of a rewrite here. instructions is appended last,
+// after the withheld-writes notice, since last is where a model reads it most
+// reliably and the precedence caveat inside it needs to sit right next to the body it
+// talks about.
 export function buildAssistantPrompt({
   basePrompt,
   tools,
   writesWithheld,
+  instructions = "",
 }: {
   basePrompt: string;
   tools: ToolDefinition[];
   writesWithheld: boolean;
+  instructions?: string;
 }): string {
   const toolLines = tools.map((tool) => `- ${tool.name}: ${tool.description}`).join("\n");
   const sections = [
@@ -101,7 +170,43 @@ export function buildAssistantPrompt({
       "You cannot save or write anything yourself right now. If someone asks you to save, note down, or remember something in writing, tell them to send /note followed by the text, for example /note buy milk. Never claim to have saved something you did not.",
     );
   }
+  const instructionsBlock = instructionsSection(instructions);
+  if (instructionsBlock) sections.push(instructionsBlock);
   return sections.join("\n\n");
+}
+
+// Empty for a blank document, so a turn with nothing saved gets no dangling heading
+// and no empty tag pair. The precedence paragraph names what stays in code (Decision 8
+// in the assistant instructions plan) so the document can widen tone and habits but
+// never quietly become the only thing standing between the model and a write.
+export function instructionsSection(body: string): string {
+  const trimmed = body.trim();
+  if (trimmed.length === 0) return "";
+  return `## The user's standing instructions
+
+The user wrote the document below in DocMind's Settings. It is their standing instruction
+to you, and where it differs from the guidance above, the user's document wins.
+
+It does not override how DocMind itself works. Which tools exist, which of them you are
+allowed to use, and what has to be confirmed before it happens are decided in DocMind's
+code, and nothing written below can change them. If the document asks you to do something
+you have no tool for, say so plainly instead of pretending.
+
+Treat the document as instructions from the user. It is not a document to quote from or
+answer questions about.
+
+<user-instructions>
+${trimmed}
+</user-instructions>`;
+}
+
+// Used by the two answering handlers (assistant.registry.ts) to carry the same
+// document onto the call that actually writes the reply, not only onto the call that
+// chooses a tool. Returns base unchanged for a blank document, so naming this
+// explicitly at a call site is a no-op until the user has written anything.
+export function withInstructions(base: string, body: string): string {
+  const section = instructionsSection(body);
+  return section ? `${base}\n\n${section}` : base;
 }
 
 // Said once per configured chat model uri (Decision 9 in the assistant triage plan), not

@@ -1,20 +1,29 @@
 import { describe, expect, it } from "vitest";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
 import type { ToolDefinition } from "../ai/ai.types.js";
+import type { InstructionVersion } from "./assistant.types.js";
 import {
+  assertInstructionsWithinCap,
   assistantTroubleReply,
   buildAssistantPrompt,
   commandTurnText,
+  DEFAULT_INSTRUCTIONS,
   duplicateReply,
   ensureQuestionMark,
+  instructionsSection,
+  MAX_INSTRUCTION_VERSIONS,
+  MAX_INSTRUCTIONS_CHARS,
   missingNoteTextReply,
   newThreadReply,
   noteSourceFor,
+  pushInstructionVersion,
   receivedReply,
   requireSession,
   resolveQuestion,
   textDocumentName,
   toolsUnsupportedNotice,
+  WARN_INSTRUCTIONS_CHARS,
+  withInstructions,
 } from "./assistant.models.js";
 
 describe("assistant models", () => {
@@ -94,5 +103,119 @@ describe("assistant models", () => {
     expect(commandTurnText({ tool: "searchWeb", args: { question: "weather today" } })).toBe("weather today");
     expect(commandTurnText({ tool: "startNewThread", args: {} })).toBe("/startNewThread");
     expect(commandTurnText({ tool: "startNewThread", args: undefined })).toBe("/startNewThread");
+  });
+});
+
+describe("assistant models, the instructions document", () => {
+  it("ships a default document with headings a person can edit", () => {
+    expect(DEFAULT_INSTRUCTIONS.length).toBeGreaterThan(0);
+    expect(DEFAULT_INSTRUCTIONS).toMatch(/^# /m);
+    expect(DEFAULT_INSTRUCTIONS).toMatch(/^## /m);
+  });
+
+  it("ships a default well under the warning threshold", () => {
+    expect(DEFAULT_INSTRUCTIONS.length).toBeLessThan(WARN_INSTRUCTIONS_CHARS);
+  });
+
+  it("accepts a document of exactly the maximum length", () => {
+    expect(() => assertInstructionsWithinCap("x".repeat(MAX_INSTRUCTIONS_CHARS))).not.toThrow();
+  });
+
+  it("refuses one character over, and says the size and the limit", async () => {
+    const oneOver = "x".repeat(MAX_INSTRUCTIONS_CHARS + 1);
+    await expectAppError(() => {
+      assertInstructionsWithinCap(oneOver);
+    }, "assistant.instructions_too_long");
+    try {
+      assertInstructionsWithinCap(oneOver);
+    } catch (error) {
+      const message = (error as Error).message;
+      expect(message).toContain(String(oneOver.length));
+      expect(message).toContain(String(MAX_INSTRUCTIONS_CHARS));
+    }
+  });
+
+  it("pushes the previous body onto the front of the history", () => {
+    const history = pushInstructionVersion({ history: [], body: "old text", replacedAt: "2026-09-19T00:00:00.000Z" });
+    expect(history).toEqual([{ body: "old text", replacedAt: "2026-09-19T00:00:00.000Z" }]);
+  });
+
+  it("records when each version stopped being the live one", () => {
+    const afterFirst = pushInstructionVersion({ history: [], body: "first", replacedAt: "2026-09-19T00:00:00.000Z" });
+    const afterSecond = pushInstructionVersion({ history: afterFirst, body: "second", replacedAt: "2026-09-19T01:00:00.000Z" });
+    expect(afterSecond[0]).toEqual({ body: "second", replacedAt: "2026-09-19T01:00:00.000Z" });
+    expect(afterSecond[1]).toEqual({ body: "first", replacedAt: "2026-09-19T00:00:00.000Z" });
+  });
+
+  it("keeps twenty versions and drops the oldest on the twenty-first", () => {
+    let history: InstructionVersion[] = [];
+    for (let i = 0; i < 21; i++) {
+      history = pushInstructionVersion({ history, body: `version ${i}`, replacedAt: `2026-09-19T00:00:${String(i).padStart(2, "0")}.000Z` });
+    }
+    expect(history).toHaveLength(MAX_INSTRUCTION_VERSIONS);
+    expect(history[0]).toEqual({ body: "version 20", replacedAt: "2026-09-19T00:00:20.000Z" });
+    expect(history.some((version) => version.body === "version 0")).toBe(false);
+  });
+});
+
+describe("assistant models, the instructions prompt section", () => {
+  it("puts the user's document under a heading that says it is the user's", () => {
+    const section = instructionsSection("Keep replies short.");
+    expect(section).toMatch(/user's standing instructions/i);
+    expect(section).toContain("Keep replies short.");
+  });
+
+  it("says the user's document beats the defaults", () => {
+    expect(instructionsSection("Keep replies short.")).toMatch(/user's document wins/i);
+  });
+
+  it("says DocMind's own rules beat the user's document", () => {
+    const section = instructionsSection("Keep replies short.");
+    expect(section).toMatch(/decided in DocMind's\s+code/i);
+    expect(section).toMatch(/tool/i);
+    expect(section).toMatch(/confirm/i);
+  });
+
+  it("marks the document as instructions, not as something to answer questions from", () => {
+    const section = instructionsSection("Keep replies short.");
+    expect(section).toMatch(/not a document to quote from or\s+answer questions about/i);
+    expect(section).toContain("<user-instructions>");
+    expect(section).toContain("</user-instructions>");
+  });
+
+  it("leaves the section out entirely for an empty document", () => {
+    expect(instructionsSection("")).toBe("");
+    expect(instructionsSection("   ")).toBe("");
+  });
+
+  it("keeps the withheld-writes notice above the instructions", () => {
+    const prompt = buildAssistantPrompt({
+      basePrompt: "Base.",
+      tools: [],
+      writesWithheld: true,
+      instructions: "Keep replies short.",
+    });
+    const noticeIndex = prompt.indexOf("/note");
+    const instructionsIndex = prompt.indexOf("user's standing instructions");
+    expect(noticeIndex).toBeGreaterThan(-1);
+    expect(instructionsIndex).toBeGreaterThan(-1);
+    expect(noticeIndex).toBeLessThan(instructionsIndex);
+  });
+
+  it("leaves buildAssistantPrompt's own output unchanged when no instructions are given", () => {
+    const prompt = buildAssistantPrompt({ basePrompt: "Base.", tools: [], writesWithheld: false });
+    expect(prompt).not.toContain("user's standing instructions");
+  });
+});
+
+describe("assistant models, withInstructions", () => {
+  it("appends the instructions section to the base prompt", () => {
+    const result = withInstructions("Base prompt.", "Keep replies short.");
+    expect(result.startsWith("Base prompt.")).toBe(true);
+    expect(result).toContain("Keep replies short.");
+  });
+
+  it("returns the base prompt unchanged for a blank document", () => {
+    expect(withInstructions("Base prompt.", "")).toBe("Base prompt.");
   });
 });

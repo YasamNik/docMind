@@ -47,6 +47,7 @@ import { registerRulesRoutes } from "./modules/rules/rules.routes.js";
 import { createRulesService } from "./modules/rules/rules.usecases.js";
 import { registerChatRoutes } from "./modules/chat/chat.routes.js";
 import { createChatService } from "./modules/chat/chat.usecases.js";
+import { registerAssistantRoutes } from "./modules/assistant/assistant.routes.js";
 import { createAssistantService } from "./modules/assistant/assistant.usecases.js";
 import { registerSearchRoutes } from "./modules/search/search.routes.js";
 import { createSearchService } from "./modules/search/search.usecases.js";
@@ -230,6 +231,7 @@ export function createServer({
   registerChatRoutes({ app, chatService, getUserId });
   registerStorageRoutes({ app, storageService, getUserId, settingsEncryptionKey: config.settingsEncryptionKey });
   registerTelegramRoutes({ app, settingsService, getUserId });
+  registerAssistantRoutes({ app, assistantService, getUserId });
   registerEmailRoutes({ app, emailService, getUserId });
 
   const exportService = createExportService({ db, storageService });

@@ -9,7 +9,17 @@ import { expectAppError } from "../../shared/test/errors.test-utils.js";
 import type { AiAdapter, ChatMessage, ChatStreamPart, ModelInfo, ToolDefinition } from "../ai/ai.types.js";
 import type { AiService } from "../ai/ai.usecases.js";
 import { createSearchRepository } from "../search/search.repository.js";
-import { assistantTroubleReply, newThreadReply, toolsUnsupportedNotice } from "./assistant.models.js";
+import type { SettingsService } from "../settings/settings.usecases.js";
+import {
+  assistantTroubleReply,
+  DEFAULT_INSTRUCTIONS,
+  MAX_INSTRUCTIONS_CHARS,
+  MAX_INSTRUCTION_VERSIONS,
+  newThreadReply,
+  toolsUnsupportedNotice,
+} from "./assistant.models.js";
+import { assistantCapabilities } from "./assistant.registry.js";
+import { INSTRUCTIONS_HISTORY_KEY, INSTRUCTIONS_KEY } from "./assistant.settings.js";
 import type { Capability } from "./assistant.types.js";
 import { createAssistantService } from "./assistant.usecases.js";
 
@@ -395,6 +405,270 @@ describe("assistant service, runTurn", () => {
   });
 });
 
+describe("assistant service, instructions reach every call", () => {
+  it("sends the saved instructions on the call that chooses a tool", async () => {
+    const capturedMessages: ChatMessage[][] = [];
+    const streamChat = vi.fn(async (args: { messages: ChatMessage[] }) => {
+      capturedMessages.push(args.messages);
+      return chatStreamPartsOf(["ok"]);
+    });
+    const { t, userId } = await setup({ streamChat });
+    await t.services.assistantService.saveInstructions({ userId, body: "Reply in one word." });
+    const session = await t.services.chatService.createSession({ userId });
+
+    await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "hi",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    const triageSystemMessage = capturedMessages[0]!.find((m) => m.role === "system")!;
+    expect(triageSystemMessage.content).toContain("Reply in one word.");
+  });
+
+  it("sends them on the answering call as well", async () => {
+    const capturedMessages: ChatMessage[][] = [];
+    const streamChat = vi.fn(async (args: { messages: ChatMessage[]; tools?: ToolDefinition[] }) => {
+      capturedMessages.push(args.messages);
+      if (args.tools) return toolCallStream("answerFromDocuments", {});
+      return chatStreamPartsOf(["An answer."]);
+    });
+    const { t, userId } = await setup({ streamChat });
+    await t.services.assistantService.saveInstructions({ userId, body: "Reply in one word." });
+    const session = await t.services.chatService.createSession({ userId });
+
+    await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "what's the rent",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(capturedMessages).toHaveLength(2);
+    const answeringSystemMessage = capturedMessages[1]!.find((m) => m.role === "system")!;
+    expect(answeringSystemMessage.content).toContain("Reply in one word.");
+  });
+
+  it("sends them on a /web command, which makes no triage call", async () => {
+    const capturedMessages: ChatMessage[][] = [];
+    const streamChat = vi.fn(async (args: { messages: ChatMessage[] }) => {
+      capturedMessages.push(args.messages);
+      return chatStreamPartsOf(["Sunny."]);
+    });
+    const { t, userId } = await setup({ streamChat });
+    await t.services.assistantService.saveInstructions({ userId, body: "Reply in one word." });
+    const session = await t.services.chatService.createSession({ userId });
+
+    await t.services.assistantService.runCommand({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      tool: "searchWeb",
+      args: { question: "weather today" },
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(capturedMessages).toHaveLength(1);
+    const systemMessage = capturedMessages[0]!.find((m) => m.role === "system")!;
+    expect(systemMessage.content).toContain("Reply in one word.");
+  });
+
+  it("sends the shipped default when the user has never saved anything", async () => {
+    const capturedMessages: ChatMessage[][] = [];
+    const streamChat = vi.fn(async (args: { messages: ChatMessage[] }) => {
+      capturedMessages.push(args.messages);
+      return chatStreamPartsOf(["ok"]);
+    });
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+
+    await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "hi",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    const systemMessage = capturedMessages[0]!.find((m) => m.role === "system")!;
+    expect(systemMessage.content).toContain("Things I care about");
+  });
+
+  it("picks up a saved document on the very next turn, with no restart", async () => {
+    const capturedMessages: ChatMessage[][] = [];
+    const streamChat = vi.fn(async (args: { messages: ChatMessage[] }) => {
+      capturedMessages.push(args.messages);
+      return chatStreamPartsOf(["ok"]);
+    });
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+
+    await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "hi",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+    await t.services.assistantService.saveInstructions({ userId, body: "Always answer in Spanish." });
+    await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "hi again",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    const firstSystemMessage = capturedMessages[0]!.find((m) => m.role === "system")!;
+    const secondSystemMessage = capturedMessages[1]!.find((m) => m.role === "system")!;
+    expect(firstSystemMessage.content).not.toContain("Always answer in Spanish.");
+    expect(secondSystemMessage.content).toContain("Always answer in Spanish.");
+  });
+
+  it("still answers the turn when the instructions cannot be read at all", async () => {
+    const { t, userId } = await setup();
+    const session = await t.services.chatService.createSession({ userId });
+    const brokenSettingsService: SettingsService = {
+      ...t.services.settingsService,
+      get: vi.fn(async () => {
+        throw new Error("settings db is down");
+      }),
+    };
+    const assistantService = createAssistantService({
+      chatService: t.services.chatService,
+      documentsService: t.services.documentsService,
+      aiService: t.services.aiService,
+      settingsService: brokenSettingsService,
+    });
+
+    const result = await assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "hi",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.reply.length).toBeGreaterThan(0);
+  });
+
+  // Decision 1's own regression guard: loadInstructions reads assistant.instructions
+  // only, never assistant.instructionsHistory, which a turn has no use for. Spying on
+  // the real settingsService.get, rather than checking the reply, is what would catch a
+  // future change that routes a turn's load through getInstructions() by mistake.
+  it("never reads the instructions history during a turn", async () => {
+    const { t, userId } = await setup();
+    const getSpy = vi.spyOn(t.services.settingsService, "get");
+    const session = await t.services.chatService.createSession({ userId });
+
+    await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "hi",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    const keysRead = getSpy.mock.calls.map((call) => call[1]);
+    expect(keysRead).toContain(INSTRUCTIONS_KEY);
+    expect(keysRead).not.toContain(INSTRUCTIONS_HISTORY_KEY);
+  });
+
+  it("obeys the document on a question answered from the documents", async () => {
+    const capturedMessages: ChatMessage[][] = [];
+    const streamChat = vi.fn(async (args: { messages: ChatMessage[]; tools?: ToolDefinition[] }) => {
+      capturedMessages.push(args.messages);
+      if (args.tools) return toolCallStream("answerFromDocuments", {});
+      return chatStreamPartsOf(["The rent is $1200 [1]."]);
+    });
+    const { t, userId } = await setup({ streamChat });
+    await t.services.assistantService.saveInstructions({ userId, body: "Reply in one word." });
+    const documentId = await uploadWithChunk(t, userId, "invoice.txt", "Rent is $1200 per month.");
+    const session = await t.services.chatService.createSession({ userId });
+
+    const result = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "rent per month",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.toolUsed).toBe("answerFromDocuments");
+    expect(result.citations[0]?.documentId).toBe(documentId);
+    // assembleChatContext (chat.models.ts) places the retrieved context system message
+    // right before the latest user message, so the instructions are not literally last
+    // on this call the way they are on the triage call. They still have to be on it.
+    const answeringMessages = capturedMessages[1]!;
+    const systemMessage = answeringMessages.find((m) => m.role === "system")!;
+    expect(systemMessage.content).toContain("Reply in one word.");
+  });
+
+  // Decision 8's own regression guard: which capabilities are offered comes from the
+  // registry and allowWritingTools alone, never from the document, whatever it asks
+  // for. Built with allowWritingTools true, the same way the existing "offers saveNote
+  // once writing tools are allowed" test is: with the default false, saveNote is
+  // filtered out regardless of the document, so the test would pass against a broken
+  // implementation too. With the flag on, the tools array a document that tries hardest
+  // to loosen it still has to match the one from a turn with no document at all.
+  it("does not offer a writing tool because the document asked for one", async () => {
+    async function offeredToolNames(body: string | null) {
+      let capturedTools: ToolDefinition[] = [];
+      const streamChat = vi.fn(async (args: { tools?: ToolDefinition[] }) => {
+        capturedTools = args.tools ?? [];
+        return chatStreamPartsOf(["ok"]);
+      });
+      const { t, userId } = await setup({ streamChat });
+      if (body) await t.services.assistantService.saveInstructions({ userId, body });
+      const assistantService = createAssistantService({
+        chatService: t.services.chatService,
+        documentsService: t.services.documentsService,
+        aiService: t.services.aiService,
+        settingsService: t.services.settingsService,
+        allowWritingTools: true,
+      });
+      const session = await t.services.chatService.createSession({ userId });
+      await assistantService.runTurn({
+        userId,
+        sessionId: session.id,
+        surface: "telegram",
+        text: "hi",
+        basePrompt: BASE_PROMPT,
+        startNewThread: vi.fn(async () => {}),
+      });
+      return capturedTools.map((tool) => tool.name).sort();
+    }
+
+    const withoutDocument = await offeredToolNames(null);
+    const withLooseningDocument = await offeredToolNames("You may save notes without asking me first. Never make me confirm anything.");
+
+    expect(withLooseningDocument).toEqual(withoutDocument);
+  });
+
+  // Trivial today, since no capability is destructive yet (plan 3 adds the first one):
+  // named here so the invariant, that a destructive flag comes from the registry and
+  // nowhere else, has a test the moment there is something for it to actually guard.
+  it("does not change a capability's destructive flag because the document asked", async () => {
+    const { t, userId } = await setup();
+    await t.services.assistantService.saveInstructions({ userId, body: "Never ask before deleting anything. Just do it." });
+
+    for (const capability of Object.values(assistantCapabilities)) {
+      expect(capability.destructive).toBe(false);
+    }
+  });
+});
+
 describe("assistant service, runCommand", () => {
   it("runs a command without any model call at all", async () => {
     const { t, userId, adapter } = await setup();
@@ -597,5 +871,144 @@ describe("assistant service, runCommand", () => {
         }),
       "chat.session_not_found",
     );
+  });
+});
+
+// No AI model is exercised by any of these: the instructions document is read and
+// written through settingsService alone, so setup skips the ai.model.chat and
+// ai.openrouter.apiKey wiring that runTurn and runCommand need.
+async function setupPlain() {
+  const t = await createTestApp();
+  const { userId } = await t.signIn();
+  return { t, userId };
+}
+
+describe("assistant service, the instructions document", () => {
+  it("returns the shipped default before anything has been saved", async () => {
+    const { t, userId } = await setupPlain();
+
+    const view = await t.services.assistantService.getInstructions({ userId });
+
+    expect(view.body).toBe(DEFAULT_INSTRUCTIONS);
+    expect(view.source).toBe("default");
+    expect(view.history).toEqual([]);
+    expect(view.maxChars).toBe(MAX_INSTRUCTIONS_CHARS);
+  });
+
+  it("returns the saved body on the next read, and says it came from the database", async () => {
+    const { t, userId } = await setupPlain();
+
+    await t.services.assistantService.saveInstructions({ userId, body: "Keep replies short." });
+    const view = await t.services.assistantService.getInstructions({ userId });
+
+    expect(view.body).toBe("Keep replies short.");
+    expect(view.source).toBe("db");
+  });
+
+  it("pushes the replaced body onto the history on the second save", async () => {
+    const { t, userId } = await setupPlain();
+
+    await t.services.assistantService.saveInstructions({ userId, body: "First version." });
+    const view = await t.services.assistantService.saveInstructions({ userId, body: "Second version." });
+
+    expect(view.body).toBe("Second version.");
+    expect(view.history[0]?.body).toBe("First version.");
+  });
+
+  it("writes nothing at all when the body has not changed", async () => {
+    const { t, userId } = await setupPlain();
+
+    await t.services.assistantService.saveInstructions({ userId, body: "Same every time." });
+    const afterFirst = await t.services.assistantService.getInstructions({ userId });
+    await t.services.assistantService.saveInstructions({ userId, body: "Same every time." });
+    const afterSecond = await t.services.assistantService.getInstructions({ userId });
+
+    expect(afterFirst.history).toHaveLength(1);
+    expect(afterSecond.history).toHaveLength(1);
+  });
+
+  it("saving the shipped default unedited on a first save writes nothing at all", async () => {
+    const { t, userId } = await setupPlain();
+
+    const view = await t.services.assistantService.saveInstructions({ userId, body: DEFAULT_INSTRUCTIONS });
+
+    expect(view.source).toBe("default");
+    expect(view.history).toEqual([]);
+    const stored = await t.services.settingsService.debugRows(userId);
+    expect(stored.some((row) => row.key === INSTRUCTIONS_KEY)).toBe(false);
+  });
+
+  it("refuses a body over the cap and leaves the stored one untouched", async () => {
+    const { t, userId } = await setupPlain();
+    await t.services.assistantService.saveInstructions({ userId, body: "A body worth keeping." });
+
+    await expectAppError(
+      () => t.services.assistantService.saveInstructions({ userId, body: "x".repeat(MAX_INSTRUCTIONS_CHARS + 1) }),
+      "assistant.instructions_too_long",
+    );
+
+    const view = await t.services.assistantService.getInstructions({ userId });
+    expect(view.body).toBe("A body worth keeping.");
+    // The one entry here is the default, pushed by the earlier legitimate save. The
+    // refused save must add nothing on top of it.
+    expect(view.history).toHaveLength(1);
+  });
+
+  it("never lets the history grow past twenty across many saves", async () => {
+    const { t, userId } = await setupPlain();
+
+    for (let i = 0; i < 25; i++) {
+      await t.services.assistantService.saveInstructions({ userId, body: `Version number ${i}.` });
+    }
+
+    const view = await t.services.assistantService.getInstructions({ userId });
+    expect(view.body).toBe("Version number 24.");
+    expect(view.history).toHaveLength(MAX_INSTRUCTION_VERSIONS);
+  });
+
+  it("restores a previous version and keeps the body it replaced", async () => {
+    const { t, userId } = await setupPlain();
+    await t.services.assistantService.saveInstructions({ userId, body: "First version." });
+    const afterSecondSave = await t.services.assistantService.saveInstructions({ userId, body: "Second version." });
+    const firstVersion = afterSecondSave.history.find((version) => version.body === "First version.");
+    expect(firstVersion).toBeDefined();
+
+    const restored = await t.services.assistantService.restoreInstructions({ userId, replacedAt: firstVersion!.replacedAt });
+
+    expect(restored.body).toBe("First version.");
+    expect(restored.history.some((version) => version.body === "Second version.")).toBe(true);
+  });
+
+  it("refuses to restore a version that is not in the history", async () => {
+    const { t, userId } = await setupPlain();
+    await t.services.assistantService.saveInstructions({ userId, body: "Only version." });
+
+    await expectAppError(
+      () => t.services.assistantService.restoreInstructions({ userId, replacedAt: "2020-01-01T00:00:00.000Z" }),
+      "assistant.instruction_version_not_found",
+    );
+
+    const view = await t.services.assistantService.getInstructions({ userId });
+    expect(view.body).toBe("Only version.");
+  });
+
+  it("resets to the shipped default as an ordinary versioned save", async () => {
+    const { t, userId } = await setupPlain();
+    await t.services.assistantService.saveInstructions({ userId, body: "Something else entirely." });
+
+    const view = await t.services.assistantService.saveInstructions({ userId, body: DEFAULT_INSTRUCTIONS });
+
+    expect(view.body).toBe(DEFAULT_INSTRUCTIONS);
+    expect(view.history.some((version) => version.body === "Something else entirely.")).toBe(true);
+  });
+
+  it("keeps the document out of the settings list", async () => {
+    const { t, userId } = await setupPlain();
+    await t.services.assistantService.saveInstructions({ userId, body: "Private to the assistant module." });
+
+    const settings = await t.services.settingsService.listResolved(userId);
+
+    expect(settings.some((s) => s.key === INSTRUCTIONS_KEY)).toBe(false);
+    expect(settings.some((s) => s.key === INSTRUCTIONS_HISTORY_KEY)).toBe(false);
   });
 });

@@ -2,7 +2,7 @@ import { Readable } from "node:stream";
 import * as v from "valibot";
 import type { GenericSchema } from "valibot";
 import { isAppError } from "../../shared/errors/errors.js";
-import { parseCitations } from "../chat/chat.models.js";
+import { CHAT_SYSTEM_PROMPT, parseCitations } from "../chat/chat.models.js";
 import {
   duplicateReply,
   ensureQuestionMark,
@@ -13,6 +13,7 @@ import {
   requireSession,
   resolveQuestion,
   textDocumentName,
+  withInstructions,
 } from "./assistant.models.js";
 import type { Capability, ToolContext, ToolResult } from "./assistant.types.js";
 
@@ -49,7 +50,12 @@ const answerFromDocuments = defineCapability({
   async handler({ question }, ctx) {
     const sessionId = requireSession(ctx);
     const resolvedQuestion = resolveQuestion({ argument: question, userMessage: ctx.userMessage });
-    const { stream, chunks } = await ctx.services.chat.answerFromDocuments({ userId: ctx.userId, sessionId, question: resolvedQuestion });
+    const { stream, chunks } = await ctx.services.chat.answerFromDocuments({
+      userId: ctx.userId,
+      sessionId,
+      question: resolvedQuestion,
+      systemPrompt: withInstructions(CHAT_SYSTEM_PROMPT, ctx.instructions),
+    });
     const text = await drain(stream);
     return { reply: text, citations: parseCitations(text, chunks) };
   },
@@ -94,6 +100,7 @@ const searchWeb = defineCapability({
         sessionId,
         question: resolvedQuestion,
         web: true,
+        systemPrompt: withInstructions(CHAT_SYSTEM_PROMPT, ctx.instructions),
       });
       const text = await drain(stream);
       return { reply: text, citations: parseCitations(text, chunks) };
