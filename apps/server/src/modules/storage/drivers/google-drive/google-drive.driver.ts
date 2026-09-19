@@ -226,44 +226,43 @@ export const googleDriveDriverDefinition: StorageDriverDefinition = {
   ],
   oauth: googleDriveOAuth,
   guide: {
-    title: "Connect a Google Drive account",
-    intro: "DocMind stores files in a folder it creates in your own Google Drive, with access limited to the "
-      + "files it creates there. It never sees the rest of your Drive.",
+    title: "Connect Google Drive",
+    intro: "Google will not let an app touch your Drive until you register that app with Google, so there is a "
+      + "one time setup in their console. It is five short steps and you never come back to it. DocMind only "
+      + "ever sees the files it puts there, never the rest of your Drive.",
     steps: [
       {
-        text: "Open the Google Cloud console and create a new project for DocMind, or pick an existing one.",
+        text: "Create a project, or pick one you already have. The name is only for you.",
         link: "https://console.cloud.google.com/projectcreate",
       },
       {
-        text: "Enable the Google Drive API for that project.",
+        text: "Turn on the Google Drive API for that project. One button.",
         link: "https://console.cloud.google.com/apis/library/drive.googleapis.com",
       },
       {
-        text: "Configure the OAuth consent screen, then publish it. An app left in testing mode expires its "
-          + "refresh tokens after seven days, so Drive access would silently stop working about a week in.",
+        text: "Fill in the OAuth consent screen: an app name, your email, save. Pick External if it asks who "
+          + "the app is for.",
         link: "https://console.cloud.google.com/apis/credentials/consent",
       },
       {
-        text: "Create credentials of type OAuth client id, application type Web application. Paste the redirect "
-          + "URI shown on this page under Authorized redirect URIs, exactly, then create the client.",
+        text: "Create credentials, then OAuth client ID, application type Web application. Name it anything. "
+          + "Leave Authorized JavaScript origins empty. Under Authorized redirect URIs press Add URI and paste "
+          + "the address shown at the top of this page, exactly as it is. Then press Create.",
         link: "https://console.cloud.google.com/apis/credentials",
       },
       {
-        text: "Copy the client id and client secret from that credential into the fields below and save them.",
-      },
-      {
-        text: "Click Connect and sign in with the Google account whose Drive should hold DocMind's files, then "
-          + "approve access.",
+        text: "Google shows a client ID and a client secret once. Paste both into the fields below, save, then "
+          + "press Connect and approve.",
       },
     ],
     notes: [
-      "Prefer connecting from the machine running DocMind, at localhost. A Cloudflare quick tunnel hostname "
-        + "changes on restart, and the redirect URI has to already be registered in Google Cloud before a "
-        + "connect made through it can succeed.",
-      "Once connected, DocMind refreshes access with the stored refresh token and never touches the redirect "
-        + "URI again, so a later tunnel restart does not break an existing connection.",
-      "Scope is limited to files DocMind creates (drive.file). DocMind can never read or list the rest of the "
-        + "Drive.",
+      "Connect from the machine running DocMind if you can. A tunnel address changes whenever the tunnel "
+        + "restarts, and Google needs the exact address registered before you press Connect. Once connected, "
+        + "restarts no longer matter.",
+      "While the consent screen is in testing mode Google drops the connection after seven days. Publishing it "
+        + "stops that, and can wait until you are tired of reconnecting.",
+      "DocMind asks for the drive.file scope, which means it can only see files it created. Everything already "
+        + "in your Drive stays invisible to it.",
     ],
   },
   async create({ settings, userId }) {
