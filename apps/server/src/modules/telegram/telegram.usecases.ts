@@ -3,8 +3,8 @@ import { Readable } from "node:stream";
 import * as v from "valibot";
 import { isAppError } from "../../shared/errors/errors.js";
 import { createLogger, type Logger } from "../../shared/logger/logger.js";
+import { ASSISTANT_TRIAGE_SYSTEM_PROMPT } from "../assistant/assistant.models.js";
 import type { AssistantService } from "../assistant/assistant.usecases.js";
-import { TELEGRAM_ASSISTANT_SYSTEM_PROMPT } from "../chat/chat.models.js";
 import type { ChatService } from "../chat/chat.usecases.js";
 import type { Citation } from "../chat/chat.types.js";
 import type { Database } from "../database/database.js";
@@ -113,7 +113,8 @@ export function createTelegramService({
   chatService: TelegramChatService;
   // runTurn for a plain message, runCommand for /note, /web and /new. One path shared
   // with the app's own chat page once plan 5 wires it in; Telegram just supplies its
-  // own system prompt (TELEGRAM_ASSISTANT_SYSTEM_PROMPT) and its own thread pointer.
+  // own thread pointer and the triage base prompt (ASSISTANT_TRIAGE_SYSTEM_PROMPT,
+  // assistant.models.ts).
   assistantService: AssistantService;
   // There is exactly one Telegram-paired account, and this loop runs with no HTTP
   // session to read it from. Resolved fresh every cycle so a user created after the
@@ -340,7 +341,7 @@ export function createTelegramService({
         sessionId,
         surface: "telegram",
         text: trimmed,
-        basePrompt: TELEGRAM_ASSISTANT_SYSTEM_PROMPT,
+        basePrompt: ASSISTANT_TRIAGE_SYSTEM_PROMPT,
         startNewThread,
       });
     }

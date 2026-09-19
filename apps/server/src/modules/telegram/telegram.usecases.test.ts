@@ -7,10 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createError } from "../../shared/errors/errors.js";
 import { createTestDatabase } from "../../shared/test/database.test-utils.js";
 import { aiSettingDefinitions } from "../ai/ai.settings.js";
-import type { AiAdapter, ChatStreamPart, ModelInfo, StructuredResult, TestResult } from "../ai/ai.types.js";
+import type { AiAdapter, ChatMessage, ChatStreamPart, ModelInfo, StructuredResult, TestResult } from "../ai/ai.types.js";
 import { createAiService } from "../ai/ai.usecases.js";
 import { aiProviderRegistry } from "../ai/providers/index.js";
-import { assistantSettingDefinitions } from "../assistant/assistant.settings.js";
+import { assistantSettingDefinitions, INSTRUCTIONS_KEY } from "../assistant/assistant.settings.js";
 import { createAssistantService, type AssistantService } from "../assistant/assistant.usecases.js";
 import { createChatService, type ChatService } from "../chat/chat.usecases.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
@@ -689,6 +689,75 @@ describe("telegram service, the assistant", () => {
     expect(sent[0]?.text).toContain("The lease renews March 1st");
     expect(sent[0]?.text).toContain("lease.txt");
     expect(sent[0]?.text).not.toContain("[1]");
+  });
+
+  // The defect a live probe found: the triage call was told to answer from context it
+  // is never given (Decision 2 sends it no retrieved chunks at all), so it reported
+  // back that it had no way to look, even with answerFromDocuments right there in its
+  // own tools array. Asserts on the actual system message the triage call sends, not on
+  // what the model happens to do with it.
+  it("gives the triage call a system message that never claims it has no way to look something up", async () => {
+    await pairAndConfigureChat();
+    let triageMessages: ChatMessage[] = [];
+    let calls = 0;
+    streamChatImpl = vi.fn(async (args) => {
+      calls += 1;
+      if (calls === 1) {
+        triageMessages = args.messages;
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "toolCall" as const, id: "call_1", name: "answerFromDocuments", arguments: {} };
+          },
+        };
+      }
+      return asyncChatPartsOf(["You have two documents on file [1][2]."]);
+    });
+    const { client } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "what documents do i have?" })]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    const systemMessage = triageMessages.find((m) => m.role === "system")?.content ?? "";
+    expect(systemMessage).not.toMatch(/context given to you/i);
+    expect(systemMessage).not.toMatch(/context does not cover/i);
+    expect(systemMessage).toMatch(/never tell the user you have no way to check/i);
+    expect(systemMessage).toMatch(/use answerFromDocuments/i);
+  });
+
+  // The instructions document is user-editable text, not code, so the assistant must
+  // not depend on it to know it can look something up. A terse custom document that
+  // says nothing about documents at all must still leave the routing guidance in the
+  // triage system message. A fake adapter cannot make a real tool choice, so this
+  // checks the prompt content that would actually drive one.
+  it("keeps the routing guidance in the triage prompt even when the user's own instructions say nothing about documents", async () => {
+    await pairAndConfigureChat();
+    await settingsService.setInternal(
+      userId,
+      INSTRUCTIONS_KEY,
+      "Answer every message in exactly one short sentence. Always end your reply with the word BANANA.",
+    );
+    let triageMessages: ChatMessage[] = [];
+    let calls = 0;
+    streamChatImpl = vi.fn(async (args) => {
+      calls += 1;
+      if (calls === 1) {
+        triageMessages = args.messages;
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "toolCall" as const, id: "call_1", name: "answerFromDocuments", arguments: {} };
+          },
+        };
+      }
+      return asyncChatPartsOf(["You have two documents on file [1][2]. BANANA"]);
+    });
+    const { client } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "what documents do i have?" })]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    const systemMessage = triageMessages.find((m) => m.role === "system")?.content ?? "";
+    expect(systemMessage).toMatch(/use answerFromDocuments/i);
+    expect(systemMessage).toMatch(/never tell the user you have no way to check/i);
   });
 
   it("searches the web when the model chooses it, without the user typing /web", async () => {

@@ -4,6 +4,7 @@ import type { ToolDefinition } from "../ai/ai.types.js";
 import type { InstructionVersion } from "./assistant.types.js";
 import {
   assertInstructionsWithinCap,
+  ASSISTANT_TRIAGE_SYSTEM_PROMPT,
   assistantTroubleReply,
   buildAssistantPrompt,
   commandTurnText,
@@ -103,6 +104,38 @@ describe("assistant models", () => {
     expect(commandTurnText({ tool: "searchWeb", args: { question: "weather today" } })).toBe("weather today");
     expect(commandTurnText({ tool: "startNewThread", args: {} })).toBe("/startNewThread");
     expect(commandTurnText({ tool: "startNewThread", args: undefined })).toBe("/startNewThread");
+  });
+});
+
+describe("ASSISTANT_TRIAGE_SYSTEM_PROMPT", () => {
+  // The bug a live probe found: a triage call never receives retrieved document text
+  // (Decision 2 of the assistant triage plan), so a prompt telling it to "answer from
+  // the context given to you" is false on every single call it makes, and a model told
+  // that will report back a missing capability it does not actually have.
+  it("never tells the model to answer from context it was given", () => {
+    expect(ASSISTANT_TRIAGE_SYSTEM_PROMPT).not.toMatch(/context given to you/i);
+    expect(ASSISTANT_TRIAGE_SYSTEM_PROMPT).not.toMatch(/context does not cover/i);
+  });
+
+  it("tells the model never to claim it has no way to look something up", () => {
+    expect(ASSISTANT_TRIAGE_SYSTEM_PROMPT).toMatch(/never tell the user you have no way to check/i);
+    expect(ASSISTANT_TRIAGE_SYSTEM_PROMPT).not.toMatch(/can'?t (check|look|list)/i);
+  });
+
+  it("routes anything the user may have filed to answerFromDocuments, not to memory", () => {
+    expect(ASSISTANT_TRIAGE_SYSTEM_PROMPT).toMatch(/use answerFromDocuments/i);
+    expect(ASSISTANT_TRIAGE_SYSTEM_PROMPT).toMatch(/never answer/i);
+    expect(ASSISTANT_TRIAGE_SYSTEM_PROMPT).toMatch(/from memory/i);
+  });
+
+  it("keeps the conversational character for a message with nothing to do with a document", () => {
+    expect(ASSISTANT_TRIAGE_SYSTEM_PROMPT).toMatch(/chat normally/i);
+    expect(ASSISTANT_TRIAGE_SYSTEM_PROMPT).toMatch(/never refuse/i);
+  });
+
+  it("still treats document text as data to read, not instructions to follow", () => {
+    expect(ASSISTANT_TRIAGE_SYSTEM_PROMPT).toMatch(/data to read/i);
+    expect(ASSISTANT_TRIAGE_SYSTEM_PROMPT).toMatch(/never a command to follow/i);
   });
 });
 
