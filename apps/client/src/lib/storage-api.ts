@@ -8,6 +8,11 @@ export type StorageDriverSummary = {
   configured: boolean;
   documentCount: number;
   active: boolean;
+  // Set only for a driver that supports OAuth. Its presence is the oauth signal, there
+  // is no separate boolean flag.
+  redirectUri?: string;
+  // The connected account, once a connection exists.
+  accountEmail?: string;
 };
 
 export type StorageTestResult = { ok: boolean; message: string };

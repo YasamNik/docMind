@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +13,12 @@ import { GuideCard } from "./ProviderCard";
 
 function documentCountLabel(count: number) {
   return `${count} document${count === 1 ? "" : "s"}`;
+}
+
+// The part of a driver setting's key after "storage.<driverId>.", the same slicing
+// DriverSettingField uses to label a field.
+function settingShortKey(setting: ResolvedSetting) {
+  return setting.key.split(".").slice(2).join(".");
 }
 
 export function StorageTab() {
@@ -69,7 +75,13 @@ export function StorageTab() {
     return <p className="text-sm text-muted-foreground">Loading storage drivers...</p>;
   }
 
-  const driverSettings = selected ? settings.filter((s) => s.key.startsWith(`storage.${selected.id}.`)) : [];
+  // The refresh token and account email are shown and managed through the connect and
+  // disconnect controls below, not as generic fields someone would type into by hand.
+  const driverSettings = selected
+    ? settings
+        .filter((s) => s.key.startsWith(`storage.${selected.id}.`))
+        .filter((s) => !selected.redirectUri || !["refreshToken", "accountEmail"].includes(settingShortKey(s)))
+    : [];
   const selectedTestResult = selected ? testResults[selected.id] : undefined;
 
   return (
@@ -116,12 +128,18 @@ export function StorageTab() {
           <CardContent className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-3">
+                {selected.redirectUri && <RedirectUriNotice redirectUri={selected.redirectUri} />}
+
                 {driverSettings.length === 0 ? (
                   <p className="text-sm text-muted-foreground">This driver needs no settings.</p>
                 ) : (
                   driverSettings.map((setting) => (
                     <DriverSettingField key={setting.key} setting={setting} queryClient={queryClient} />
                   ))
+                )}
+
+                {selected.redirectUri && (
+                  <DriverConnection driver={selected} driverSettings={driverSettings} queryClient={queryClient} />
                 )}
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -201,7 +219,7 @@ function DriverSettingField({ setting, queryClient }: { setting: ResolvedSetting
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const shortKey = setting.key.split(".").slice(2).join(".");
+  const shortKey = settingShortKey(setting);
 
   if (setting.secret) {
     const masked = setting.value as { isSet: boolean; lastFour?: string };
@@ -254,5 +272,111 @@ function DriverSettingField({ setting, queryClient }: { setting: ResolvedSetting
         </div>
       )}
     </div>
+  );
+}
+
+// A mismatch on scheme, host or port in the redirect URI is the single most common way
+// an OAuth driver's setup fails, so this stays visible and hard to miss above the fields.
+function RedirectUriNotice({ redirectUri }: { redirectUri: string }) {
+  return (
+    <div className="space-y-2 rounded-lg border border-yellow-300 bg-yellow-50 p-3 dark:border-yellow-900 dark:bg-yellow-900/20">
+      <Label>Redirect URI to register</Label>
+      <div className="flex flex-wrap items-center gap-2">
+        <code className="flex-1 break-all rounded bg-background px-2 py-1 text-xs">{redirectUri}</code>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => { navigator.clipboard.writeText(redirectUri); toast.success("Copied"); }}
+        >
+          Copy
+        </Button>
+      </div>
+      <p className="text-xs font-medium text-yellow-800 dark:text-yellow-400">
+        Scheme, host and port must match exactly what is registered in Google Cloud. This is the most common way
+        this setup fails.
+      </p>
+    </div>
+  );
+}
+
+// Connect ends at the provider's consent screen, so it is a real navigation rather than
+// a fetch. It stays disabled until the client id and secret this driver needs are both
+// saved, since the flow cannot start without them.
+function DriverConnection({
+  driver,
+  driverSettings,
+  queryClient,
+}: {
+  driver: StorageDriverSummary;
+  driverSettings: ResolvedSetting[];
+  queryClient: QueryClient;
+}) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const clientIdSetting = driverSettings.find((s) => settingShortKey(s) === "clientId");
+  const clientSecretSetting = driverSettings.find((s) => settingShortKey(s) === "clientSecret");
+  const hasClientId = typeof clientIdSetting?.value === "string" && clientIdSetting.value.length > 0;
+  const hasClientSecret = Boolean((clientSecretSetting?.value as { isSet?: boolean } | undefined)?.isSet);
+  const canConnect = hasClientId && hasClientSecret;
+
+  const disconnect = useMutation({
+    mutationFn: async () => {
+      await settingsApi.update({
+        [`storage.${driver.id}.refreshToken`]: null,
+        [`storage.${driver.id}.accountEmail`]: null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["storage-drivers"] });
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+      setConfirmOpen(false);
+      toast.success("Disconnected");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  if (driver.accountEmail) {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm">Connected as {driver.accountEmail}</span>
+        <Button size="sm" variant="outline" onClick={() => setConfirmOpen(true)}>Disconnect</Button>
+
+        <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Disconnect {driver.label}?</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              DocMind stops being able to read or write files in this {driver.label} account until it is connected
+              again. Files already stored there are not deleted.
+            </p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
+              <Button
+                variant="destructive"
+                onClick={() => disconnect.mutate()}
+                disabled={disconnect.isPending}
+              >
+                Disconnect {driver.label}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
+
+  if (!canConnect) {
+    return (
+      <Button size="sm" disabled title="Save the client id and secret first">
+        Connect
+      </Button>
+    );
+  }
+
+  return (
+    <a href={`/api/storage/drivers/${driver.id}/connect`} className={buttonVariants({ size: "sm" })}>
+      Connect
+    </a>
   );
 }
