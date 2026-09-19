@@ -5,8 +5,10 @@ import { isAppError } from "../../shared/errors/errors.js";
 import { parseCitations } from "../chat/chat.models.js";
 import {
   answeringPromptFor,
+  appendInstructionLine,
   duplicateReply,
   ensureQuestionMark,
+  instructionAddedReply,
   missingNoteTextReply,
   newThreadReply,
   noteSourceFor,
@@ -147,13 +149,33 @@ const askUser = defineCapability({
   },
 });
 
-// proposeInstruction is deliberately absent: it needs the instructions document from
-// plan 4, and the registry gains it then as one more record, which is the whole point
-// of building this as data rather than as a chain of name checks.
+const proposeInstruction = defineCapability({
+  name: "proposeInstruction",
+  description:
+    "Offer to add one line to the user's standing instructions, so you handle the same thing their way next time. Use this only after the user has corrected you, and only once per conversation: if they say no, do not offer again.",
+  schema: v.object({ line: v.pipe(v.string(), v.minLength(1), v.maxLength(280)) }),
+  writes: true,
+  destructive: false,
+  recordsTurn: true,
+  confirm: ({ line }) => `- ${line}\n\nAdd that to your standing instructions?`,
+  async handler({ line }, ctx) {
+    const updated = appendInstructionLine({ body: ctx.instructions, line });
+    await ctx.saveInstructions(updated);
+    return { reply: instructionAddedReply(), citations: [] };
+  },
+});
+
+// The second writing capability, landing with the confirmation state machine rather
+// than before it: a write with no way to hold it until a yes had nowhere safe to run
+// (assistant confirmation plan, Decision 9). Its handler must never reach the settings
+// service on its own: ctx.saveInstructions is the assistant's own saveInstructions,
+// bound to this turn's user, so the append goes through the same cap and version
+// history an edit from Settings would.
 export const assistantCapabilities = {
   answerFromDocuments,
   saveNote,
   searchWeb,
   startNewThread,
   askUser,
+  proposeInstruction,
 } satisfies Record<string, Capability>;

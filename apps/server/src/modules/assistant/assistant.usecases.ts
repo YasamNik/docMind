@@ -199,6 +199,12 @@ export function createAssistantService({
       services: { chat: chatService, documents: documentsService, ai: aiService },
       startNewThread,
       instructions,
+      // Bound to this turn's user, never exposed more broadly: a handler that needs to
+      // edit the instructions document goes through the same cap and versioning as an
+      // edit from Settings, since this is that same function.
+      saveInstructions: async (body: string) => {
+        await saveInstructions({ userId, body });
+      },
     };
   }
 

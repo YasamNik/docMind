@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { chatStreamPartsOf, fakeAdapter } from "../../shared/test/ai.test-utils.js";
 import { createTestApp } from "../../shared/test/app.test-utils.js";
+import type { ChatStreamPart } from "../ai/ai.types.js";
 import { DEFAULT_INSTRUCTIONS, MAX_INSTRUCTIONS_CHARS, WARN_INSTRUCTIONS_CHARS } from "./assistant.models.js";
 
 async function setup() {
@@ -9,6 +11,36 @@ async function setup() {
 }
 
 const jsonHeaders = (cookie: string) => ({ cookie, "content-type": "application/json" });
+
+function toolCallStream(name: string, args: unknown): AsyncIterable<ChatStreamPart> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      yield { type: "toolCall", id: "call_1", name, arguments: args };
+    },
+  };
+}
+
+const BASE_PROMPT = "You are a helpful assistant for testing.";
+
+// A session with a saveNote proposal already waiting on it, made through runTurn the
+// same way the model would trigger one, so the route test exercises the real column
+// rather than one it wrote itself.
+async function setupWithProposal(noteText = "buy milk before the shop closes") {
+  const adapter = fakeAdapter({ streamChat: vi.fn(async () => toolCallStream("saveNote", { text: noteText })) });
+  const t = await createTestApp({ adapterFactories: { "openai-compatible": () => adapter, "anthropic": () => adapter } });
+  const { cookie, userId } = await t.signIn();
+  await t.services.settingsService.set(userId, { "ai.openrouter.apiKey": "sk-or-v1-test", "ai.model.chat": "openrouter://test-chat-model" });
+  const session = await t.services.chatService.createSession({ userId });
+  const turn = await t.services.assistantService.runTurn({
+    userId,
+    sessionId: session.id,
+    surface: "telegram",
+    text: "note buy milk before the shop closes",
+    basePrompt: BASE_PROMPT,
+    startNewThread: vi.fn(async () => {}),
+  });
+  return { t, cookie, userId, sessionId: session.id, proposal: turn.proposal! };
+}
 
 describe("assistant instructions routes", () => {
   it("rejects an unauthenticated request", async () => {
@@ -144,5 +176,150 @@ describe("assistant instructions routes", () => {
     const body = await res.json();
     expect(body.settings.some((s: { key: string }) => s.key === "assistant.instructions")).toBe(false);
     expect(body.settings.some((s: { key: string }) => s.key === "assistant.instructionsHistory")).toBe(false);
+  });
+});
+
+describe("assistant proposal routes", () => {
+  it("returns nothing when no proposal is waiting", async () => {
+    const { t, cookie, userId } = await setup();
+    const session = await t.services.chatService.createSession({ userId });
+
+    const res = await t.app.request(`/api/assistant/sessions/${session.id}/proposal`, { headers: { cookie } });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.proposal).toBeNull();
+  });
+
+  it("returns the waiting proposal with the exact sentence the user was shown", async () => {
+    const { t, cookie, sessionId, proposal } = await setupWithProposal();
+
+    const res = await t.app.request(`/api/assistant/sessions/${sessionId}/proposal`, { headers: { cookie } });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.proposal.id).toBe(proposal.id);
+    expect(body.proposal.tool).toBe("saveNote");
+    expect(body.proposal.text).toBe(proposal.text);
+    expect(body.proposal.messageId).toBe(proposal.messageId);
+  });
+
+  it("never returns the stored arguments", async () => {
+    const { t, cookie, sessionId } = await setupWithProposal();
+
+    const res = await t.app.request(`/api/assistant/sessions/${sessionId}/proposal`, { headers: { cookie } });
+
+    const body = await res.json();
+    expect(body.proposal.args).toBeUndefined();
+  });
+
+  it("runs the proposal on yes and returns the reply", async () => {
+    const { t, cookie, userId, sessionId, proposal } = await setupWithProposal();
+
+    const res = await t.app.request(`/api/assistant/sessions/${sessionId}/proposal/answer`, {
+      method: "POST",
+      headers: jsonHeaders(cookie),
+      body: JSON.stringify({ proposalId: proposal.id, decision: "yes" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("ran");
+    expect(typeof body.reply).toBe("string");
+    const documents = await t.services.documentsService.list({ userId });
+    expect(documents).toHaveLength(1);
+  });
+
+  it("discards it on no", async () => {
+    const { t, cookie, userId, sessionId, proposal } = await setupWithProposal();
+
+    const res = await t.app.request(`/api/assistant/sessions/${sessionId}/proposal/answer`, {
+      method: "POST",
+      headers: jsonHeaders(cookie),
+      body: JSON.stringify({ proposalId: proposal.id, decision: "no" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("declined");
+    const documents = await t.services.documentsService.list({ userId });
+    expect(documents).toHaveLength(0);
+  });
+
+  it("returns stale for an id that is not the waiting one", async () => {
+    const { t, cookie, sessionId } = await setupWithProposal();
+
+    const res = await t.app.request(`/api/assistant/sessions/${sessionId}/proposal/answer`, {
+      method: "POST",
+      headers: jsonHeaders(cookie),
+      body: JSON.stringify({ proposalId: "prop_not_the_one", decision: "yes" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("stale");
+  });
+
+  it("rejects an unauthenticated request", async () => {
+    const { t, sessionId, proposal } = await setupWithProposal();
+    const jsonBody = { "content-type": "application/json" };
+
+    expect((await t.app.request(`/api/assistant/sessions/${sessionId}/proposal`)).status).toBe(401);
+    expect(
+      (
+        await t.app.request(`/api/assistant/sessions/${sessionId}/proposal/answer`, {
+          method: "POST",
+          headers: jsonBody,
+          body: JSON.stringify({ proposalId: proposal.id, decision: "yes" }),
+        })
+      ).status,
+    ).toBe(401);
+  });
+
+  it("returns 404 for a session that is not the user's", async () => {
+    // DocMind is single-account, so there is no second sign-up to authenticate as. The
+    // ownership check is the chat service's own, keyed on userId with no foreign key to
+    // the auth tables (chat.usecases.test.ts proves the same thing at that layer with a
+    // synthetic id), so a session owned by an id other than the signed-in cookie's is
+    // enough to exercise it here too.
+    const adapter = fakeAdapter({ streamChat: vi.fn(async () => toolCallStream("saveNote", { text: "buy milk" })) });
+    const t = await createTestApp({ adapterFactories: { "openai-compatible": () => adapter, "anthropic": () => adapter } });
+    const { cookie } = await t.signIn();
+    const otherUserId = "user_other";
+    const session = await t.services.chatService.createSession({ userId: otherUserId });
+    await t.services.settingsService.set(otherUserId, {
+      "ai.openrouter.apiKey": "sk-or-v1-test",
+      "ai.model.chat": "openrouter://test-chat-model",
+    });
+    const turn = await t.services.assistantService.runTurn({
+      userId: otherUserId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "note buy milk",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    const getRes = await t.app.request(`/api/assistant/sessions/${session.id}/proposal`, { headers: { cookie } });
+    expect(getRes.status).toBe(404);
+
+    const postRes = await t.app.request(`/api/assistant/sessions/${session.id}/proposal/answer`, {
+      method: "POST",
+      headers: jsonHeaders(cookie),
+      body: JSON.stringify({ proposalId: turn.proposal!.id, decision: "yes" }),
+    });
+    expect(postRes.status).toBe(404);
+  });
+
+  it("rejects a decision that is neither yes nor no", async () => {
+    const { t, cookie, sessionId, proposal } = await setupWithProposal();
+
+    const res = await t.app.request(`/api/assistant/sessions/${sessionId}/proposal/answer`, {
+      method: "POST",
+      headers: jsonHeaders(cookie),
+      body: JSON.stringify({ proposalId: proposal.id, decision: "maybe" }),
+    });
+
+    expect(res.status).toBe(400);
   });
 });

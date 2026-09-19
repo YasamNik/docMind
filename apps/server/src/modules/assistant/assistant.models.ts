@@ -346,6 +346,44 @@ export function proposalDeclinedReply(): string {
   return "Okay, I did not do that.";
 }
 
+// The heading proposeInstruction appends under (assistant.registry.ts). Matches
+// DEFAULT_INSTRUCTIONS's own heading exactly, so a fresh install's shipped document
+// already has somewhere for the first offer to land.
+const THINGS_I_CARE_ABOUT_HEADING = "## Things I care about";
+
+// Pure: the caller reads the current document from ctx.instructions and writes the
+// result back through saveInstructions (assistant.registry.ts, proposeInstruction),
+// so the cap and the versioning apply to this append exactly like an edit from
+// Settings. Appends one bullet at the end of the user's own heading's section, or
+// creates the heading at the end of the document when it has none.
+export function appendInstructionLine({ body, line }: { body: string; line: string }): string {
+  const bullet = `- ${line}`;
+  const headingIndex = body.indexOf(THINGS_I_CARE_ABOUT_HEADING);
+  if (headingIndex === -1) {
+    const trimmed = body.trimEnd();
+    return trimmed.length > 0 ? `${trimmed}\n\n${THINGS_I_CARE_ABOUT_HEADING}\n${bullet}` : `${THINGS_I_CARE_ABOUT_HEADING}\n${bullet}`;
+  }
+  const sectionStart = headingIndex + THINGS_I_CARE_ABOUT_HEADING.length;
+  const rest = body.slice(sectionStart);
+  const nextHeadingOffset = rest.search(/^##\s/m);
+  const sectionEnd = nextHeadingOffset === -1 ? body.length : sectionStart + nextHeadingOffset;
+  // The whitespace between the section's last line and whatever comes next (a blank
+  // line before another heading, or nothing at the end of the document) is kept
+  // exactly as it was: the new bullet is inserted before it, never swallowing the
+  // blank line that visually separates this heading from the next one.
+  const sectionBody = body.slice(sectionStart, sectionEnd);
+  const trailingWhitespace = sectionBody.match(/\s*$/)?.[0] ?? "";
+  const sectionContent = sectionBody.slice(0, sectionBody.length - trailingWhitespace.length);
+  return `${body.slice(0, sectionStart)}${sectionContent}\n${bullet}${trailingWhitespace}${body.slice(sectionEnd)}`;
+}
+
+// The success reply for proposeInstruction's own handler, once the append has gone
+// through saveInstructions. Distinct from the confirm sentence, which already showed
+// the exact line: this one only needs to say the write happened.
+export function instructionAddedReply(): string {
+  return "Added that to your standing instructions.";
+}
+
 export function staleProposalReply(): string {
   return "That one is not waiting for an answer any more.";
 }

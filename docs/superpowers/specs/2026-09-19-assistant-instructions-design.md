@@ -199,12 +199,15 @@ Sequenced by risk, first is the foundation:
    `writes` is false, and a slash command such as `/note` writes immediately in the
    meantime, since typing the command is itself the confirmation.
 3. **Confirmation**: the column, the state machine, the new stream event, Telegram
-   `callback_query`.
+   `callback_query`. Done.
 4. **The instructions document**: storage, versioning, the enforced cap, the Settings editor.
-   `proposeInstruction`, the offer-to-write-a-rule tool from section 4, is the last task of
-   this plan and waits for plan 3's `pending_tool_call` and confirmation state machine before
-   it lands, the same way `saveNote` waited in plan 2.
-5. **Prompt unification and the client confirmation UI.**
+   `proposeInstruction`, the offer-to-write-a-rule tool from section 4, landed with plan 3
+   instead of here, once `pending_tool_call` and the confirmation state machine existed for
+   it to wait on, the same way `saveNote` waited in plan 2 for plan 3. That is plan 3's own
+   sequencing caveat playing out exactly as written.
+5. **Prompt unification and the client confirmation UI.** The stream event ships in plan 3;
+   nothing emits it yet, and the app's chat page still runs `chat.sendMessage`, with no
+   proposal buttons of its own. Both are still this plan's own work.
 
 `DOCMIND-DESIGN.md` gains a section on this layer once plan 1 lands, since it currently says
 nothing about the assistant at all.

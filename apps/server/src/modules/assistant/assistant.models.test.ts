@@ -5,6 +5,7 @@ import { CHAT_SYSTEM_PROMPT, TELEGRAM_ASSISTANT_SYSTEM_PROMPT } from "../chat/ch
 import type { InstructionVersion } from "./assistant.types.js";
 import {
   answeringPromptFor,
+  appendInstructionLine,
   assertInstructionsWithinCap,
   ASSISTANT_TRIAGE_SYSTEM_PROMPT,
   assistantTroubleReply,
@@ -13,6 +14,7 @@ import {
   DEFAULT_INSTRUCTIONS,
   duplicateReply,
   ensureQuestionMark,
+  instructionAddedReply,
   instructionsSection,
   MAX_INSTRUCTION_VERSIONS,
   MAX_INSTRUCTIONS_CHARS,
@@ -342,5 +344,39 @@ describe("assistant models, proposal ids and replies", () => {
     expect(proposalDeclinedReply().length).toBeGreaterThan(0);
     expect(staleProposalReply().length).toBeGreaterThan(0);
     expect(unavailableProposalReply().length).toBeGreaterThan(0);
+  });
+});
+
+describe("assistant models, appendInstructionLine", () => {
+  it("adds a bullet after what is already under the user's own heading", () => {
+    const body = "## Things I care about\n- Existing line.";
+
+    const updated = appendInstructionLine({ body, line: "New line." });
+
+    expect(updated).toBe("## Things I care about\n- Existing line.\n- New line.");
+  });
+
+  it("keeps a later heading's own content untouched", () => {
+    const body = "## Things I care about\n- Existing line.\n\n## Notes and saving\n- Keep my wording.";
+
+    const updated = appendInstructionLine({ body, line: "New line." });
+
+    expect(updated).toBe("## Things I care about\n- Existing line.\n- New line.\n\n## Notes and saving\n- Keep my wording.");
+  });
+
+  it("creates the heading at the end of the document when it has none", () => {
+    const updated = appendInstructionLine({ body: "Keep replies short.", line: "Rent is always urgent." });
+
+    expect(updated).toBe("Keep replies short.\n\n## Things I care about\n- Rent is always urgent.");
+  });
+
+  it("creates the heading in an empty document with no leading blank lines", () => {
+    const updated = appendInstructionLine({ body: "", line: "Rent is always urgent." });
+
+    expect(updated).toBe("## Things I care about\n- Rent is always urgent.");
+  });
+
+  it("names a reply that says the write happened", () => {
+    expect(instructionAddedReply().length).toBeGreaterThan(0);
   });
 });

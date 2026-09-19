@@ -7,9 +7,21 @@ import { expectAppError } from "../../shared/test/errors.test-utils.js";
 import type { AiAdapter, ChatStreamPart, ModelInfo, StructuredResult, TestResult } from "../ai/ai.types.js";
 import { createSearchRepository } from "../search/search.repository.js";
 import { CHAT_SYSTEM_PROMPT, TELEGRAM_ASSISTANT_SYSTEM_PROMPT } from "../chat/chat.models.js";
-import { missingNoteTextReply, newThreadReply } from "./assistant.models.js";
+import { DEFAULT_INSTRUCTIONS, MAX_INSTRUCTIONS_CHARS, missingNoteTextReply, newThreadReply } from "./assistant.models.js";
 import { assistantCapabilities } from "./assistant.registry.js";
 import type { ToolContext } from "./assistant.types.js";
+
+// The same shape as usecases.test.ts's own toolCallStream, kept as a separate copy in
+// this file for the same reason asyncIterableOf above already is.
+function toolCallStream(name: string, args: unknown): AsyncIterable<ChatStreamPart> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      yield { type: "toolCall", id: "call_1", name, arguments: args };
+    },
+  };
+}
+
+const BASE_PROMPT = "You are a helpful assistant for testing.";
 
 // Wraps plain text chunks as the adapter's typed stream shape (see ai.types.ts), the
 // same helper chat.usecases.test.ts and telegram.usecases.test.ts each keep their own
@@ -61,6 +73,7 @@ function buildCtx({
   userMessage = "",
   startNewThread = vi.fn(async () => {}),
   instructions = "",
+  saveInstructions,
 }: {
   t: TestApp;
   userId: string;
@@ -69,6 +82,7 @@ function buildCtx({
   userMessage?: string;
   startNewThread?: ToolContext["startNewThread"];
   instructions?: string;
+  saveInstructions?: ToolContext["saveInstructions"];
 }): ToolContext {
   return {
     userId,
@@ -78,13 +92,17 @@ function buildCtx({
     services: { chat: t.services.chatService, documents: t.services.documentsService, ai: t.services.aiService },
     startNewThread,
     instructions,
+    // Wired to the real assistant service by default, not a spy: a handler that calls
+    // this is exercised against the same cap and versioning saveInstructions itself
+    // enforces, not a stand-in that would let a test pass while skipping both.
+    saveInstructions: saveInstructions ?? (async (body: string) => { await t.services.assistantService.saveInstructions({ userId, body }); }),
   };
 }
 
 describe("assistant registry, as data", () => {
   it("keys every record by its own name", () => {
     const entries = Object.entries(assistantCapabilities);
-    expect(entries).toHaveLength(5);
+    expect(entries).toHaveLength(6);
     for (const [key, capability] of entries) expect(capability.name).toBe(key);
   });
 
@@ -108,9 +126,9 @@ describe("assistant registry, as data", () => {
     expect(jsonSchema.properties).toEqual({});
   });
 
-  it("marks saveNote as the only writing tool, and nothing as destructive yet", () => {
+  it("marks saveNote and proposeInstruction as the writing tools, and nothing as destructive yet", () => {
     const writing = Object.values(assistantCapabilities).filter((c) => c.writes);
-    expect(writing.map((c) => c.name)).toEqual(["saveNote"]);
+    expect(writing.map((c) => c.name)).toEqual(["saveNote", "proposeInstruction"]);
     expect(Object.values(assistantCapabilities).every((c) => !c.destructive)).toBe(true);
   });
 
@@ -128,6 +146,7 @@ describe("assistant registry, confirmation", () => {
   // writing record with no sample here fails loudly instead of being skipped.
   const sampleArgsByName: Record<string, unknown> = {
     saveNote: { text: "buy milk before the shop closes" },
+    proposeInstruction: { line: "When I say file this, save it as a note." },
   };
 
   it("gives every record that writes or deletes a sentence to confirm with", () => {
@@ -151,6 +170,12 @@ describe("assistant registry, confirmation", () => {
   it("names the exact text in the sentence it asks about", () => {
     const sentence = assistantCapabilities.saveNote.confirm!({ text: "buy milk before the shop closes" });
     expect(sentence).toContain("buy milk before the shop closes");
+  });
+
+  it("shows the exact line proposeInstruction would add, not a paraphrase of it", () => {
+    const sentence = assistantCapabilities.proposeInstruction.confirm!({ line: "When I say file this, save it as a note." });
+    expect(sentence).toContain("- When I say file this, save it as a note.");
+    expect(sentence.trim().endsWith("Add that to your standing instructions?")).toBe(true);
   });
 
   it("still has no destructive record", () => {
@@ -337,5 +362,133 @@ describe("assistant registry, handlers", () => {
       () => assistantCapabilities.answerFromDocuments.handler({ question: "anything" }, ctx),
       "assistant.session_required",
     );
+  });
+});
+
+describe("assistant registry, proposeInstruction", () => {
+  it("adds the line under the user's own heading", async () => {
+    const { t, userId } = await setup();
+    const ctx = buildCtx({ t, userId, instructions: DEFAULT_INSTRUCTIONS });
+
+    await assistantCapabilities.proposeInstruction.handler({ line: "File bank statements under Finance." }, ctx);
+
+    const view = await t.services.assistantService.getInstructions({ userId });
+    expect(view.body).toContain("- File bank statements under Finance.");
+    expect(view.body.indexOf("## Things I care about")).toBeLessThan(view.body.indexOf("- File bank statements under Finance."));
+  });
+
+  it("creates the heading when the document does not have one", async () => {
+    const { t, userId } = await setup();
+    const ctx = buildCtx({ t, userId, instructions: "Keep replies short." });
+
+    await assistantCapabilities.proposeInstruction.handler({ line: "Rent is always urgent." }, ctx);
+
+    const view = await t.services.assistantService.getInstructions({ userId });
+    expect(view.body).toContain("## Things I care about");
+    expect(view.body).toContain("- Rent is always urgent.");
+  });
+
+  it("versions the append, so it can be rolled back from Settings", async () => {
+    const { t, userId } = await setup();
+    const ctx = buildCtx({ t, userId, instructions: DEFAULT_INSTRUCTIONS });
+
+    await assistantCapabilities.proposeInstruction.handler({ line: "File taxes under Finance." }, ctx);
+
+    const view = await t.services.assistantService.getInstructions({ userId });
+    expect(view.history).toHaveLength(1);
+    expect(view.history[0]?.body).toBe(DEFAULT_INSTRUCTIONS);
+  });
+
+  it("says plainly when the document is too full to add anything", async () => {
+    const fullBody = "x".repeat(MAX_INSTRUCTIONS_CHARS);
+    const streamChat = vi.fn(async () => toolCallStream("proposeInstruction", { line: "One more line." }));
+    const { t, userId } = await setup(streamChat);
+    await t.services.assistantService.saveInstructions({ userId, body: fullBody });
+    const session = await t.services.chatService.createSession({ userId });
+    const proposeResult = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "always add lines like this from now on",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    const answer = await t.services.assistantService.answerProposal({
+      userId,
+      sessionId: session.id,
+      proposalId: proposeResult.proposal!.id,
+      decision: "yes",
+      surface: "telegram",
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(answer.toolUsed).toBeNull();
+    expect(answer.reply.toLowerCase()).toContain("limit");
+    const view = await t.services.assistantService.getInstructions({ userId });
+    expect(view.body).toBe(fullBody);
+  });
+
+  it("appends through saveInstructions, not around it", async () => {
+    // A body already at the cap is refused only because the handler actually goes
+    // through saveInstructions, which enforces assertInstructionsWithinCap. A handler
+    // that wrote around it, straight to the setting, would let this through instead.
+    const { t, userId } = await setup();
+    const fullBody = "x".repeat(MAX_INSTRUCTIONS_CHARS);
+    const ctx = buildCtx({ t, userId, instructions: fullBody });
+
+    await expectAppError(() => assistantCapabilities.proposeInstruction.handler({ line: "One more line." }, ctx), "assistant.instructions_too_long");
+  });
+
+  it("shows the exact line it would add", () => {
+    const sentence = assistantCapabilities.proposeInstruction.confirm!({ line: "Treat anything from my accountant as tax." });
+    expect(sentence).toContain("Treat anything from my accountant as tax.");
+  });
+
+  it("waits for a yes before it changes the document", async () => {
+    const streamChat = vi.fn(async () => toolCallStream("proposeInstruction", { line: "File bank statements under Finance." }));
+    const { t, userId } = await setup(streamChat);
+    const session = await t.services.chatService.createSession({ userId });
+
+    const result = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "no, file bank statements under Finance from now on",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.proposal).not.toBeNull();
+    expect(result.toolUsed).toBeNull();
+    const view = await t.services.assistantService.getInstructions({ userId });
+    expect(view.body).toBe(DEFAULT_INSTRUCTIONS);
+  });
+
+  it("changes nothing at all when the user says no", async () => {
+    const streamChat = vi.fn(async () => toolCallStream("proposeInstruction", { line: "File bank statements under Finance." }));
+    const { t, userId } = await setup(streamChat);
+    const session = await t.services.chatService.createSession({ userId });
+    const proposeResult = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "no, file bank statements under Finance from now on",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    const answer = await t.services.assistantService.answerProposal({
+      userId,
+      sessionId: session.id,
+      proposalId: proposeResult.proposal!.id,
+      decision: "no",
+      surface: "telegram",
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(answer.status).toBe("declined");
+    const view = await t.services.assistantService.getInstructions({ userId });
+    expect(view.body).toBe(DEFAULT_INSTRUCTIONS);
   });
 });

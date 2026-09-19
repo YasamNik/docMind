@@ -24,3 +24,11 @@ export const pendingToolCallSchema = v.object({
   messageId: v.pipe(v.string(), v.minLength(1)),
   proposedAt: v.pipe(v.string(), v.minLength(1)),
 });
+
+// The body of POST /api/assistant/sessions/:sessionId/proposal/answer. The session id
+// itself is a path param, parsed in the route with chat.schemas.ts's own sessionIdSchema,
+// the same way chat.routes.ts parses its own session ids.
+export const answerProposalBodySchema = v.object({
+  proposalId: v.pipe(v.string(), v.minLength(1)),
+  decision: v.picklist(["yes", "no"]),
+});

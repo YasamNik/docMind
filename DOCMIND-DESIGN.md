@@ -432,12 +432,21 @@ pair of buttons) and Telegram (an inline keyboard, which means the poll loop han
 `callback_query`) share one mechanism. Deleting is always confirmed, and no instruction can
 loosen that: the guard is the `destructive` flag on the record, not a sentence in a prompt.
 
-That confirmation state machine is not built yet. `saveNote` is a real, registered,
-tested handler today, but the model is never offered it: the registry filters to
-capabilities where `writes` is false until `pending_tool_call` exists to hold a
-proposal. A slash command is unaffected either way, since typing `/note` is itself the
-confirmation, not something triage decided on its own; `/note` writes immediately today
-and keeps doing so once the model can propose a write of its own.
+The state machine is built: one proposal per session, held in `chat_sessions.pending_tool_call`
+as the tool name, its parsed arguments, the exact sentence the user was shown, and the id
+of the assistant message carrying it. A button, or a bare yes read from plain text, claims
+the row with a conditional update, so only the first answer to reach it runs anything; the
+claim happens before the handler runs, so a crash after that point loses at most the
+record of the answer, never a second write. Nothing is held in memory, so a restart loses
+no pending proposal.
+
+An ordinary message that is neither an affirmation nor a refusal is answered normally and
+the offer stays pending for its button. A bare yes only counts as an answer while the
+offer is still the last thing the assistant said; once the conversation has moved on, the
+button is the only way to answer it. A slash command is unaffected either way, since
+typing `/note` is itself the confirmation, not something triage decided on its own: `/note`
+still writes immediately, and a typed command that deletes still waits, because deleting
+is confirmed on every path.
 
 **The user's standing instructions** are one markdown document in `assistant.instructions`,
 edited in Settings' Assistant tab and appended to the system prompt on every model call a
@@ -458,7 +467,7 @@ What the document can change and what it cannot, and where each guard actually l
 
 | Guard | Where it is |
 |-------|-------------|
-| Whether a writing tool is offered to the model at all | `allowWritingTools` filter, `createAssistantService` |
+| Whether a write the model chose runs without a yes | `requiresConfirmation`, read from the record's own flags in `runTurn` |
 | Whether a `destructive` capability skips its confirmation | the record's flag, read by the confirmation state machine |
 | Which capabilities exist, and their schemas | `assistant.registry.ts` |
 | That document text never reaches a call that can call a tool | `answerFromDocuments` doing its own retrieval |

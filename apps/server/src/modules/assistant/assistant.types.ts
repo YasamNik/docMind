@@ -50,6 +50,12 @@ export type ToolContext = {
   // shipped default is what a turn sends until the user's first save, and only a read
   // failure resolves to "".
   instructions: string;
+  // The assistant's own saveInstructions, bound to this turn's user (assistant.usecases.ts,
+  // buildContext). A handler that edits the standing instructions document, such as
+  // proposeInstruction, goes through this rather than the settings service directly, so
+  // the 8000 character cap and the version history apply to the append exactly like an
+  // edit from Settings.
+  saveInstructions: (body: string) => Promise<void>;
 };
 
 // failed marks a reply that came from a handler's own graceful failure path rather
