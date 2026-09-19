@@ -40,6 +40,11 @@ const documentDetail = {
   documentDate: null as string | null,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
+  storageLocation: null as { label: string; url?: string } | null,
+  storageDriver: "local",
+  parentDocumentId: null as string | null,
+  parent: null as { id: string; name: string } | null,
+  children: [] as { id: string; name: string }[],
 };
 
 const getMock = vi.fn(async () => documentDetail);
@@ -47,11 +52,13 @@ const setCategoryMock = vi.fn(async (_id: string, categoryId: string | null) => 
 const addTagMock = vi.fn(async (_id: string, _tagId: string) => [...documentDetail.tags, { id: "tag_2", name: "Bills", color: null, auto: false, manual: true }]);
 const removeTagMock = vi.fn(async (_id: string, _tagId: string) => []);
 const acceptTitleMock = vi.fn(async (_id: string) => ({ ...documentDetail, name: documentDetail.suggestedTitle ?? documentDetail.name, suggestedTitle: null }));
+const fileErrorCodeMock = vi.fn(async (_id: string): Promise<string | null> => null);
 
 vi.mock("@/lib/documents-api", () => ({
   documentsApi: {
     get: () => getMock(),
-    fileUrl: (id: string) => `/api/documents/${id}/file`,
+    fileUrl: (id: string, download = false) => `/api/documents/${id}/file${download ? "?download=1" : ""}`,
+    fileErrorCode: (id: string) => fileErrorCodeMock(id),
     rename: vi.fn(),
     remove: vi.fn(),
     reextract: vi.fn(),
@@ -107,7 +114,7 @@ function renderPage() {
       </QueryClientProvider>
     </MemoryRouter>,
   );
-  return { invalidateSpy };
+  return { invalidateSpy, queryClient };
 }
 
 describe("DocumentDetailPage document date", () => {
@@ -125,6 +132,133 @@ describe("DocumentDetailPage document date", () => {
     renderPage();
     await screen.findByText("Rent");
     expect(screen.queryByText(/document date/)).not.toBeInTheDocument();
+  });
+});
+
+describe("DocumentDetailPage storage location", () => {
+  afterEach(() => {
+    getMock.mockImplementation(async () => documentDetail);
+  });
+
+  it("shows the preview and a Download button when the document is on the active storage", async () => {
+    renderPage();
+    expect(await screen.findByTitle("Preview")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute("href", "/api/documents/doc_1/file?download=1");
+  });
+
+  it("shows the location as a link and hides the preview and download when off the active storage", async () => {
+    getMock.mockImplementationOnce(async () => ({
+      ...documentDetail,
+      storageLocation: { label: "s3://bucket/docs/invoice.pdf", url: "https://console.aws.amazon.com/s3/object/bucket?prefix=docs/invoice.pdf" },
+    }));
+    renderPage();
+
+    expect(await screen.findByRole("link", { name: "s3://bucket/docs/invoice.pdf" })).toHaveAttribute(
+      "href",
+      "https://console.aws.amazon.com/s3/object/bucket?prefix=docs/invoice.pdf",
+    );
+    expect(screen.queryByTitle("Preview")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Download" })).not.toBeInTheDocument();
+  });
+
+  it("shows the location as plain text when there is no url", async () => {
+    getMock.mockImplementationOnce(async () => ({
+      ...documentDetail,
+      storageLocation: { label: "/data/documents/doc_1/invoice.pdf" },
+    }));
+    renderPage();
+
+    expect(await screen.findByText("/data/documents/doc_1/invoice.pdf")).toBeInTheDocument();
+    expect(screen.queryByTitle("Preview")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Download" })).not.toBeInTheDocument();
+  });
+
+  it("still shows text, tags and other metadata when the document is off the active storage", async () => {
+    getMock.mockImplementationOnce(async () => ({
+      ...documentDetail,
+      storageLocation: { label: "s3://bucket/docs/invoice.pdf" },
+    }));
+    renderPage();
+
+    expect(await screen.findByText("Rent")).toBeInTheDocument();
+    expect(screen.getByText("some text")).toBeInTheDocument();
+  });
+});
+
+describe("DocumentDetailPage related documents", () => {
+  afterEach(() => {
+    getMock.mockImplementation(async () => documentDetail);
+  });
+
+  it("links to the parent mail when this document is an attachment", async () => {
+    getMock.mockImplementationOnce(async () => ({ ...documentDetail, parent: { id: "doc_mail", name: "mail.txt" } }));
+    renderPage();
+    const link = await screen.findByRole("link", { name: "mail.txt" });
+    expect(link).toHaveAttribute("href", "/documents/doc_mail");
+  });
+
+  it("links to each attachment when this document is a mail", async () => {
+    getMock.mockImplementationOnce(async () => ({
+      ...documentDetail,
+      children: [
+        { id: "doc_att1", name: "invoice.pdf" },
+        { id: "doc_att2", name: "receipt.pdf" },
+      ],
+    }));
+    renderPage();
+    expect(await screen.findByRole("link", { name: "invoice.pdf" })).toHaveAttribute("href", "/documents/doc_att1");
+    expect(screen.getByRole("link", { name: "receipt.pdf" })).toHaveAttribute("href", "/documents/doc_att2");
+  });
+
+  it("shows nothing when there is no parent and no attachments", async () => {
+    renderPage();
+    await screen.findByText("Rent");
+    expect(screen.queryByText(/Attachment to/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Attachments:/)).not.toBeInTheDocument();
+  });
+});
+
+describe("DocumentDetailPage file access", () => {
+  afterEach(() => {
+    getMock.mockImplementation(async () => documentDetail);
+    fileErrorCodeMock.mockReset().mockResolvedValue(null);
+  });
+
+  it("shows a reconnect message instead of a broken image when storage needs reauthorizing", async () => {
+    getMock.mockImplementationOnce(async () => ({ ...documentDetail, mimeType: "image/png" }));
+    fileErrorCodeMock.mockResolvedValueOnce("storage.reauth_required");
+    renderPage();
+    const image = await screen.findByAltText("Preview");
+
+    fireEvent.error(image);
+
+    expect(await screen.findByText(/needs to be reconnected/i)).toBeInTheDocument();
+    expect(fileErrorCodeMock).toHaveBeenCalledWith("doc_1");
+    expect(screen.queryByAltText("Preview")).not.toBeInTheDocument();
+  });
+
+  it("marks the document's storage driver as needing reauthorization", async () => {
+    getMock.mockImplementationOnce(async () => ({ ...documentDetail, mimeType: "image/png" }));
+    fileErrorCodeMock.mockResolvedValueOnce("storage.reauth_required");
+    const { queryClient } = renderPage();
+    const image = await screen.findByAltText("Preview");
+
+    fireEvent.error(image);
+    await screen.findByText(/needs to be reconnected/i);
+
+    expect(queryClient.getQueryData(["storage-reauth", "local"])).toBe(true);
+  });
+
+  it("leaves the preview as is when the image fails for an unrelated reason", async () => {
+    getMock.mockImplementationOnce(async () => ({ ...documentDetail, mimeType: "image/png" }));
+    fileErrorCodeMock.mockResolvedValueOnce(null);
+    renderPage();
+    const image = await screen.findByAltText("Preview");
+
+    fireEvent.error(image);
+
+    await waitFor(() => expect(fileErrorCodeMock).toHaveBeenCalledWith("doc_1"));
+    expect(screen.queryByText(/needs to be reconnected/i)).not.toBeInTheDocument();
   });
 });
 
@@ -379,5 +513,69 @@ describe("DocumentDetailPage extracted fields", () => {
     renderPage();
     await screen.findByText("Rent");
     expect(screen.queryByText("Extracted details")).not.toBeInTheDocument();
+  });
+
+  it("stacks into one column below md and reads as three columns from md up", async () => {
+    getMock.mockImplementationOnce(async () => ({
+      ...documentDetail,
+      fields: [
+        {
+          id: "f_1",
+          documentId: "doc_1",
+          // Not documentType: that key left the smart fields vocabulary when document
+          // types became their own thing, and the detail page now has a Type row of its
+          // own that this query would find instead.
+          key: "counterparty",
+          value: "Hydro One",
+          valueNumber: null,
+          valueDate: null,
+          currency: null,
+          confidence: 0.95,
+          source: "llm" as const,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    }));
+    renderPage();
+    const term = await screen.findByText("Counterparty");
+    const grid = term.closest("dl");
+    expect(grid?.className).toContain("grid-cols-1");
+    expect(grid?.className).toContain("md:grid-cols-3");
+  });
+});
+
+describe("DocumentDetailPage delete", () => {
+  afterEach(() => {
+    getMock.mockImplementation(async () => documentDetail);
+  });
+
+  it("tells the user the document moves to Trash along with anything attached to it, not that it is gone for good", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByText("Delete"));
+    expect(
+      await screen.findByText("It moves to Trash, along with anything attached to it. You can restore it from there."),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("DocumentDetailPage layout stacking", () => {
+  afterEach(() => {
+    getMock.mockImplementation(async () => documentDetail);
+  });
+
+  it("stacks the title and the action buttons below md and puts them side by side from md up", async () => {
+    renderPage();
+    const heading = await screen.findByRole("heading", { name: "invoice.pdf" });
+    const header = heading.closest("div")?.parentElement;
+    expect(header?.className).toContain("flex-col");
+    expect(header?.className).toContain("md:flex-row");
+  });
+
+  it("gives the PDF preview a shorter max height below md than from md up", async () => {
+    renderPage();
+    const preview = await screen.findByTitle("Preview");
+    expect(preview.className).toContain("h-[45vh]");
+    expect(preview.className).toContain("md:h-[70vh]");
   });
 });

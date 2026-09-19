@@ -65,7 +65,7 @@ function CategoryForm({
         <Label htmlFor="category-parent">Parent</Label>
         <select
           id="category-parent"
-          className="w-full rounded border bg-transparent p-2 text-sm"
+          className="w-full rounded border bg-transparent p-2 text-base md:text-sm"
           value={form.parentId ?? ""}
           onChange={(e) => setForm({ ...form, parentId: e.target.value || null })}
         >
@@ -78,7 +78,7 @@ function CategoryForm({
         </select>
       </div>
       <div>
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <Label htmlFor="category-description">Description (the rule)</Label>
           <DescriptionAssistant
             targetType="category"
@@ -89,7 +89,7 @@ function CategoryForm({
         </div>
         <textarea
           id="category-description"
-          className="w-full min-h-24 rounded-[1.75rem] border bg-secondary px-4 py-3 text-sm"
+          className="w-full min-h-24 rounded-[1.75rem] border bg-secondary px-4 py-3 text-base md:text-sm"
           maxLength={2000}
           value={form.description ?? ""}
           onChange={(e) => setForm({ ...form, description: e.target.value })}
@@ -189,7 +189,7 @@ export function CategoriesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="font-heading text-2xl">Categories</h1>
         <Button onClick={() => setCreateOpen(true)}>New category</Button>
       </div>

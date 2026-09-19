@@ -1,0 +1,32 @@
+From: Ops <ops@example.com>
+To: Finance <finance@example.com>
+Subject: Deeply nested test
+Date: Fri, 09 Jan 2026 08:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="OUTER3"
+
+--OUTER3
+Content-Type: multipart/mixed; boundary="INNER3"
+
+--INNER3
+Content-Type: multipart/alternative; boundary="ALT3"
+
+--ALT3
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+Nested plain body marker.
+--ALT3
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+<p>Nested html body marker.</p>
+--ALT3--
+--INNER3--
+--OUTER3
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="deep-invoice.pdf"
+Content-Transfer-Encoding: base64
+
+REVFUC1JTlZPSUNFLUNPTlRFTlQtTUFSS0VS
+--OUTER3--

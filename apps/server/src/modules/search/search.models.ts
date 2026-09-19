@@ -96,3 +96,55 @@ export function reciprocalRankFusion(
   const maxScore = results[0]!.score;
   return results.map((r) => ({ ...r, score: maxScore > 0 ? r.score / maxScore : 0 }));
 }
+
+// Words that carry no retrieval signal of their own. A question like "where is my driver
+// licence?" is mostly these, and matching on them means a document has to repeat the
+// question back to be found.
+const QUERY_STOP_WORDS = new Set([
+  "a", "about", "all", "am", "an", "and", "any", "are", "as", "at", "be", "been", "but", "by", "can", "did", "do",
+  "does", "find", "for", "from", "get", "give", "had", "has", "have", "how", "i", "if", "in", "into", "is", "it",
+  "its", "me", "mine", "my", "of", "on", "or", "our", "out", "please", "show", "so", "some", "tell", "than", "that",
+  "the", "their", "them", "then", "there", "these", "they", "this", "those", "to", "up", "us", "was", "we", "were",
+  "what", "when", "where", "which", "who", "whose", "why", "with", "would", "you", "your",
+]);
+
+// Splits a query into the tokens worth matching on, with surrounding punctuation removed
+// so "license?" and "license" behave the same. A single word query is taken literally,
+// however common the word: someone searching for "will" means the document type.
+export function meaningfulQueryTokens(query: string): string[] {
+  const tokens = query
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.replace(/^[^\p{L}\p{N}]+/u, "").replace(/[^\p{L}\p{N}]+$/u, ""))
+    .filter((token) => token.length > 0);
+  if (tokens.length <= 1) return tokens;
+  return tokens.filter((token) => !QUERY_STOP_WORDS.has(token.toLowerCase()));
+}
+
+// How much further than the best match a chunk may sit and still be considered relevant.
+// Absolute cosine distances are a property of the embedding model, not of relevance: on
+// text-embedding-3-large a good match lands near 0.6 while unrelated text sits near 0.8,
+// so the gap to the best row is the reliable signal and a fixed cutoff is not.
+const DEFAULT_DISTANCE_MARGIN = 0.12;
+
+export function withinDistanceMargin<T extends { distance: number }>(rows: T[], margin = DEFAULT_DISTANCE_MARGIN): T[] {
+  if (rows.length === 0) return [];
+  // Takes the minimum rather than the first row, so the result does not depend on the
+  // caller having sorted the rows.
+  const best = Math.min(...rows.map((row) => row.distance));
+  return rows.filter((row) => row.distance <= best + margin);
+}
+
+// FTS5 bm25 rank is negative and more negative is a better match. A chunk that matched
+// only a generic word can rank orders of magnitude weaker than the best row and still
+// occupy a slot in the list, which reciprocal rank fusion would then score by position as
+// though it were a real match. Keeping only the rows holding a meaningful share of the
+// best row's strength stops a question about one bill from dragging in every other bill.
+const DEFAULT_RANK_SHARE = 0.1;
+
+export function withinRankShare<T extends { rank: number }>(rows: T[], share = DEFAULT_RANK_SHARE): T[] {
+  if (rows.length === 0) return [];
+  const best = Math.min(...rows.map((row) => row.rank));
+  if (best >= 0) return rows;
+  return rows.filter((row) => row.rank <= best * share);
+}

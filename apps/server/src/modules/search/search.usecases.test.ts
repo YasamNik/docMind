@@ -122,12 +122,23 @@ describe("search service, hybrid search", () => {
     await repository.insertChunks([{ documentId: document.id, chunkIndex: 0, chunkText: "Banana bread recipe.", tokenCount: 4, startChar: 0, endChar: 21 }]);
 
     const results = await t.services.searchService.search({ userId, query: "banana" });
-    expect(results).toEqual([{ documentId: document.id, documentName: "banana.txt", chunkText: "Banana bread recipe.", chunkIndex: 0, score: expect.any(Number), source: "keyword" }]);
+    expect(results).toEqual([{ documentId: document.id, documentName: "banana.txt", chunkText: "Banana bread recipe.", chunkIndex: 0, score: expect.any(Number), source: "keyword", storageDriver: "local" }]);
   });
 
   it("returns an empty list for a blank query", async () => {
     const { t, userId } = await setupWithEmbedding();
     expect(await t.services.searchService.search({ userId, query: "   " })).toEqual([]);
+  });
+
+  it("says which storage holds each result, whatever the active storage is", async () => {
+    const { t, userId, runner } = await setupWithEmbedding();
+    const documentId = await uploadWithText(t, userId, "apple.txt", "Fresh apple pie recipe.");
+    await t.db.run(sql`update documents set storage_driver = 's3' where id = ${documentId}`);
+    await enqueueAndRun(t, runner, userId, documentId);
+
+    const results = await t.services.searchService.search({ userId, query: "apple" });
+
+    expect(results[0]?.storageDriver).toBe("s3");
   });
 });
 
@@ -145,5 +156,115 @@ describe("search service, reembedAll", () => {
     const embeddingJobs = jobs.filter((j) => j.type === "embedding");
     expect(embeddingJobs.map((j) => JSON.parse(j.payload).documentId)).toEqual([done]);
     expect(embeddingJobs.map((j) => JSON.parse(j.payload).documentId)).not.toContain(pendingDoc.id);
+  });
+
+  it("re-embeds documents whatever storage holds them", async () => {
+    const { t, userId } = await setupWithEmbedding();
+    const documentId = await uploadWithText(t, userId, "elsewhere.txt", "Fresh apple pie recipe.");
+    await t.db.run(sql`update documents set storage_driver = 's3' where id = ${documentId}`);
+
+    expect((await t.services.searchService.reembedAll({ userId })).count).toBe(1);
+  });
+});
+
+// Distances chosen to match what a real embedding model produces on a small corpus: the
+// right document lands around 0.6 and everything else sits near 0.8, so the gap between
+// them carries the signal rather than the absolute number.
+const ANGLED_QUERY = [1, 0, 0];
+const ANGLED_NEAR = [0.4, 0.9165151389911681, 0]; // cosine distance 0.6 from the query
+const ANGLED_FAR = [0.2, 0, 0.9797958971132712]; // cosine distance 0.8 from the query
+
+// Maps exact texts to vectors, so a test states outright which document the query is
+// near instead of relying on a keyword appearing in both the query and the document.
+async function setupWithAngledEmbedding(vectorByText: Map<string, number[]>) {
+  const embed = vi.fn(async ({ texts }: { texts: string[] }) => ({
+    vectors: texts.map((text) => vectorByText.get(text) ?? ANGLED_FAR),
+    dimension: 3,
+  }));
+  const adapter = fakeEmbedAdapter(embed);
+  const t = await createTestApp({ adapterFactories: { "openai-compatible": () => adapter, "anthropic": () => adapter } });
+  const { userId } = await t.signIn();
+  await t.services.settingsService.set(userId, { "ai.openrouter.apiKey": "sk-or-v1-test", "ai.model.embedding": "openrouter://test-embed-model" });
+  const runner = createJobRunner({ db: t.db, handlers: { embedding: t.services.searchService.handler } });
+  return { t, userId, runner };
+}
+
+describe("search service, recall", () => {
+  it("returns the nearest document when its distance is beyond the old fixed cutoff", async () => {
+    const licenceText = "Ontario Driver's Licence, expires 2028/10/22.";
+    const invoiceText = "Invoice for plumbing work, total 240 dollars.";
+    const { t, userId, runner } = await setupWithAngledEmbedding(
+      new Map([
+        ["driver license", ANGLED_QUERY],
+        [licenceText, ANGLED_NEAR],
+        [invoiceText, ANGLED_FAR],
+      ]),
+    );
+    // The filename shares no word with the query, and the text says licence while the
+    // query says license, so neither the keyword nor the filename path can find this.
+    // Only the vector path can, which is exactly what the fixed 0.55 cutoff suppressed.
+    const licenceDoc = await uploadWithText(t, userId, "ontario-card.txt", licenceText);
+    const invoiceDoc = await uploadWithText(t, userId, "bill.txt", invoiceText);
+    await enqueueAndRun(t, runner, userId, licenceDoc);
+    await enqueueAndRun(t, runner, userId, invoiceDoc);
+
+    const results = await t.services.searchService.search({ userId, query: "driver license" });
+
+    expect(results[0]?.documentId).toBe(licenceDoc);
+    expect(results.map((r) => r.documentId)).not.toContain(invoiceDoc);
+  });
+
+  it("matches a natural language question on the words that carry meaning", async () => {
+    const t = await createTestApp();
+    const { userId } = await t.signIn();
+    const { document } = await t.services.documentsService.upload({ userId, name: "card.txt", mimeType: "text/plain", body: Readable.from(["Ontario Driver's Licence, expires 2028."]) });
+    const { createSearchRepository } = await import("./search.repository.js");
+    const repository = createSearchRepository({ db: t.db });
+    await repository.insertChunks([{ documentId: document.id, chunkIndex: 0, chunkText: "Ontario Driver's Licence, expires 2028.", tokenCount: 6, startChar: 0, endChar: 39 }]);
+
+    const results = await t.services.searchService.search({ userId, query: "where is my driver licence?" });
+
+    expect(results.map((r) => r.documentId)).toEqual([document.id]);
+  });
+
+  it("returns nothing for a question made only of common words", async () => {
+    const t = await createTestApp();
+    const { userId } = await t.signIn();
+    const { document } = await t.services.documentsService.upload({ userId, name: "card.txt", mimeType: "text/plain", body: Readable.from(["Ontario Driver's Licence, expires 2028."]) });
+    const { createSearchRepository } = await import("./search.repository.js");
+    const repository = createSearchRepository({ db: t.db });
+    await repository.insertChunks([{ documentId: document.id, chunkIndex: 0, chunkText: "Ontario Driver's Licence, expires 2028.", tokenCount: 6, startChar: 0, endChar: 39 }]);
+
+    expect(await t.services.searchService.search({ userId, query: "where is it" })).toEqual([]);
+  });
+
+  it("keeps documents that only share generic wording out of the results", async () => {
+    // The shape that matters for chat: one document the query is actually about, and
+    // others that merely repeat the boilerplate every bill carries. Fusion ranks by list
+    // position, so without pruning the weak keyword matches these three would arrive with
+    // a high enough score to be handed to the model as evidence.
+    const question = "what is the total amount due on my hydro bill";
+    const hydroText = "Hydro One bill for the summer. Account 42. Total amount due: 180 dollars.";
+    const decoys = [
+      { name: "plumb.txt", text: "Plumbing repair invoice. Total amount due: 240 dollars." },
+      { name: "grocery.txt", text: "Supermarket receipt. Total amount due: 54 dollars." },
+      { name: "gym.txt", text: "Membership renewal notice. Total amount due: 30 dollars." },
+    ];
+    const { t, userId, runner } = await setupWithAngledEmbedding(
+      new Map([
+        [question, ANGLED_QUERY],
+        [hydroText, ANGLED_NEAR],
+      ]),
+    );
+    const hydroDoc = await uploadWithText(t, userId, "utility.txt", hydroText);
+    await enqueueAndRun(t, runner, userId, hydroDoc);
+    for (const decoy of decoys) {
+      const id = await uploadWithText(t, userId, decoy.name, decoy.text);
+      await enqueueAndRun(t, runner, userId, id);
+    }
+
+    const results = await t.services.searchService.search({ userId, query: question });
+
+    expect(results.map((r) => r.documentId)).toEqual([hydroDoc]);
   });
 });

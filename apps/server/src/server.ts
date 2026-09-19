@@ -10,6 +10,7 @@ import type { Database } from "./modules/database/database.js";
 import { requireUser, sessionMiddleware } from "./modules/auth/auth.middleware.js";
 import { registerAuthRoutes } from "./modules/auth/auth.routes.js";
 import { createAuth } from "./modules/auth/auth.services.js";
+import { user as authUserTable } from "./modules/auth/auth.tables.js";
 import { registerAiRoutes } from "./modules/ai/ai.routes.js";
 import { createAiService } from "./modules/ai/ai.usecases.js";
 import { aiProviderRegistry } from "./modules/ai/providers/index.js";
@@ -19,6 +20,7 @@ import type { AdapterConfig } from "./modules/ai/adapters/adapter.types.js";
 import type { AiAdapter } from "./modules/ai/ai.types.js";
 import { parseModelUri } from "./modules/ai/ai.models.js";
 import { registerDocumentsRoutes } from "./modules/documents/documents.routes.js";
+import { createDocumentsRepository } from "./modules/documents/documents.repository.js";
 import { createDocumentsService } from "./modules/documents/documents.usecases.js";
 import { createImageExtractor } from "./modules/extraction/extractors/image.extractor.js";
 import { docxExtractor } from "./modules/extraction/extractors/docx.extractor.js";
@@ -39,15 +41,22 @@ import { allSettingDefinitions } from "./modules/settings/settings.definitions.j
 import { createSettingsRegistry } from "./modules/settings/settings.registry.js";
 import { registerSettingsRoutes } from "./modules/settings/settings.routes.js";
 import { createSettingsService } from "./modules/settings/settings.usecases.js";
+import { registerStorageRoutes } from "./modules/storage/storage.routes.js";
 import { createStorageService } from "./modules/storage/storage.usecases.js";
 import { registerRulesRoutes } from "./modules/rules/rules.routes.js";
 import { createRulesService } from "./modules/rules/rules.usecases.js";
 import { registerChatRoutes } from "./modules/chat/chat.routes.js";
 import { createChatService } from "./modules/chat/chat.usecases.js";
+import { registerAssistantRoutes } from "./modules/assistant/assistant.routes.js";
+import { createAssistantService } from "./modules/assistant/assistant.usecases.js";
 import { registerSearchRoutes } from "./modules/search/search.routes.js";
 import { createSearchService } from "./modules/search/search.usecases.js";
 import { registerSummaryRoutes } from "./modules/summary/summary.routes.js";
 import { createSummaryService } from "./modules/summary/summary.usecases.js";
+import { registerTelegramRoutes } from "./modules/telegram/telegram.routes.js";
+import { createTelegramService } from "./modules/telegram/telegram.usecases.js";
+import { createEmailService } from "./modules/email/email.usecases.js";
+import { registerEmailRoutes } from "./modules/email/email.routes.js";
 import { registerTagsRoutes } from "./modules/tags/tags.routes.js";
 import { createTagsService } from "./modules/tags/tags.usecases.js";
 import { registerExportRoutes } from "./modules/export/export.routes.js";
@@ -143,7 +152,13 @@ export function createServer({
       },
     },
   });
-  const storageService = createStorageService({ settingsService });
+  // Storage is a foundational module and does not depend on documents. The count it
+  // needs per driver is supplied here from the documents repository instead.
+  const documentsRepository = createDocumentsRepository({ db });
+  const storageService = createStorageService({
+    settingsService,
+    countDocuments: ({ userId, storageDriver }) => documentsRepository.countByUser({ userId, view: "all", storageDriver }),
+  });
   const registry = createExtractorRegistry([textExtractor, pdfExtractor, docxExtractor, xlsxExtractor, pptxExtractor, createImageExtractor(ocrEngine)]);
   const jobsService = createJobsService({ db });
   const documentsService = createDocumentsService({
@@ -156,14 +171,45 @@ export function createServer({
   const aiService = createAiService({ settingsService, registry: aiProviderRegistry, adapterFactories });
   const tagsService = createTagsService({ db, aiService, settingsService });
   const rulesService = createRulesService({ db, aiService, documentsService, tagsService });
-  const extractionService: ExtractionService = createExtractionService({ db, documentsService, settingsService, registry, rulesService, aiService });
+  const extractionService: ExtractionService = createExtractionService({ db, documentsService, settingsService, registry, rulesService, aiService, storageService });
   const searchService = createSearchService({ db, aiService, settingsService });
   const summaryService = createSummaryService({ db, aiService });
   const fieldsRepository = createFieldsRepository({ db });
   const chatService = createChatService({ db, aiService, searchService });
+  // allowWritingTools stays at its default of false (Decision 1 in the assistant
+  // triage plan) until chat_sessions.pending_tool_call exists.
+  const assistantService = createAssistantService({ chatService, documentsService, aiService, settingsService });
   const jobRunner = createJobRunner({
     db,
     handlers: { extraction: extractionService.handler, rules: rulesService.handler, embedding: searchService.handler, summarize: summaryService.handler },
+  });
+  // Own long polling loop, not a job: getUpdates holds a connection open for up to
+  // pollTimeoutSeconds, which does not fit the job runner's discrete-task model. There
+  // is exactly one account, and this loop has no HTTP session to read it from, so it
+  // resolves the sole signed-up user itself, fresh every cycle, the same way it
+  // re-reads the bot token every cycle.
+  const telegramService = createTelegramService({
+    db,
+    settingsService,
+    documentsService,
+    chatService,
+    assistantService,
+    getUserId: async () => {
+      const [row] = await db.select({ id: authUserTable.id }).from(authUserTable).limit(1);
+      return row?.id;
+    },
+    appBaseUrl: config.clientBaseUrl,
+  });
+  // Same shape as telegramService just above: its own loop rather than a job, one
+  // account with no HTTP session to read it from, settings and credentials re-read
+  // fresh every cycle so saving a password starts it and clearing one stops it.
+  const emailService = createEmailService({
+    settingsService,
+    documentsService,
+    getUserId: async () => {
+      const [row] = await db.select({ id: authUserTable.id }).from(authUserTable).limit(1);
+      return row?.id;
+    },
   });
 
   app.get("/api/health", (c) => c.json({ status: "ok" }));
@@ -183,6 +229,10 @@ export function createServer({
   registerSummaryRoutes({ app, summaryService, getUserId });
   registerFieldsRoutes({ app, fieldsRepository, summaryService, getUserId });
   registerChatRoutes({ app, chatService, getUserId });
+  registerStorageRoutes({ app, storageService, getUserId, settingsEncryptionKey: config.settingsEncryptionKey });
+  registerTelegramRoutes({ app, settingsService, getUserId });
+  registerAssistantRoutes({ app, assistantService, getUserId });
+  registerEmailRoutes({ app, emailService, getUserId });
 
   const exportService = createExportService({ db, storageService });
   registerExportRoutes({ app, exportService, getUserId });
@@ -207,6 +257,8 @@ export function createServer({
     jobsService,
     extractionService,
     jobRunner,
+    telegramService,
+    emailService,
     ocrEngine,
     aiService,
     tagsService,
@@ -215,6 +267,7 @@ export function createServer({
     summaryService,
     fieldsRepository,
     chatService,
+    assistantService,
     getUserId,
   };
 }

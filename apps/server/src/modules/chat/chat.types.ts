@@ -10,6 +10,7 @@ export type Citation = {
   documentName: string;
   chunkText: string;
   chunkIndex: number;
+  storageDriver: string;
 };
 
 export type ChatJobPayload = {

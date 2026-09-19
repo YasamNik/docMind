@@ -6,7 +6,7 @@ import { pipeline } from "node:stream/promises";
 import * as v from "valibot";
 import { createError } from "../../../../shared/errors/errors.js";
 import { defineSetting } from "../../../settings/settings.registry.js";
-import type { StorageDriver, StorageDriverDefinition } from "../../storage.types.js";
+import type { StorageDriver, StorageDriverDefinition, StorageLocation } from "../../storage.types.js";
 
 function invalidKey(key: string) {
   return createError({ code: "storage.invalid_key", message: `Invalid storage key "${key}"`, status: 400 });
@@ -66,6 +66,12 @@ export function createLocalDriver({ root }: { root: string }): StorageDriver {
   };
 }
 
+// Pure and settings driven, so it answers from a root path alone: no client, no
+// network call, and it works whether or not the local driver could currently be built.
+export function describeLocalLocation({ root, key }: { root: string; key: string }): StorageLocation {
+  return { label: resolveInsideRoot(root, key) };
+}
+
 export const localRootSetting = defineSetting({
   key: "storage.local.root",
   schema: v.pipe(v.string(), v.minLength(1)),
@@ -91,5 +97,9 @@ export const localDriverDefinition: StorageDriverDefinition = {
   async create({ settings, userId }) {
     const root = (await settings.get<string>(userId, "storage.local.root")) ?? "./documents";
     return createLocalDriver({ root });
+  },
+  async describeLocation({ settings, userId, key }) {
+    const root = (await settings.get<string>(userId, "storage.local.root")) ?? "./documents";
+    return describeLocalLocation({ root, key });
   },
 };

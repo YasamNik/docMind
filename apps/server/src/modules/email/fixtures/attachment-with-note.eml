@@ -1,0 +1,28 @@
+From: Vendor <billing@vendor.example>
+To: Accounts Payable <ap@example.com>
+Subject: Invoice for March
+Date: Wed, 07 Jan 2026 12:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="MIXED1"
+
+--MIXED1
+Content-Type: multipart/alternative; boundary="ALT1"
+
+--ALT1
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+Please find the March invoice attached. Plain version.
+--ALT1
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+<p>Please find the <strong>March invoice</strong> attached. HTML version.</p>
+--ALT1--
+--MIXED1
+Content-Type: application/pdf; name="invoice.pdf"
+Content-Disposition: attachment; filename="invoice.pdf"
+Content-Transfer-Encoding: base64
+
+UERGLUlTSC1DT05URU5ULU1BUktFUi1JTlZPSUNF
+--MIXED1--

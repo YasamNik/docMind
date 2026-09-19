@@ -1,39 +1,46 @@
 ---
 name: review-spec-storage-drivers
-description: Review of the 2026-09-18 S3 + Google Drive storage driver spec, with verified facts about the storage/documents/settings seams that any later storage work must respect
+description: Storage drivers (S3, Google Drive) spec review, 2026-09-18 - scope claim verified false at the single-document level, OAuth loopback conflicts with tunnel workflow
 metadata:
   type: project
 ---
 
-Reviewed `docs/superpowers/specs/2026-09-18-storage-drivers-gdrive-s3.md` on 2026-09-18.
-Verdict: ready after fixing 2 blockers and 5 majors.
+Reviewed `docs/superpowers/specs/2026-09-18-storage-drivers-design.md` on 2026-09-18.
+Not yet a plan; sent back for redesign. Two lessons worth carrying into the next pass
+on this spec, or any future spec that scopes documents by some column.
 
-**Why:** the spec asserted several things about existing code that turned out to be
-subtly wrong, and those errors would have shipped as implementation bugs.
+**A "scope the list" claim must be checked against every read path, not just the list
+repository method.** The spec claimed one `storageDriver` clause in
+`documents.repository.ts`'s `buildViewConditions` (shared by `listByUser` and
+`countByUser`) would scope the documents list, search, and chat to the active driver.
+Verified in code that this is false for search/chat: `search.usecases.ts` resolves
+matched chunks through `documentsRepository.findById`, a separate method with zero view
+filtering (not even `deletedAt`). Same gap for the single-document GET
+(`findByIdWithExtras`), `openFile`/download, and any direct-by-id route. Net effect: the
+list view would hide a document but chat could still cite it, and its detail/download
+route would still work, directly contradicting the spec's own stated goal ("no document
+on screen whose file the app cannot reach"). Also found the reverse blast radius problem:
+`buildViewConditions` is shared by more than the three surfaces the spec named. Bulk rule
+rerun (`rules.usecases.ts` "all"/"category" scope queries), summary backfill, and
+`reembedAll` all call `listByUser` too, so the same one-clause change would silently
+narrow background maintenance jobs to the active driver's documents, an effect the spec
+never discussed. General lesson: when a spec says "one filter in the shared repository
+method fixes N call sites," grep every caller of that method before accepting the claim,
+and grep for the specific alternate lookup methods (`findById` vs `listByUser` here) that
+callers might use instead.
 
-**How to apply:** these are verified facts as of 2026-09-18, re-check before relying on them.
+**OAuth loopback redirects need to be checked against this project's tunnel-based remote
+testing workflow before being accepted.** See [[docmind-tunnel-testing]] equivalent in
+project memory: the user tests remotely through a Cloudflare quick tunnel at port 5173,
+never 4000 directly. A fixed `http://localhost:4000/...` OAuth redirect (as this spec
+proposed for Google Drive) only works when the browser doing the OAuth dance is on the
+same machine as the server. For a user connecting remotely through the tunnel, the
+redirect sends their browser to their own local port 4000, not the server's, and the
+connect flow fails silently. This will recur for OneDrive, which needs the same kind of
+OAuth loopback or tunnel-hostname tradeoff. Check this explicitly any time a spec adds an
+OAuth flow, and ask whether the connect step can be done through the already-tunneled
+port 5173, or if a documented one-time workaround (SSH port-forward) needs to ship with
+the guide.
 
-- `documents.usecases.ts` has TWO delete paths. `remove()` is a soft delete that touches
-  no storage at all. `purge()` (behind `DELETE /api/documents/:id/permanent`) is the only
-  one that calls storage, and it throws at `storageService.getDriver` (i.e.
-  `definition.create`) before `driver.delete` is reached. Any "delete is broken on an
-  unreachable driver" claim must name purge, and any fix must wrap getDriver too.
-- `createStorageService({ settingsService })` has no `db`. Anything in the storage module
-  that needs a document count must take an injected counter from server.ts, not import
-  `documents.repository`, because documents already imports storage.
-- `beforeSet` runs only inside `settingsService.set()`. `setInternal` bypasses it, so any
-  guard that matters must be called explicitly by routes that write through setInternal.
-- `settings.setInternal` hard-codes `isSecret: false` and JSON-stringifies. Confirmed. The
-  only callers are `search.activeDimension` and `types.presetsSeeded`, neither secret, so
-  nothing shipped is affected yet.
-- `ai.usecases.ts testConnection` does not catch; `testSlot` does. "Mirror the AI test
-  route" is ambiguous, say which one.
-- `StorageTab.tsx` is still a generic loop over every `storage.*` setting rendering
-  `String(setting.value)` into a text Input. Registering any driver with a secret or
-  boolean setting breaks that page until the tab is rewritten. Watch task ordering.
-- The shared contract suite's largest body is 8 MiB, so a driver with an 8 MiB chunk size
-  never executes a multi-chunk upload there. Chunk size must be injectable for the
-  chunking loop to be covered.
-
-See [[review-spec-phase2-find-and-ask]] and [[review-spec-smart-fields]] for the same
-pattern: spec claims about existing code are the highest-yield thing to verify.
+See [[review-spec-v1]] and friends for the running list of spec review sessions on this
+project.

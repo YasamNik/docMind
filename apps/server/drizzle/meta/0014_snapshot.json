@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "d98cbdc6-beb0-4408-9124-1a64bfc21f21",
+  "id": "8fc9b632-1cd2-414a-bfe6-62baf8f9026f",
   "prevId": "e2c9b3d4-9263-4f31-8a1e-3b450ff72766",
   "tables": {
     "settings": {
@@ -469,6 +469,14 @@
           "notNull": true,
           "autoincrement": false
         },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'upload'"
+        },
         "extracted_text": {
           "name": "extracted_text",
           "type": "text",
@@ -559,20 +567,6 @@
         },
         "category_source": {
           "name": "category_source",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "document_type_id": {
-          "name": "document_type_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "document_type_source": {
-          "name": "document_type_source",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -951,98 +945,6 @@
           "name": "document_tags_document_id_tag_id_pk"
         }
       },
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "document_types": {
-      "name": "document_types",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "description": {
-          "name": "description",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "''"
-        },
-        "color": {
-          "name": "color",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "confidence_threshold": {
-          "name": "confidence_threshold",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0.7
-        },
-        "auto_apply": {
-          "name": "auto_apply",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 1
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "document_types_user_idx": {
-          "name": "document_types_user_idx",
-          "columns": [
-            "user_id"
-          ],
-          "isUnique": false
-        },
-        "document_types_user_name_idx": {
-          "name": "document_types_user_name_idx",
-          "columns": [
-            "user_id",
-            "\"name\" COLLATE NOCASE"
-          ],
-          "isUnique": true
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
@@ -1797,13 +1699,6 @@
         }
       },
       "categories_user_root_name_idx": {
-        "columns": {
-          "\"name\" COLLATE NOCASE": {
-            "isExpression": true
-          }
-        }
-      },
-      "document_types_user_name_idx": {
         "columns": {
           "\"name\" COLLATE NOCASE": {
             "isExpression": true

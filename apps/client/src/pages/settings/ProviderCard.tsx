@@ -12,6 +12,58 @@ import { aiApi, type ProviderInfo, type SlotInfo, type TestResult } from "@/lib/
 import { settingsApi } from "@/lib/settings-api";
 import { SLOT_LABELS } from "./ai-slot-labels";
 
+// Shared with the storage settings tab, so a setup guide looks and behaves the same
+// wherever it appears: numbered steps, an optional link, an optional copy button, then
+// the notes below a divider.
+export type SetupGuide = {
+  title: string;
+  intro: string;
+  steps: { text: string; link?: string; copyValue?: string }[];
+  notes: string[];
+};
+
+export function GuideCard({ guide }: { guide: SetupGuide }) {
+  return (
+    <div className="space-y-2 text-sm">
+      <p className="font-medium">{guide.title}</p>
+      <p className="text-muted-foreground">{guide.intro}</p>
+      <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
+        {guide.steps.map((step, i) => (
+          <li key={i}>
+            {step.text}
+            {step.link && (
+              <>
+                {" "}
+                <a href={step.link} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
+                  Open
+                </a>
+              </>
+            )}
+            {step.copyValue && (
+              <>
+                {" "}
+                <button
+                  className="underline underline-offset-2 text-foreground"
+                  onClick={() => { navigator.clipboard.writeText(step.copyValue!); toast.success("Copied"); }}
+                >
+                  Copy
+                </button>
+              </>
+            )}
+          </li>
+        ))}
+      </ol>
+      {guide.notes.length > 0 && (
+        <div className="text-xs text-muted-foreground space-y-1 pt-1 border-t">
+          {guide.notes.map((note, i) => (
+            <p key={i}>{note}</p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ProviderCard({
   provider,
   expanded,
@@ -120,7 +172,7 @@ export function ProviderCard({
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
         <button type="button" onClick={onExpand} className="text-left">
           <CardTitle>{provider.label}</CardTitle>
         </button>
@@ -129,7 +181,7 @@ export function ProviderCard({
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div className="space-y-3">
             {/* API Key */}
             {provider.requiresKey && (
@@ -198,43 +250,7 @@ export function ProviderCard({
           </div>
 
           {/* Guide */}
-          <div className="space-y-2 text-sm">
-            <p className="font-medium">{provider.guide.title}</p>
-            <p className="text-muted-foreground">{provider.guide.intro}</p>
-            <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-              {provider.guide.steps.map((step, i) => (
-                <li key={i}>
-                  {step.text}
-                  {step.link && (
-                    <>
-                      {" "}
-                      <a href={step.link} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
-                        Open
-                      </a>
-                    </>
-                  )}
-                  {step.copyValue && (
-                    <>
-                      {" "}
-                      <button
-                        className="underline underline-offset-2 text-foreground"
-                        onClick={() => { navigator.clipboard.writeText(step.copyValue!); toast.success("Copied"); }}
-                      >
-                        Copy
-                      </button>
-                    </>
-                  )}
-                </li>
-              ))}
-            </ol>
-            {provider.guide.notes.length > 0 && (
-              <div className="text-xs text-muted-foreground space-y-1 pt-1 border-t">
-                {provider.guide.notes.map((note, i) => (
-                  <p key={i}>{note}</p>
-                ))}
-              </div>
-            )}
-          </div>
+          <GuideCard guide={provider.guide} />
         </div>
       </CardContent>
 

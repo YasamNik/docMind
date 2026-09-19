@@ -8,7 +8,7 @@ export const mistralProvider: AiProviderDefinition = {
   adapter: "openai-compatible",
   defaultBaseUrl: "https://api.mistral.ai/v1",
   requiresKey: true,
-  capabilities: { text: true, structured: true, embeddings: true, listModels: true, vision: true },
+  capabilities: { text: true, structured: true, embeddings: true, listModels: true, vision: true, tools: true },
   suggestedModels: {
     rules: "mistral-small-latest",
     chat: "mistral-large-latest",

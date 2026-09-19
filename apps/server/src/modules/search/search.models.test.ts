@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chunkText, estimateTokens, reciprocalRankFusion } from "./search.models.js";
+import { chunkText, estimateTokens, meaningfulQueryTokens, reciprocalRankFusion, withinDistanceMargin, withinRankShare } from "./search.models.js";
 
 describe("search models", () => {
   describe("chunkText", () => {
@@ -96,6 +96,60 @@ describe("search models", () => {
     it("sorts results by descending fused score", () => {
       const fused = reciprocalRankFusion(["doc_low", "doc_high"], ["doc_high"], 60);
       expect(fused.map((r) => r.documentId)).toEqual(["doc_high", "doc_low"]);
+    });
+  });
+
+  describe("meaningfulQueryTokens", () => {
+    it("drops the words a question is built from", () => {
+      expect(meaningfulQueryTokens("where is my driver licence?")).toEqual(["driver", "licence"]);
+    });
+
+    it("strips punctuation around a token", () => {
+      expect(meaningfulQueryTokens("driver license?")).toEqual(["driver", "license"]);
+    });
+
+    it("keeps a single word query even when the word is a common one", () => {
+      expect(meaningfulQueryTokens("will")).toEqual(["will"]);
+    });
+
+    it("returns nothing for a query made only of common words", () => {
+      expect(meaningfulQueryTokens("where is it")).toEqual([]);
+    });
+
+    it("returns nothing for a blank query", () => {
+      expect(meaningfulQueryTokens("   ")).toEqual([]);
+    });
+  });
+
+  describe("withinDistanceMargin", () => {
+    it("keeps rows close to the best match and drops the rest", () => {
+      const rows = [{ distance: 0.6 }, { distance: 0.68 }, { distance: 0.79 }];
+      expect(withinDistanceMargin(rows, 0.12)).toEqual([{ distance: 0.6 }, { distance: 0.68 }]);
+    });
+
+    it("measures the margin from the best row regardless of input order", () => {
+      const rows = [{ distance: 0.79 }, { distance: 0.6 }];
+      expect(withinDistanceMargin(rows, 0.12)).toEqual([{ distance: 0.6 }]);
+    });
+
+    it("returns an empty list for no rows", () => {
+      expect(withinDistanceMargin([], 0.12)).toEqual([]);
+    });
+  });
+
+  describe("withinRankShare", () => {
+    it("drops rows whose match strength is a fraction of the best row's", () => {
+      const rows = [{ rank: -5 }, { rank: -1 }, { rank: -0.000003 }];
+      expect(withinRankShare(rows, 0.1)).toEqual([{ rank: -5 }, { rank: -1 }]);
+    });
+
+    it("keeps rows of comparable strength", () => {
+      const rows = [{ rank: -5 }, { rank: -4.2 }];
+      expect(withinRankShare(rows, 0.1)).toEqual([{ rank: -5 }, { rank: -4.2 }]);
+    });
+
+    it("returns an empty list for no rows", () => {
+      expect(withinRankShare([], 0.1)).toEqual([]);
     });
   });
 });

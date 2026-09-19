@@ -1,0 +1,330 @@
+import { randomInt } from "node:crypto";
+import type { TelegramMessage, TelegramMessageEntity, TelegramUpdate } from "./telegram.schemas.js";
+
+// Pure mapping from a validated Telegram update to what the loop should do about it.
+// No IO here: pairing comparisons, uploads and replies all happen in telegram.usecases.ts.
+//
+// textDocumentName, missingNoteTextReply and newThreadReply moved to
+// assistant.models.ts: /note and the saveNote tool share the first two, /new and the
+// startNewThread tool share the third, so telegram.usecases.ts now imports them from
+// there instead.
+
+type TelegramAttachment = NonNullable<TelegramMessage["document"]>;
+type TelegramPhotoSize = NonNullable<TelegramMessage["photo"]>[number];
+
+export type TelegramIntent =
+  | { kind: "pairing"; code: string }
+  | { kind: "file"; fileId: string; fileName: string | undefined; mimeType: string | undefined; compressedPhoto: boolean }
+  | { kind: "note"; text: string }
+  | { kind: "chat"; text: string }
+  | { kind: "web"; text: string }
+  | { kind: "newThread" }
+  | { kind: "link"; url: string }
+  | { kind: "ignore" };
+
+function fileIntentFromAttachment(attachment: TelegramAttachment): TelegramIntent {
+  return {
+    kind: "file",
+    fileId: attachment.file_id,
+    fileName: attachment.file_name,
+    mimeType: attachment.mime_type,
+    compressedPhoto: false,
+  };
+}
+
+function photoArea(size: TelegramPhotoSize): number {
+  return size.width * size.height;
+}
+
+function fileIntentFromPhoto(sizes: TelegramPhotoSize[]): TelegramIntent {
+  const largest = sizes.reduce((best, size) => (photoArea(size) > photoArea(best) ? size : best));
+  return {
+    kind: "file",
+    fileId: largest.file_id,
+    fileName: undefined,
+    mimeType: "image/jpeg",
+    compressedPhoto: true,
+  };
+}
+
+// Where the trimmed text starts and ends within the raw text, in the same units Telegram
+// counts entity offsets in, so a link entity can be checked against it directly.
+function trimmedRange(text: string): { start: number; end: number } {
+  return { start: text.length - text.trimStart().length, end: text.trimEnd().length };
+}
+
+function urlFromEntity(text: string, entity: TelegramMessageEntity): string | null {
+  if (entity.type === "text_link") return entity.url ?? null;
+  if (entity.type === "url") return text.slice(entity.offset, entity.offset + entity.length);
+  return null;
+}
+
+// A message is a link only when Telegram's own parser marked the whole trimmed message as
+// one url or text_link entity. This reads entities rather than matching a regex, so DocMind
+// never disagrees with what the user saw highlighted in their own Telegram client.
+function wholeMessageLinkUrl(text: string, entities: TelegramMessageEntity[] | undefined): string | null {
+  if (!entities || entities.length !== 1) return null;
+  const entity = entities[0]!;
+  const { start, end } = trimmedRange(text);
+  if (entity.offset !== start || entity.offset + entity.length !== end) return null;
+  return urlFromEntity(text, entity);
+}
+
+type ParsedCommand = { name: string; argument: string };
+
+// Telegram marks a command with its own bot_command entity, always at the offset
+// where the command itself starts, rather than DocMind matching a leading slash in
+// the text. That is what keeps "/note@docmind_bot" from the command menu and
+// "the ratio is 3/4 note that" typed as an ordinary sentence both coming out right:
+// only an entity sitting at offset zero counts, never a string prefix.
+function commandOf(text: string, entities: TelegramMessageEntity[] | undefined): ParsedCommand | null {
+  const entity = entities?.find((e) => e.type === "bot_command" && e.offset === 0);
+  if (!entity) return null;
+  const raw = text.slice(entity.offset, entity.offset + entity.length);
+  const name = raw.slice(1).split("@")[0]!.toLowerCase();
+  const argument = text.slice(entity.offset + entity.length).trim();
+  return { name, argument };
+}
+
+export function intentOf(update: TelegramUpdate, { paired }: { paired: boolean }): TelegramIntent {
+  const message = update.message;
+  if (!message) return { kind: "ignore" };
+
+  if (message.document) return fileIntentFromAttachment(message.document);
+  if (message.photo && message.photo.length > 0) return fileIntentFromPhoto(message.photo);
+  if (message.video) return fileIntentFromAttachment(message.video);
+  if (message.audio) return fileIntentFromAttachment(message.audio);
+
+  const text = message.text;
+  if (!text || text.trim().length === 0) return { kind: "ignore" };
+
+  const linkUrl = wholeMessageLinkUrl(text, message.entities);
+  if (linkUrl) return { kind: "link", url: linkUrl };
+
+  if (!paired) return { kind: "pairing", code: text.trim().toUpperCase() };
+
+  const command = commandOf(text, message.entities);
+  if (command) {
+    if (command.name === "note") return { kind: "note", text: command.argument };
+    if (command.name === "new") return { kind: "newThread" };
+    if (command.name === "web") return { kind: "web", text: command.argument };
+    // An unrecognized command, such as Telegram's own /start, still gets an answer
+    // rather than going quiet: the whole line, slash included, becomes the question.
+  }
+
+  return { kind: "chat", text: text.trim() };
+}
+
+// Excludes characters that are easy to misread or mistype: I, O, 0 and 1.
+const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const PAIRING_CODE_LENGTH = 6;
+
+export function newPairingCode(): string {
+  let code = "";
+  for (let i = 0; i < PAIRING_CODE_LENGTH; i++) code += PAIRING_CODE_ALPHABET[randomInt(PAIRING_CODE_ALPHABET.length)];
+  return code;
+}
+
+export function pairingSucceededReply(): string {
+  return "You're paired. Send a file, a photo or a note and I'll add it to DocMind.";
+}
+
+export function receivedReply(label: string): string {
+  return `Got it. Added "${label}" to DocMind.`;
+}
+
+export function duplicateReply(label: string): string {
+  return `I already have "${label}", so I didn't add it again.`;
+}
+
+export function fileTooLargeReply(): string {
+  return "That file is bigger than the 20 MB limit Telegram lets a bot download. Try adding it from the app instead.";
+}
+
+export function compressedPhotoNotice(): string {
+  return "Heads up, Telegram compresses photos, which can hurt text recognition. Send it as a file instead of a photo to keep the original quality.";
+}
+
+// Said once, ever, the first time plain text arrives after notes moved behind /note.
+// Same once-only shape as compressedPhotoNotice: a settings flag remembers it fired.
+export function notesMovedNotice(): string {
+  return "Quick heads up: texting me now starts a conversation instead of saving a note. To save a note, send /note followed by the text, like /note buy milk.";
+}
+
+// Telegram cuts a message off outright past this many characters, so a long answer is
+// sent as several messages instead of one that gets cut off mid sentence.
+export const TELEGRAM_MESSAGE_LIMIT = 4096;
+
+// Splits on a blank line near the limit when one is there to use, and falls back to a
+// hard cut when the text has no good break, since a truncated answer is worse than two
+// messages either way.
+export function splitForTelegram(text: string, maxLength = TELEGRAM_MESSAGE_LIMIT): string[] {
+  if (text.length <= maxLength) return [text];
+  const parts: string[] = [];
+  let remaining = text;
+  while (remaining.length > maxLength) {
+    let cut = remaining.lastIndexOf("\n\n", maxLength);
+    if (cut < maxLength / 2) cut = maxLength;
+    parts.push(remaining.slice(0, cut).trimEnd());
+    remaining = remaining.slice(cut).trimStart();
+  }
+  if (remaining.length > 0) parts.push(remaining);
+  return parts;
+}
+
+// The in-app chat marks a used passage with [1], [2] and so on for its own citation
+// chips. Telegram has nothing to render those against, so they come out before the
+// reply is sent and assistantReplyText below names the document in words instead.
+export function stripCitationMarkers(text: string): string {
+  return text.replace(/\s*\[\d+\]/g, "").trimEnd();
+}
+
+// Names what the reply drew on, once per document, so a confident answer is never
+// mistaken for one backed by nothing. Silent when nothing was used: an ordinary
+// conversational reply gets no footer at all. web is set only for a /web turn, and
+// says so plainly since knowing the source is the point of asking for the web.
+export function assistantReplyText({ answer, sourceNames, web = false }: { answer: string; sourceNames: string[]; web?: boolean }): string {
+  const unique = [...new Set(sourceNames)];
+  const notes: string[] = [];
+  if (web) notes.push("Searched the web for this.");
+  if (unique.length > 0) notes.push(`Used ${unique.join(", ")}.`);
+  if (notes.length === 0) return answer;
+  return `${answer}\n\n${notes.join(" ")}`;
+}
+
+// Short acknowledgements a person sends without expecting a real answer: bare
+// punctuation, a lone emoji, or one of a handful of stock replies. None of these are
+// worth a paid model call, the failure mode the cost note in the spec is about.
+const CHEAP_ACKNOWLEDGEMENTS = new Set(["ok", "okay", "k", "kk", "thanks", "thank you", "thx", "cool", "nice", "sure", "yep", "yup", "np"]);
+
+export function isCheapMessage(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return true;
+  if (!/[\p{L}\p{N}]/u.test(trimmed)) return true;
+  const bare = trimmed.toLowerCase().replace(/[.!?]+$/, "");
+  return CHEAP_ACKNOWLEDGEMENTS.has(bare);
+}
+
+export function acknowledgementReply(): string {
+  return "👍";
+}
+
+// A cheap acknowledgement, such as "sure" or "yep", is a real answer rather than
+// filler when it follows a clarifying question the assistant itself just asked. Read
+// off the trailing question mark on the assistant's last message, so isCheapMessage's
+// own word list never has to special case which acknowledgements can mean yes.
+export function isAnsweringAQuestion(lastAssistantMessage: string | undefined): boolean {
+  if (!lastAssistantMessage) return false;
+  return lastAssistantMessage.trim().endsWith("?");
+}
+
+// Said when a turn fails before there is any real reply to send at all, such as a
+// stored chat session that no longer exists. Short and plain, the same voice as the
+// rest of this module's replies, since the person on the other end just wants to know
+// to try again.
+export function assistantTroubleReply(): string {
+  return "Something went wrong on my end there. Try sending that again.";
+}
+
+// A refusal from the link guard already reads like a sentence a person can act on,
+// so the chat reply is just that reason with no extra framing added around it.
+
+// The bot's second message about a document: sent once the watcher sees both the
+// summary and the rules finish, so it can say what actually happened rather than just
+// that the file arrived. Sorting failing is named outright rather than glossed over,
+// since going quiet about it on a phone is worse than admitting it.
+export function finishedDocumentReply({
+  name,
+  categoryPath,
+  tagNames,
+  documentUrl,
+  ruleFailed,
+  summaryFailed,
+}: {
+  name: string;
+  categoryPath: string | null;
+  tagNames: string[];
+  documentUrl: string;
+  ruleFailed: boolean;
+  summaryFailed: boolean;
+}): string {
+  if (ruleFailed && summaryFailed) {
+    return `Filed "${name}", but summarizing and sorting both failed. ${documentUrl}`;
+  }
+  if (ruleFailed) {
+    return `Filed "${name}". Sorting failed, so it has no category or tags yet. ${documentUrl}`;
+  }
+  if (summaryFailed) {
+    return `Filed "${name}", but summarizing failed. ${documentUrl}`;
+  }
+  let message = `Filed "${name}"`;
+  if (categoryPath) message += ` under ${categoryPath}`;
+  if (tagNames.length > 0) message += `, tagged ${tagNames.join(", ")}`;
+  return `${message}. ${documentUrl}`;
+}
+
+// A fetched page keeps its own title when it has one. A page readability could make
+// nothing of, such as a bare listing, still gets a name from its own hostname rather
+// than a blank one.
+export function linkDocumentName({ title, url }: { title: string; url: string }): string {
+  const trimmedTitle = title.trim();
+  if (trimmedTitle) {
+    const short = trimmedTitle.length > 80 ? `${trimmedTitle.slice(0, 80).trimEnd()}...` : trimmedTitle;
+    return `${short}.txt`;
+  }
+  try {
+    return `${new URL(url).hostname}.txt`;
+  } catch {
+    return "Saved link.txt";
+  }
+}
+
+// The source url is kept as the document's own first line, not in a new column, so
+// search and chat can cite where a saved link came from with no schema change.
+export function linkDocumentBody({ url, text }: { url: string; text: string }): string {
+  return `${url}\n\n${text}`;
+}
+
+// Extensions this module ever actually needs to guess: a photo always reports
+// image/jpeg, and a forwarded file carries whatever mime type the sender's own client
+// attached. Anything else is left without an extension rather than guessed wrong.
+const KNOWN_FILE_EXTENSIONS: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+  "application/pdf": ".pdf",
+};
+
+function guessedExtension(mimeType: string | undefined): string {
+  if (!mimeType) return "";
+  return KNOWN_FILE_EXTENSIONS[mimeType] ?? "";
+}
+
+function withGuessedExtension(base: string, mimeType: string | undefined): string {
+  const ext = guessedExtension(mimeType);
+  if (!ext || base.toLowerCase().endsWith(ext)) return base;
+  return `${base}${ext}`;
+}
+
+// A photo or a forwarded file carries no filename of its own. A caption someone
+// actually typed, "hydro march", makes a far better name than a timestamp, so it wins
+// whenever Telegram gave nothing better. documentsService.upload sanitizes whatever
+// name it is handed, so this only has to pick a reasonable one.
+export function fileDocumentName({
+  intent,
+  caption,
+  messageId,
+  now,
+}: {
+  intent: Extract<TelegramIntent, { kind: "file" }>;
+  caption: string | undefined;
+  messageId: number;
+  now: Date;
+}): string {
+  if (intent.fileName) return intent.fileName;
+  const trimmedCaption = caption?.trim();
+  if (trimmedCaption) return withGuessedExtension(trimmedCaption, intent.mimeType);
+  const stamp = now.toISOString().slice(0, 10).replace(/-/g, "");
+  return `telegram-${stamp}-${messageId}${guessedExtension(intent.mimeType)}`;
+}

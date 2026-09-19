@@ -31,6 +31,23 @@ function sseCompletionResponse(deltas: string[]): Response {
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
+// Builds a chat.completions streaming response from raw per-chunk deltas, for tests
+// that need control over exactly what each SSE frame carries: a tool call's id and
+// name arrive on one delta, its arguments are split across several more.
+function sseRawChunksResponse(deltas: Array<{ content?: string | null; tool_calls?: unknown[] }>, finishReason: string): Response {
+  const lines = deltas.map((delta, index) =>
+    `data: ${JSON.stringify({
+      id: "chatcmpl-test",
+      object: "chat.completion.chunk",
+      created: 0,
+      model: "test-model",
+      choices: [{ index: 0, delta, finish_reason: index === deltas.length - 1 ? finishReason : null }],
+    })}\n\n`,
+  );
+  lines.push("data: [DONE]\n\n");
+  return new Response(lines.join(""), { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
 // We mock the global fetch to intercept SDK calls
 const mockFetch = vi.fn<typeof fetch>();
 
@@ -54,10 +71,12 @@ describe("openai-compatible adapter", () => {
         label: "Google: Gemini 2.0 Flash",
         contextLength: 1048576,
         supportsStructured: true,
+        supportsTools: true,
       });
       expect(models[1]).toMatchObject({
         id: "anthropic/claude-sonnet-4",
         supportsStructured: false,
+        supportsTools: false,
       });
 
       const [callUrl, callInit] = mockFetch.mock.calls[0] as [string, RequestInit];
@@ -128,9 +147,10 @@ describe("openai-compatible adapter", () => {
         ],
         maxTokens: 500,
       });
-      const chunks: string[] = [];
-      for await (const chunk of stream) chunks.push(chunk);
-      expect(chunks.join("")).toBe("Hello world");
+      const parts = [];
+      for await (const part of stream) parts.push(part);
+      expect(parts.every((p) => p.type === "text")).toBe(true);
+      expect(parts.map((p) => (p.type === "text" ? p.text : "")).join("")).toBe("Hello world");
 
       const [callUrl, callInit] = mockFetch.mock.calls[0] as [string, RequestInit];
       expect(callUrl).toBe("https://openrouter.ai/api/v1/chat/completions");
@@ -149,6 +169,97 @@ describe("openai-compatible adapter", () => {
         { role: "assistant", content: "It is $128.50." },
         { role: "user", content: "And the due date?" },
       ]);
+    });
+
+    it("sends a tools array built from the schema and assembles a tool call from fragmented deltas", async () => {
+      // Realistic wire shape: the first delta for an index carries the id and name with
+      // an empty arguments string, then the arguments arrive split across three more
+      // deltas that only form valid JSON once concatenated.
+      mockFetch.mockResolvedValueOnce(
+        sseRawChunksResponse(
+          [
+            { content: "Sure, one moment. " },
+            { tool_calls: [{ index: 0, id: "call_abc123", type: "function", function: { name: "searchWeb", arguments: "" } }] },
+            { tool_calls: [{ index: 0, function: { arguments: "{\"query\":\"invoices " } }] },
+            { tool_calls: [{ index: 0, function: { arguments: "over $100\"," } }] },
+            { tool_calls: [{ index: 0, function: { arguments: "\"limit\":5}" } }] },
+          ],
+          "tool_calls",
+        ),
+      );
+      const adapter = createOpenAiCompatibleAdapter(config);
+      const schema = v.object({ query: v.string(), limit: v.number() });
+      const stream = await adapter.streamChat({
+        model: "google/gemini-2.0-flash-001",
+        messages: [{ role: "user", content: "find invoices over $100" }],
+        tools: [{ name: "searchWeb", description: "Searches the web.", schema }],
+      });
+      const parts = [];
+      for await (const part of stream) parts.push(part);
+      expect(parts).toEqual([
+        { type: "text", text: "Sure, one moment. " },
+        { type: "toolCall", id: "call_abc123", name: "searchWeb", arguments: { query: "invoices over $100", limit: 5 } },
+      ]);
+
+      const [, callInit] = mockFetch.mock.calls[0] as [string, RequestInit];
+      const callBody = JSON.parse(callInit.body as string) as { tools: Array<{ type: string; function: { name: string; description: string } }> };
+      expect(callBody.tools).toHaveLength(1);
+      expect(callBody.tools[0]).toMatchObject({ type: "function", function: { name: "searchWeb", description: "Searches the web." } });
+    });
+
+    it("keys concurrent tool calls by index when the model interleaves their fragments", async () => {
+      // Real streams can interleave two tool calls: index 0 opens, index 1 opens, then
+      // both continue in alternating deltas rather than finishing one before the next
+      // starts. Bucketing must not concatenate one call's fragments onto the other's.
+      mockFetch.mockResolvedValueOnce(
+        sseRawChunksResponse(
+          [
+            { tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "saveNote", arguments: "" } }] },
+            { tool_calls: [{ index: 1, id: "call_2", type: "function", function: { name: "askUser", arguments: "" } }] },
+            { tool_calls: [{ index: 0, function: { arguments: "{\"text\":\"buy " } }] },
+            { tool_calls: [{ index: 1, function: { arguments: "{\"question\":\"When" } }] },
+            { tool_calls: [{ index: 0, function: { arguments: "milk\"}" } }] },
+            { tool_calls: [{ index: 1, function: { arguments: " is it due?\"}" } }] },
+          ],
+          "tool_calls",
+        ),
+      );
+      const adapter = createOpenAiCompatibleAdapter(config);
+      const stream = await adapter.streamChat({
+        model: "google/gemini-2.0-flash-001",
+        messages: [{ role: "user", content: "note to buy milk, and ask when it's due" }],
+        tools: [
+          { name: "saveNote", description: "Saves a note.", schema: v.object({ text: v.string() }) },
+          { name: "askUser", description: "Asks a clarifying question.", schema: v.object({ question: v.string() }) },
+        ],
+      });
+      const parts = [];
+      for await (const part of stream) parts.push(part);
+      expect(parts).toEqual([
+        { type: "toolCall", id: "call_1", name: "saveNote", arguments: { text: "buy milk" } },
+        { type: "toolCall", id: "call_2", name: "askUser", arguments: { question: "When is it due?" } },
+      ]);
+    });
+
+    it("hands back the raw string when the assembled arguments are not valid JSON", async () => {
+      mockFetch.mockResolvedValueOnce(
+        sseRawChunksResponse(
+          [
+            { tool_calls: [{ index: 0, id: "call_broken", type: "function", function: { name: "saveNote", arguments: "" } }] },
+            { tool_calls: [{ index: 0, function: { arguments: "{not valid json" } }] },
+          ],
+          "tool_calls",
+        ),
+      );
+      const adapter = createOpenAiCompatibleAdapter(config);
+      const stream = await adapter.streamChat({
+        model: "google/gemini-2.0-flash-001",
+        messages: [{ role: "user", content: "note something" }],
+        tools: [{ name: "saveNote", description: "Saves a note.", schema: v.object({ text: v.string() }) }],
+      });
+      const parts = [];
+      for await (const part of stream) parts.push(part);
+      expect(parts).toEqual([{ type: "toolCall", id: "call_broken", name: "saveNote", arguments: "{not valid json" }]);
     });
   });
 

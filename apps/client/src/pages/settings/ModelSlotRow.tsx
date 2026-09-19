@@ -82,12 +82,12 @@ export function ModelSlotRow({
   });
 
   return (
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+    <div className="flex flex-col gap-2 md:flex-row md:items-end">
       <div className="space-y-1 min-w-0 flex-1">
         <Label>{SLOT_LABELS[slot] ?? slot}</Label>
-        <div className="flex flex-col gap-2 sm:flex-row">
+        <div className="flex flex-col gap-2 md:flex-row">
           <select
-            className="h-8 rounded-lg border border-input bg-transparent px-2 text-sm"
+            className="h-8 rounded-lg border border-input bg-transparent px-2 text-base md:text-sm"
             value={selectedProvider}
             onChange={(e) => { setSelectedProvider(e.target.value); setModelInput(""); }}
           >

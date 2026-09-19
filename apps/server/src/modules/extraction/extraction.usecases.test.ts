@@ -46,6 +46,19 @@ describe("extraction", () => {
     expect(after).toMatchObject({ extractionStatus: "done", extractedText: "hello extraction", extractionError: null });
   });
 
+  it("extracts a document after the active storage switches away from the one it was uploaded on", async () => {
+    // Maintenance jobs must not stop on a document just because the library is now
+    // looking at a different storage; only user-facing byte reads are scoped that way.
+    const { document } = await t.services.documentsService.upload({ userId, name: "notes.txt", mimeType: "text/plain", body: Readable.from(["hello extraction"]) });
+    await t.services.settingsService.set(userId, { "storage.activeDriver": "s3" });
+
+    const runner = createJobRunner({ db: t.db, handlers: { extraction: t.services.extractionService.handler } });
+    expect(await runner.runOnce()).toBe(1);
+
+    const after = await t.services.documentsService.get({ userId, documentId: document.id });
+    expect(after).toMatchObject({ extractionStatus: "done", extractedText: "hello extraction", extractionError: null });
+  });
+
   it("extracts a PDF text layer and records a note for a scanned PDF", async () => {
     const { document } = await t.services.documentsService.upload({ userId, name: "a.pdf", mimeType: "application/pdf", body: Readable.from([Buffer.from(pdfWithText("Invoice 123"))]) });
     const runner = createJobRunner({ db: t.db, handlers: { extraction: t.services.extractionService.handler } });
@@ -102,12 +115,20 @@ describe("extraction", () => {
 
   it("destroys the file stream when no extractor matches", async () => {
     await t.services.documentsService.upload({ userId, name: "archive.zip", mimeType: "application/zip", body: Readable.from(["zip"]) });
-    const original = t.services.documentsService.openFile.bind(t.services.documentsService);
+    // Extraction now opens the file through the document's own driver rather than
+    // documentsService.openFile, so the stream is captured at the driver instead.
+    const original = t.services.storageService.getDriver.bind(t.services.storageService);
     let capturedStream: Readable | undefined;
-    const spy = vi.spyOn(t.services.documentsService, "openFile").mockImplementation(async (args) => {
-      const result = await original(args);
-      capturedStream = result.stream as Readable;
-      return result;
+    const spy = vi.spyOn(t.services.storageService, "getDriver").mockImplementation(async (uid, driverId) => {
+      const driver = await original(uid, driverId);
+      return {
+        ...driver,
+        get: async (args: { key: string }) => {
+          const stream = await driver.get(args);
+          capturedStream = stream as Readable;
+          return stream;
+        },
+      };
     });
     const runner = createJobRunner({ db: t.db, handlers: { extraction: t.services.extractionService.handler } });
     await runner.runOnce();

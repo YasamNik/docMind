@@ -51,7 +51,9 @@ function DialogContent({
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-hidden rounded-[2rem] bg-card p-6 text-sm text-popover-foreground duration-100 outline-none sm:max-w-md data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          // Below md: a full screen sheet pinned to every edge, scrolling its own content.
+          // At md and up: the original centered, width-capped, clipped card.
+          "fixed inset-0 z-50 flex w-full flex-col gap-4 overflow-y-auto rounded-[2rem] bg-card p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] text-sm text-popover-foreground duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 md:inset-auto md:top-1/2 md:left-1/2 md:max-w-md md:-translate-x-1/2 md:-translate-y-1/2 md:grid md:overflow-hidden",
           className
         )}
         {...props}
@@ -82,7 +84,9 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-header"
-      className={cn("flex flex-col gap-2", className)}
+      // Sticky so a tall dialog keeps the title in view while its body scrolls below md.
+      // Inert at md and up, since the card itself never scrolls there.
+      className={cn("sticky top-0 z-10 flex flex-col gap-2 bg-card", className)}
       {...props}
     />
   )
@@ -99,8 +103,11 @@ function DialogFooter({
   return (
     <div
       data-slot="dialog-footer"
+      // mt-auto pins this to the bottom of a short dialog instead of leaving it wherever
+      // the content ends. The extra bottom padding clears the home indicator; it is a
+      // no-op where env(safe-area-inset-bottom) is unsupported or zero.
       className={cn(
-        "-mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-[2rem] border-t bg-muted/50 p-4 sm:flex-row sm:justify-end",
+        "-mx-4 -mb-4 mt-auto flex flex-col-reverse gap-2 rounded-b-[2rem] border-t bg-muted/50 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] md:flex-row md:justify-end",
         className
       )}
       {...props}

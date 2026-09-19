@@ -22,6 +22,9 @@ export type DocumentRow = {
   name: string;
   mimeType: string | null;
   sizeBytes: number | null;
+  // Which storage driver holds the file. Only needed to attribute a file fetch failure
+  // to the right driver when the storage it lives on needs reauthorizing.
+  storageDriver: string;
   extractionStatus: "pending" | "processing" | "done" | "failed";
   extractionError: string | null;
   categoryId: string | null;
@@ -36,6 +39,8 @@ export type DocumentRow = {
   summaryError: string | null;
   documentDate: string | null;
   triageStatus: "pending" | "reviewed";
+  // Set on an attachment, pointing at the mail it arrived in. Null on everything else.
+  parentDocumentId: string | null;
   deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -54,7 +59,20 @@ export type EvaluationRow = {
   evaluatedAt: string;
 };
 
-export type DocumentDetail = DocumentRow & { extractedText: string | null; categorySource: "manual" | "auto" | null };
+// storageLocation is null while the document lives on the active storage. When it is
+// on another storage, the label and optional url describe where the original file is,
+// since the bytes cannot be read from here.
+export type DocumentDetail = DocumentRow & {
+  extractedText: string | null;
+  categorySource: "manual" | "auto" | null;
+  storageLocation: { label: string; url?: string } | null;
+  // The mail this document is an attachment of, when it is one. Null otherwise, and
+  // null if the mail itself is no longer active.
+  parent: { id: string; name: string } | null;
+  // The attachments filed with this document when it is a mail. Empty otherwise, and
+  // never includes an attachment that is no longer active.
+  children: { id: string; name: string }[];
+};
 
 export type UploadResult = { document: DocumentDetail; duplicateOf?: string };
 
@@ -95,6 +113,22 @@ export const documentsApi = {
   },
   fileUrl(id: string, download = false) {
     return `/api/documents/${id}/file${download ? "?download=1" : ""}`;
+  },
+  // The preview renders the file url directly in an img or iframe, so a failed load
+  // never reaches api.ts's error handling. This is the diagnostic used only after that
+  // load already failed, to learn why without ever buffering the file body itself.
+  async fileErrorCode(id: string): Promise<string | null> {
+    const res = await fetch(`/api/documents/${id}/file`, { credentials: "include" });
+    if (res.ok) {
+      await res.body?.cancel();
+      return null;
+    }
+    try {
+      const body = (await res.json()) as { error?: { code?: string } };
+      return body.error?.code ?? null;
+    } catch {
+      return null;
+    }
   },
   async bulkDelete(documentIds: string[]) {
     return api.json<{ count: number }>("POST", "/api/documents/bulk/delete", { documentIds });

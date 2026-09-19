@@ -1,6 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { fieldLabel, formatFieldValue, isAmountFieldKey } from "@/lib/fields-for
 import { formatBytes, formatDate, formatDocumentDate } from "@/lib/format";
 import { jobsApi } from "@/lib/jobs-api";
 import { sortApi, type ProposalRow } from "@/lib/sort-api";
+import { markStorageReauthRequired } from "@/lib/storage-reauth";
 import { categoriesApi, documentCategorizationApi, tagsApi } from "@/lib/tags-api";
 import { documentTypeApi, typesApi } from "@/lib/types-api";
 
@@ -28,7 +29,7 @@ function ExtractedFieldsCard({ fields }: { fields: ExtractedField[] }) {
         <CardTitle className="text-base">Extracted details</CardTitle>
       </CardHeader>
       <CardContent>
-        <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-3">
+        <dl className="grid grid-cols-1 gap-x-4 gap-y-3 text-sm md:grid-cols-3">
           {present.map((f) => (
             <div key={f.key}>
               <dt className="text-xs text-muted-foreground">{fieldLabel(f.key)}</dt>
@@ -44,12 +45,87 @@ function ExtractedFieldsCard({ fields }: { fields: ExtractedField[] }) {
   );
 }
 
-function Preview({ id, mimeType }: { id: string; mimeType: string | null }) {
+// The parent mail and attachment links that made this bug findable, and the fix
+// visible: an attachment is filed on its own so it turns up in search and sorting by
+// itself, but the mail it arrived in is one click away, and vice versa.
+function RelatedDocuments({ parent, attachments }: { parent: { id: string; name: string } | null; attachments: { id: string; name: string }[] }) {
+  if (!parent && attachments.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-1 text-sm text-muted-foreground">
+      {parent && (
+        <p>
+          Attachment to{" "}
+          <Link to={`/documents/${parent.id}`} className="text-foreground underline-offset-2 hover:underline">
+            {parent.name}
+          </Link>
+        </p>
+      )}
+      {attachments.length > 0 && (
+        <p>
+          Attachments:{" "}
+          {attachments.map((attachment, index) => (
+            <span key={attachment.id}>
+              <Link to={`/documents/${attachment.id}`} className="text-foreground underline-offset-2 hover:underline">
+                {attachment.name}
+              </Link>
+              {index < attachments.length - 1 ? ", " : ""}
+            </span>
+          ))}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// Shown in place of a preview that failed to load because its storage needs
+// reauthorizing, rather than a broken image or an empty frame with no explanation.
+function ReauthRequiredNotice() {
+  return (
+    <div className="flex items-center justify-center rounded-[28px] bg-org-neutral-200 p-10 text-center">
+      <p className="text-sm text-muted-foreground">
+        This file's storage needs to be reconnected before it can be shown. Go to Settings, Storage, and
+        reconnect it.
+      </p>
+    </div>
+  );
+}
+
+function Preview({ id, mimeType, storageDriver, queryClient }: { id: string; mimeType: string | null; storageDriver: string; queryClient: QueryClient }) {
   const url = documentsApi.fileUrl(id);
+  const [reauthRequired, setReauthRequired] = useState(false);
+
+  // The preview loads the file straight into an img or iframe src, so a failed load
+  // never carries a status code or a body into this component's hands. Once it has
+  // already failed, one extra fetch through the api client learns why, without ever
+  // making that call on the path where the preview loads fine.
+  async function handleLoadError() {
+    const code = await documentsApi.fileErrorCode(id);
+    if (code === "storage.reauth_required") {
+      markStorageReauthRequired(queryClient, storageDriver);
+      setReauthRequired(true);
+    }
+  }
+
+  if (reauthRequired) return <ReauthRequiredNotice />;
+
+  // No onError here: a PDF loaded straight into an iframe's src does not raise one for
+  // an HTTP error status. The response body is still valid, loadable content as far as
+  // the frame is concerned, it just is not a PDF. Detecting a failed PDF preview would
+  // need the file fetched and checked before it is handed to the iframe at all, which
+  // is a real change to how the preview loads, not a small addition, so it is left as a
+  // follow-up rather than built here.
   if (mimeType === "application/pdf")
-    return <iframe title="Preview" src={url} className="w-full h-[70vh] rounded-[28px] border border-border" />;
+    return <iframe title="Preview" src={url} className="h-[45vh] w-full rounded-[28px] border border-border md:h-[70vh]" />;
   if (mimeType?.startsWith("image/"))
-    return <img src={url} alt="Preview" className="max-h-[70vh] rounded-[28px] border border-border" />;
+    return (
+      <img
+        src={url}
+        alt="Preview"
+        onError={handleLoadError}
+        className="max-h-[45vh] rounded-[28px] border border-border md:max-h-[70vh]"
+      />
+    );
   return (
     <div className="flex items-center justify-center rounded-[28px] bg-org-neutral-200 p-10 text-center">
       <p className="text-sm text-muted-foreground">
@@ -57,6 +133,26 @@ function Preview({ id, mimeType }: { id: string; mimeType: string | null }) {
         <a className="underline" href={documentsApi.fileUrl(id, true)}>
           Download
         </a>
+      </p>
+    </div>
+  );
+}
+
+// Shown instead of the preview when the document is not on the active storage. The
+// bytes cannot be read from here, but the original's location is always known, since
+// describeLocation never touches the network.
+function StorageLocationNotice({ location }: { location: { label: string; url?: string } }) {
+  return (
+    <div className="flex items-center justify-center rounded-[28px] bg-org-neutral-200 p-10 text-center">
+      <p className="text-sm text-muted-foreground">
+        This file is on another storage.{" "}
+        {location.url ? (
+          <a className="underline" href={location.url} target="_blank" rel="noreferrer">
+            {location.label}
+          </a>
+        ) : (
+          <span className="font-medium text-foreground">{location.label}</span>
+        )}
       </p>
     </div>
   );
@@ -355,7 +451,7 @@ export function DocumentDetailPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           {(document.categoryPath || document.documentTypeName) && (
             <div className="flex flex-wrap items-center gap-2">
@@ -373,6 +469,9 @@ export function DocumentDetailPage() {
             {document.mimeType ?? "unknown type"} · {document.sizeBytes == null ? "" : formatBytes(document.sizeBytes)} · added {formatDate(document.createdAt)}
             {document.documentDate && <> · document date {formatDocumentDate(document.documentDate)}</>}
           </p>
+          <div className="mt-1">
+            <RelatedDocuments parent={document.parent} attachments={document.children} />
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           {document.triageStatus === "pending" && (
@@ -380,9 +479,11 @@ export function DocumentDetailPage() {
               Accept and file
             </Button>
           )}
-          <Button variant="outline" render={<a href={documentsApi.fileUrl(id, true)} />}>
-            Download
-          </Button>
+          {!document.storageLocation && (
+            <Button variant="outline" render={<a href={documentsApi.fileUrl(id, true)} />}>
+              Download
+            </Button>
+          )}
           <Button
             variant="outline"
             onClick={() => {
@@ -418,7 +519,11 @@ export function DocumentDetailPage() {
         <ProposalsReview documentId={id} queryClient={queryClient} />
       </div>
 
-      <Preview id={id} mimeType={document.mimeType} />
+      {document.storageLocation ? (
+        <StorageLocationNotice location={document.storageLocation} />
+      ) : (
+        <Preview id={id} mimeType={document.mimeType} storageDriver={document.storageDriver} queryClient={queryClient} />
+      )}
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
@@ -484,7 +589,7 @@ export function DocumentDetailPage() {
           <DialogHeader>
             <DialogTitle>Delete this document?</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">The file is removed from storage. This cannot be undone.</p>
+          <p className="text-sm text-muted-foreground">It moves to Trash, along with anything attached to it. You can restore it from there.</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteOpen(false)}>
               Cancel

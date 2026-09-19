@@ -131,3 +131,42 @@ Read `WORKLOG.md` for the full session log. Read `docs/FEATURES.md` for the road
 | `WORKLOG.md` | Session log, newest first |
 | `docs/FEATURES.md` | Full feature list and delivery phases |
 | `docs/bugs_fix_tracking.md` | Bug and fix history |
+
+## Switching between machines
+
+The project is developed on two machines (home Linux, office Windows) that sync only
+through `main` on GitHub. These things do NOT travel with a push:
+
+| Per machine, untracked | Why it matters |
+|------------------------|----------------|
+| `apps/server/.env` | Secrets and API keys, different on each machine |
+| `apps/server/docmind.sqlite` | Each machine has its own documents, settings, user |
+| `apps/server/documents/` | Uploaded files on local storage |
+| `apps/server/data/` | OCR language data, downloaded on first image upload |
+
+### Arriving on a machine
+
+```bash
+git fetch
+git status -sb                 # confirm ahead/behind, expect a clean fast-forward
+git merge --ff-only origin/main
+pnpm install                   # only if pnpm-lock.yaml changed
+pnpm typecheck && pnpm test
+```
+
+Then check three things:
+
+1. **Migrations.** `git diff --name-only <old-sha> HEAD -- apps/server/drizzle/`. If the
+   dev server was running during the pull, its watcher already applied them to the local
+   database. Verify the new tables exist before assuming the app works.
+2. **Stale dev servers.** `ps -ef | grep docMind`. Watchers from earlier sessions can
+   survive for days, fight over port 4000, and write to the same SQLite file. Keep one
+   server and one Vite, kill the rest.
+3. **Tunnel.** `curl -s -o /dev/null -w "%{http_code}" <tunnel-url>` must return 200.
+   The live quick tunnel hostname can be read from the cloudflared metrics port:
+   `curl -s http://127.0.0.1:<metrics-port>/quicktunnel`.
+
+### Leaving a machine
+
+Commit and push `main`, and make sure nothing important is left untracked. Anything
+uploaded through the UI stays on that machine only.

@@ -12,6 +12,7 @@ import { createJobsService } from "../jobs/jobs.usecases.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
 import type { RulesService } from "../rules/rules.usecases.js";
 import type { AiService } from "../ai/ai.usecases.js";
+import type { StorageService } from "../storage/storage.usecases.js";
 import { VISION_OCR_PROMPT, normalizeText } from "./extraction.models.js";
 import type { ExtractorRegistry } from "./extraction.registry.js";
 import { extractionPayloadSchema } from "./extraction.schemas.js";
@@ -32,6 +33,7 @@ export function createExtractionService({
   registry,
   rulesService,
   aiService,
+  storageService,
   logger = createLogger("extraction"),
 }: {
   db: Database;
@@ -40,10 +42,25 @@ export function createExtractionService({
   registry: ExtractorRegistry;
   rulesService: Pick<RulesService, "hasAutomaticItems">;
   aiService?: Pick<AiService, "recognizeImage">;
+  storageService: Pick<StorageService, "getDriver">;
   logger?: Logger;
 }) {
   const documents = createDocumentsRepository({ db });
   const jobs = createJobsService({ db });
+
+  // Extraction is a maintenance job and must keep running whatever storage a document
+  // sits on, so it reads the file through the document's own driver rather than
+  // documentsService.openFile, which refuses a document on an inactive storage. That
+  // guard is for the user-facing file read and download, not for background upkeep.
+  async function openDocumentFile({ userId, documentId }: { userId: string; documentId: string }) {
+    const document = await documents.findById({ userId, documentId });
+    if (!document || document.deletedAt) {
+      throw createError({ code: "documents.not_found", message: `Document "${documentId}" not found`, status: 404 });
+    }
+    const driver = await storageService.getDriver(userId, document.storageDriver);
+    const stream = await driver.get({ key: document.storageKey });
+    return { document, stream };
+  }
 
   async function applyVisionFallback({
     userId,
@@ -110,7 +127,7 @@ export function createExtractionService({
     const now = () => new Date().toISOString();
     try {
       await documents.update({ userId, documentId, patch: { extractionStatus: "processing", updatedAt: now() } });
-      const { document, stream } = await documentsService.openFile({ userId, documentId });
+      const { document, stream } = await openDocumentFile({ userId, documentId });
       const extractor = registry.find(document.mimeType ?? "", document.name);
       if (!extractor) {
         stream.destroy();

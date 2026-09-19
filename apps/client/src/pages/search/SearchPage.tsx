@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { searchApi, type SearchResult } from "@/lib/search-api";
+import { storageApi } from "@/lib/storage-api";
 
 const SOURCE_LABELS: Record<SearchResult["source"], string> = {
   vector: "vector",
@@ -53,16 +54,19 @@ function extractSnippet(text: string, query: string, maxLen = 200): string {
   return snippet;
 }
 
-function ResultCard({ result, query }: { result: SearchResult; query: string }) {
+function ResultCard({ result, query, otherStorageLabel }: { result: SearchResult; query: string; otherStorageLabel: string | null }) {
   const snippet = extractSnippet(result.chunkText, query);
   return (
     <Card>
       <CardContent className="space-y-2">
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-start justify-between gap-2 md:flex-nowrap md:items-center">
           <Link to={`/documents/${result.documentId}`} className="font-heading text-base underline-offset-2 hover:underline">
             {result.documentName}
           </Link>
-          <Badge variant={SOURCE_VARIANTS[result.source]}>{SOURCE_LABELS[result.source]}</Badge>
+          <div className="flex items-center gap-2">
+            {otherStorageLabel && <Badge variant="neutral">{otherStorageLabel}</Badge>}
+            <Badge variant={SOURCE_VARIANTS[result.source]}>{SOURCE_LABELS[result.source]}</Badge>
+          </div>
         </div>
         <p className="line-clamp-2 break-all text-sm text-muted-foreground">{highlightMatches(snippet, query)}</p>
       </CardContent>
@@ -98,6 +102,15 @@ export function SearchPage() {
 
   const results = data?.results ?? [];
 
+  const { data: storageDrivers = [] } = useQuery({ queryKey: ["storage-drivers"], queryFn: () => storageApi.list() });
+  const activeStorageId = storageDrivers.find((d) => d.active)?.id ?? null;
+  // Search sees every storage, so a result held elsewhere still shows up here. The badge
+  // is what tells the user why they cannot open it without switching storage first.
+  function otherStorageLabel(storageDriver: string): string | null {
+    if (storageDrivers.length === 0 || storageDriver === activeStorageId) return null;
+    return storageDrivers.find((d) => d.id === storageDriver)?.label ?? storageDriver;
+  }
+
   const reembed = useMutation({
     mutationFn: () => searchApi.reembedAll(),
     onSuccess: (result) => toast.success(`Queued ${result.count} document${result.count === 1 ? "" : "s"} for embedding`),
@@ -116,9 +129,9 @@ export function SearchPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <h1 className="font-heading text-2xl">Search</h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {trimmedQuery.length > 0 && (
             <Button size="sm" variant="outline" onClick={() => saveSearch.mutate()} disabled={saveSearch.isPending}>
               Save search
@@ -134,7 +147,7 @@ export function SearchPage() {
         placeholder="Search your documents..."
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        className="max-w-xl"
+        className="w-full md:max-w-xl"
       />
       {trimmedQuery.length === 0 ? (
         <p className="text-sm text-muted-foreground">Search your documents by keyword or meaning</p>
@@ -145,7 +158,12 @@ export function SearchPage() {
       ) : (
         <div className="space-y-3">
           {results.map((result) => (
-            <ResultCard key={`${result.documentId}-${result.chunkIndex}`} result={result} query={trimmedQuery} />
+            <ResultCard
+              key={`${result.documentId}-${result.chunkIndex}`}
+              result={result}
+              query={trimmedQuery}
+              otherStorageLabel={otherStorageLabel(result.storageDriver)}
+            />
           ))}
         </div>
       )}

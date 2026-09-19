@@ -10,5 +10,16 @@
 - [D4 Inbox triage spec review](review-spec-d4-inbox-triage.md) -- implementation already in tree before spec review, unflagged departure from Phase 2 decision 12, dead code and empty-state contradictions found
 - [Smart fields spec review](review-spec-smart-fields.md) -- backfill "rerun exists" claim was false, currency-merge ruling, module boundary gap
 - [LLM reply partial-tolerance lesson](lesson-llm-reply-partial-tolerance.md) -- generateStructured fails the whole reply on any bad array element; check the reply schema is loose where the spec claims per-row tolerance, mirror rules.schemas.ts
-- [Storage drivers spec review](review-spec-storage-drivers.md) -- soft-delete vs purge confusion, storage has no db, setInternal/beforeSet bypass, contract-suite chunk gap
+- [Storage drivers spec review](review-spec-storage-drivers.md) -- scope claim false for chat/detail/download paths, OAuth loopback conflicts with tunnel workflow
+- [Storage S3/scope plan review](review-plan-storage-s3-scope.md) -- prior spec fixes verified real; storage.usecases.ts lacks documentsRepository, wrong test harness assumed, lib-storage Upload always multiparts streams
+- [Telegram intake spec review](review-spec-telegram-intake.md) -- "no new table" breaks at the completion-notifier requirement, job fan-out is not a chain, poller has no settings-reactivity design, DNS TOCTOU underspecified
+- [Background loop / notification gap lesson](lesson-background-loop-and-notification-gaps.md) -- no post-write settings hook, no job-completion hook, DNS-resolve-then-check needs a custom lookup function to close TOCTOU
+- [Assistant instructions/tool-calling spec review](review-spec-assistant-instructions.md) -- neither AI adapter supports tool calling today, confirmation state machine has no storage design, needs redesign
+- [Tool-calling / pending-confirmation lesson](lesson-tool-calling-and-pending-confirmation.md) -- check AiAdapter for real tools support before trusting "tools exist today"; propose-then-confirm needs a named pending-state store
+- [Assistant plan 2 review](review-plan-assistant-triage.md) -- capability registry and triage plan, sound with 4 fixes: narrow test gate, registry naming, runCommand validation, recordsTurn test
+- [runCommand validation / registry naming lesson](lesson-runcommand-validation-and-registry-naming.md) -- check both entry points of a two-path registry validate args; name registries *.registry.ts
+- [Assistant plan 4 review](assistant-instructions-plan-review.md) -- instructions doc plan, sound; prompt ordering on the answering call and settings cache facts to reuse for plan 5
+- [Guard tests must flip the flag](guard-tests-must-flip-the-flag.md) -- a "the prompt cannot change guard X" test is vacuous when X is already false by default in the test's own setup
+- [Settings cache reloads every row](settings-cache-full-row-reload.md) -- the cache is per user, not per key; any write for that user drops and reloads all of their keys
+- [Telegram retry idempotency ruling](telegram-retry-idempotency.md) -- fix the unguarded send loop, not cursor timing; a retry belongs at the boundary that is idempotent
 - [Document types spec review](review-spec-document-types.md) -- "seed at server start" has no valid trigger for a fresh single-user install; settingsRepository has no tx support

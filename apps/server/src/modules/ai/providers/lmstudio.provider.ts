@@ -8,7 +8,7 @@ export const lmstudioProvider: AiProviderDefinition = {
   adapter: "openai-compatible",
   defaultBaseUrl: "http://localhost:1234/v1",
   requiresKey: false,
-  capabilities: { text: true, structured: true, embeddings: true, listModels: true, vision: true },
+  capabilities: { text: true, structured: true, embeddings: true, listModels: true, vision: true, tools: true },
   suggestedModels: {},
   guide: {
     title: "Set up LM Studio",

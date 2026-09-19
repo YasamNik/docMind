@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 
 export const documentsTable = sqliteTable(
   "documents",
@@ -11,6 +11,9 @@ export const documentsTable = sqliteTable(
     contentHash: text("content_hash"),
     storageDriver: text("storage_driver").notNull(),
     storageKey: text("storage_key").notNull(),
+    // Where the document entered DocMind. Every row that predates Telegram intake is an
+    // upload, which is what the default records.
+    source: text("source").notNull().default("upload"),
     extractedText: text("extracted_text"),
     extractionStatus: text("extraction_status").notNull().default("pending"),
     extractionError: text("extraction_error"),
@@ -28,6 +31,9 @@ export const documentsTable = sqliteTable(
     documentTypeSource: text("document_type_source"),
     documentDate: text("document_date"),
     triageStatus: text("triage_status").notNull().default("pending"),
+    // The mail an attachment arrived in. Cascade, because deleting the email should take
+    // the invoice that came with it rather than leaving an orphan with no context.
+    parentDocumentId: text("parent_document_id").references((): AnySQLiteColumn => documentsTable.id, { onDelete: "cascade" }),
     deletedAt: text("deleted_at"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),

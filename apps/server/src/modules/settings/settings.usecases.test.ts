@@ -130,4 +130,18 @@ describe("settings service", () => {
       /setInternal called on non-internal setting/,
     );
   });
+
+  it("removeInternal deletes an internal setting so it falls back to its default", async () => {
+    const s = await service();
+    await s.setInternal(user, "test.internalDimension", 1536);
+    await s.removeInternal(user, "test.internalDimension");
+    expect(await s.get(user, "test.internalDimension")).toBe(0);
+  });
+
+  it("removeInternal throws when called on a non-internal setting", async () => {
+    const s = await service();
+    await expect(s.removeInternal(user, "test.color")).rejects.toThrow(
+      /removeInternal called on non-internal setting/,
+    );
+  });
 });

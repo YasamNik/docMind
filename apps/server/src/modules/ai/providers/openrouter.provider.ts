@@ -8,7 +8,7 @@ export const openrouterProvider: AiProviderDefinition = {
   adapter: "openai-compatible",
   defaultBaseUrl: "https://openrouter.ai/api/v1",
   requiresKey: true,
-  capabilities: { text: true, structured: true, embeddings: true, listModels: true, vision: true },
+  capabilities: { text: true, structured: true, embeddings: true, listModels: true, vision: true, tools: true },
   suggestedModels: {
     rules: "google/gemini-3.8-flash",
     chat: "anthropic/claude-sonnet-5",

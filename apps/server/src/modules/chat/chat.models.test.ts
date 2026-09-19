@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assembleChatContext,
+  buildContextBlock,
   CHAT_SYSTEM_PROMPT,
   deriveTitleFromMessage,
   MAX_CONTEXT_CHARS,
@@ -17,6 +18,7 @@ function citation(overrides: Partial<Citation> = {}): Citation {
     documentName: "invoice.pdf",
     chunkText: "Rent due March 1st, $1200.",
     chunkIndex: 0,
+    storageDriver: "local",
     ...overrides,
   };
 }
@@ -154,6 +156,15 @@ describe("chat models", () => {
       const contextMessage = messages.find((m) => m.content.includes("Context from your documents"))!;
       expect(contextMessage.content).toContain("x".repeat(100));
       expect(contextMessage.content).not.toContain("other.pdf");
+    });
+  });
+
+  describe("buildContextBlock", () => {
+    it("names the storage of a cited document that is not on the active storage", () => {
+      const block = buildContextBlock([
+        { documentId: "doc_1", documentName: "policy.pdf", chunkText: "cover", chunkIndex: 0, storageDriver: "googleDrive" },
+      ]);
+      expect(block).toContain("googleDrive");
     });
   });
 

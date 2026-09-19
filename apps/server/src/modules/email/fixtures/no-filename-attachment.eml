@@ -1,0 +1,19 @@
+From: Vendor <billing@vendor.example>
+To: Accounts Payable <ap@example.com>
+Subject: Statement attached
+Date: Thu, 08 Jan 2026 09:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="MIXED-NOFN"
+
+--MIXED-NOFN
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+See the statement attached.
+--MIXED-NOFN
+Content-Type: application/octet-stream
+Content-Disposition: attachment
+Content-Transfer-Encoding: base64
+
+Tk8tRklMRU5BTUUtQVRUQUNITUVOVC1NQVJLRVI=
+--MIXED-NOFN--

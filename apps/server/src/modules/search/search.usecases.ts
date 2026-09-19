@@ -7,7 +7,7 @@ import { createDocumentsRepository } from "../documents/documents.repository.js"
 import type { JobHandler } from "../jobs/jobs.runner.js";
 import { createJobsService } from "../jobs/jobs.usecases.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
-import { chunkText, estimateTokens, newSearchId, reciprocalRankFusion } from "./search.models.js";
+import { chunkText, estimateTokens, meaningfulQueryTokens, newSearchId, reciprocalRankFusion, withinDistanceMargin, withinRankShare } from "./search.models.js";
 import { createSearchRepository, type KeywordSearchRow, type VectorSearchRow } from "./search.repository.js";
 import { embeddingJobPayloadSchema } from "./search.schemas.js";
 import type { NewDocumentChunk, SearchResult } from "./search.types.js";
@@ -158,21 +158,31 @@ export function createSearchService({
     const trimmed = query.trim();
     if (trimmed.length === 0) return [];
 
-    const keywordRows = await repository.searchKeyword(trimmed, KEYWORD_RESULT_LIMIT);
+    // Tokens are OR-ed against the index, so a chunk can land in this list on one generic
+    // word alone. Pruning by bm25 strength here keeps those out of the fusion below, which
+    // ranks by list position and cannot tell a strong match from a token that merely occurred.
+    const keywordRows = withinRankShare(await repository.searchKeyword(trimmed, KEYWORD_RESULT_LIMIT));
 
-    // Also match document names (filenames often contain the best keywords).
+    // Also match document names (filenames often contain the best keywords). Matching on
+    // the meaningful tokens only, so a question phrased around the filename still matches
+    // it: "where is my tax return" should not be failed by the words "where is my".
     const allDocs = await documentsRepository.listByUser({ userId });
-    const queryLower = trimmed.toLowerCase().replace(/[-_]/g, " ");
-    const nameMatches = allDocs.filter((d) => {
-      const nameLower = d.name.toLowerCase().replace(/[-_.]/g, " ");
-      return queryLower.split(/\s+/).every((token) => nameLower.includes(token));
-    });
+    const nameTokens = meaningfulQueryTokens(trimmed.replace(/[-_]/g, " ")).map((token) => token.toLowerCase());
+    const nameMatches =
+      nameTokens.length === 0
+        ? []
+        : allDocs.filter((d) => {
+            const nameLower = d.name.toLowerCase().replace(/[-_.]/g, " ");
+            return nameTokens.every((token) => nameLower.includes(token));
+          });
 
     let vectorRows: VectorSearchRow[] = [];
     try {
       const { vectors } = await aiService.embed({ userId, task: "embedding", texts: [trimmed] });
       const queryVector = vectors[0];
-      if (queryVector) vectorRows = await repository.searchVector(queryVector, VECTOR_RESULT_LIMIT);
+      // The rows under the repository's sanity bound are candidates; the margin decides
+      // which of them the query actually matched.
+      if (queryVector) vectorRows = withinDistanceMargin(await repository.searchVector(queryVector, VECTOR_RESULT_LIMIT));
     } catch (error) {
       const isSlotMissing = isAppError(error) && error.code === "ai.slot_not_configured";
       const msg = error instanceof Error ? error.message : "";
@@ -231,6 +241,7 @@ export function createSearchService({
         chunkIndex: chosen.chunkIndex,
         score: entry.score,
         source: entry.source,
+        storageDriver: document.storageDriver,
       });
     });
 
@@ -245,6 +256,7 @@ export function createSearchService({
         chunkIndex: 0,
         score: 0.8,
         source: "keyword",
+        storageDriver: doc.storageDriver,
       });
     }
 

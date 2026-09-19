@@ -62,4 +62,35 @@ describe("documentsApi", () => {
     expect(fetchSpy).toHaveBeenNthCalledWith(1, "/api/documents", expect.anything());
     expect(fetchSpy).toHaveBeenNthCalledWith(2, "/api/documents", expect.anything());
   });
+
+  describe("fileErrorCode", () => {
+    it("returns null and cancels the body without reading it when the file loads fine", async () => {
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1]));
+          controller.close();
+        },
+      });
+      const cancelSpy = vi.spyOn(stream, "cancel");
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(stream, { status: 200 }));
+
+      expect(await documentsApi.fileErrorCode("doc_1")).toBeNull();
+      expect(cancelSpy).toHaveBeenCalled();
+      expect(fetchSpy).toHaveBeenCalledWith("/api/documents/doc_1/file", expect.objectContaining({ credentials: "include" }));
+    });
+
+    it("returns the error code from a failed fetch", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(JSON.stringify({ error: { code: "storage.reauth_required", message: "Reconnect" } }), { status: 401 }),
+      );
+
+      expect(await documentsApi.fileErrorCode("doc_1")).toBe("storage.reauth_required");
+    });
+
+    it("returns null when a failed fetch has no parseable error body", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("not json", { status: 500 }));
+
+      expect(await documentsApi.fileErrorCode("doc_1")).toBeNull();
+    });
+  });
 });

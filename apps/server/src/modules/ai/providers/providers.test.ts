@@ -43,6 +43,13 @@ describe("ai provider registry", () => {
     }
   });
 
+  it("every provider declares tool calling capability, since both adapters build it", () => {
+    for (const id of aiProviderIds) {
+      const def = aiProviderRegistry[id]!;
+      expect(def.capabilities.tools).toBe(true);
+    }
+  });
+
   it("suggests vision-capable models for openrouter, openai, and anthropic", () => {
     expect(aiProviderRegistry.openrouter!.suggestedModels.vision).toBe("google/gemini-2.5-flash");
     expect(aiProviderRegistry.openai!.suggestedModels.vision).toBe("gpt-4o-mini");

@@ -3,15 +3,18 @@ import { sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { createTestApp } from "../../shared/test/app.test-utils.js";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
-import type { AiAdapter, ModelInfo, StructuredResult, TestResult } from "../ai/ai.types.js";
+import type { AiAdapter, ChatStreamPart, ModelInfo, StructuredResult, TestResult } from "../ai/ai.types.js";
 import { createSearchRepository } from "../search/search.repository.js";
 import { deriveTitleFromMessage } from "./chat.models.js";
 import type { ChatStreamEvent } from "./chat.usecases.js";
 
-function asyncIterableOf(chunks: string[]): AsyncIterable<string> {
+// Wraps plain text chunks as the adapter's typed stream shape (see ai.types.ts). Chat
+// itself only ever gets plain text back from aiService.streamChat, which unwraps this,
+// so these tests still assert on plain concatenated strings.
+function asyncIterableOf(chunks: string[]): AsyncIterable<ChatStreamPart> {
   return {
     async *[Symbol.asyncIterator]() {
-      for (const chunk of chunks) yield chunk;
+      for (const chunk of chunks) yield { type: "text", text: chunk };
     },
   };
 }
@@ -50,6 +53,12 @@ async function collectEvents(generator: AsyncGenerator<ChatStreamEvent>): Promis
   const events: ChatStreamEvent[] = [];
   for await (const event of generator) events.push(event);
   return events;
+}
+
+async function drain(stream: AsyncIterable<string>): Promise<string> {
+  let text = "";
+  for await (const piece of stream) text += piece;
+  return text;
 }
 
 describe("chat service, session CRUD", () => {
@@ -174,5 +183,98 @@ describe("chat service, sendMessage", () => {
   it("throws chat.session_not_found for a missing session", async () => {
     const { t, userId } = await setup();
     await expectAppError(() => t.services.chatService.sendMessage({ userId, sessionId: "sess_0000000000000000", content: "Hi" }), "chat.session_not_found");
+  });
+});
+
+describe("chat service, answerFromDocuments", () => {
+  it("answers from the documents without writing anything to the session", async () => {
+    const { t, userId } = await setup();
+    await uploadWithChunk(t, userId, "invoice.txt", "Rent is $1200 per month.");
+    const session = await t.services.chatService.createSession({ userId });
+    await t.services.chatService.appendUserMessage({ userId, sessionId: session.id, content: "rent per month" });
+    const before = await t.services.chatService.listMessages({ userId, sessionId: session.id });
+
+    const { stream, chunks } = await t.services.chatService.answerFromDocuments({
+      userId,
+      sessionId: session.id,
+      question: "rent per month",
+    });
+    const text = await drain(stream);
+
+    expect(text).toBe("The rent is $1200 per month [1].");
+    expect(chunks).toHaveLength(1);
+
+    const after = await t.services.chatService.listMessages({ userId, sessionId: session.id });
+    expect(after).toHaveLength(before.length);
+  });
+
+  it("keeps a document-scoped session narrow", async () => {
+    const { t, userId } = await setup();
+    const scopedDoc = await uploadWithChunk(t, userId, "lease.txt", "Rent is $1200 per month.");
+    await uploadWithChunk(t, userId, "other.txt", "Rent is $1200 per month too.");
+    const session = await t.services.chatService.createSession({ userId, documentScope: [scopedDoc] });
+    await t.services.chatService.appendUserMessage({ userId, sessionId: session.id, content: "rent per month" });
+
+    const { chunks } = await t.services.chatService.answerFromDocuments({
+      userId,
+      sessionId: session.id,
+      question: "rent per month",
+    });
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.documentId).toBe(scopedDoc);
+  });
+
+  it("rejects an unknown session with chat.session_not_found, before any model call", async () => {
+    const { t, userId, chatStream } = await setup();
+    await expectAppError(
+      () => t.services.chatService.answerFromDocuments({ userId, sessionId: "sess_0000000000000000", question: "Hi" }),
+      "chat.session_not_found",
+    );
+    expect(chatStream).not.toHaveBeenCalled();
+  });
+
+  it("passes web through to the model call and not otherwise", async () => {
+    const { t, userId, chatStream } = await setup();
+    const session = await t.services.chatService.createSession({ userId });
+    await t.services.chatService.appendUserMessage({ userId, sessionId: session.id, content: "hi" });
+
+    const withWeb = await t.services.chatService.answerFromDocuments({ userId, sessionId: session.id, question: "hi", web: true });
+    await drain(withWeb.stream);
+    expect(chatStream).toHaveBeenCalledWith(expect.objectContaining({ model: "test-chat-model:online" }));
+
+    chatStream.mockClear();
+    await t.services.chatService.appendUserMessage({ userId, sessionId: session.id, content: "hi again" });
+    const withoutWeb = await t.services.chatService.answerFromDocuments({ userId, sessionId: session.id, question: "hi again" });
+    await drain(withoutWeb.stream);
+    expect(chatStream).toHaveBeenCalledWith(expect.objectContaining({ model: "test-chat-model" }));
+  });
+
+  it("stores citations as json and an error string on the assistant turn", async () => {
+    const { t, userId } = await setup();
+    const documentId = await uploadWithChunk(t, userId, "invoice.txt", "Rent is $1200 per month.");
+    const session = await t.services.chatService.createSession({ userId });
+
+    const { chunks } = await t.services.chatService.answerFromDocuments({
+      userId,
+      sessionId: session.id,
+      question: "rent per month",
+    });
+
+    await t.services.chatService.appendAssistantMessage({
+      userId,
+      sessionId: session.id,
+      content: "The rent is $1200 per month [1].",
+      citations: chunks,
+    });
+    const afterAnswer = await t.services.chatService.listMessages({ userId, sessionId: session.id });
+    expect(afterAnswer).toHaveLength(1);
+    expect(afterAnswer[0]?.citations).toHaveLength(1);
+    expect(afterAnswer[0]?.citations?.[0]?.documentId).toBe(documentId);
+
+    await t.services.chatService.appendAssistantMessage({ userId, sessionId: session.id, content: "trouble", citations: [], error: "boom" });
+    const afterError = await t.services.chatService.listMessages({ userId, sessionId: session.id });
+    expect(afterError[1]?.citations).toBeNull();
+    expect(afterError[1]?.error).toBe("boom");
   });
 });

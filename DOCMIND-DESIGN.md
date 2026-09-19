@@ -332,10 +332,17 @@ redirects to settings. Drivers refresh access tokens themselves. A disconnect ac
 clears tokens. The form shows the exact redirect URI derived from the server base URL,
 with a copy button and a note that scheme, host, and port must match exactly.
 
-**Switching drivers.** Each document row records its driver. Changing the active driver
-affects new uploads only. Reads resolve the driver from the row. The UI shows how many
-documents each driver holds and refuses to clear credentials for a driver that holds
-any. A move-documents job is a later item.
+**Switching drivers.** Each document row records its driver. The active driver is the
+storage you are looking at: the documents list, the trash and their counts show only
+documents held there, and reading a file from any other driver is refused with a message
+naming that storage and the original's location. Search, chat, export and every background
+job stay unscoped, so knowledge is never hidden even when the file is: a chat answer can
+cite a document on an inactive storage, say which storage holds it, and point at it.
+Each driver answers `describeLocation(key)` without a network call so that pointer works
+while the driver is inactive. The UI shows how many documents each driver holds, asks for
+confirmation before a switch with those counts in the question, and refuses to clear
+credentials for a driver that holds any. A move-documents job is a later item.
+(Decided 2026-09-18, replacing "changing the active driver affects new uploads only".)
 
 **Errors** map to a small set: auth expired, not found, quota, network. Auth expired
 surfaces on the settings page as a Reconnect prompt.
@@ -395,6 +402,72 @@ cites sources. Stream to the client. Save the message with source references.
 
 The knowledge wiki in a later phase sits above this: chat reads wiki pages first and
 falls back to raw chunks, citing both.
+
+## The Assistant
+
+Chat is not a question box. The same brain answers in the app and in Telegram, and it can
+act, not only reply. Specs: `docs/superpowers/specs/2026-09-19-telegram-assistant-design.md`
+and `docs/superpowers/specs/2026-09-19-assistant-instructions-design.md`.
+
+**Tool calling lives in the AI layer.** `streamChatWithTools` yields a typed stream,
+`{ type: "text" }` or `{ type: "toolCall" }`, and each adapter reassembles its own
+provider's wire format into that shape: OpenAI-style fragmented deltas that must be
+concatenated into valid JSON, Anthropic's discrete `tool_use` blocks. Arguments are parsed
+with the tool's valibot schema, a malformed call is retried once with the parse error fed
+back, and a second failure is reported as `ai.tool_call_invalid` rather than guessed at.
+`supportsTools` is checked before tools are offered, because a model that silently ignores
+them would make the assistant look like it worked while saving nothing.
+
+**Triage is tool choice, not a classify pass.** One model call picks the tool and writes
+the answer. A clarifying question is a tool (`askUser`), not a branch in our code. Slash
+commands bypass triage: someone who types `/note` means it.
+
+**Capabilities are records, not a switch.** Each tool is a registry entry: name, the
+description the model reads, a valibot schema, `writes`, `destructive`, and a handler.
+Reminders and calendar arrive as records, and the router does not change.
+
+**Every write proposes and waits.** The pending proposal lives in
+`chat_sessions.pending_tool_call` until it is answered, so the app (a stream event and a
+pair of buttons) and Telegram (an inline keyboard, which means the poll loop handles
+`callback_query`) share one mechanism. Deleting is always confirmed, and no instruction can
+loosen that: the guard is the `destructive` flag on the record, not a sentence in a prompt.
+
+That confirmation state machine is not built yet. `saveNote` is a real, registered,
+tested handler today, but the model is never offered it: the registry filters to
+capabilities where `writes` is false until `pending_tool_call` exists to hold a
+proposal. A slash command is unaffected either way, since typing `/note` is itself the
+confirmation, not something triage decided on its own; `/note` writes immediately today
+and keeps doing so once the model can propose a write of its own.
+
+**The user's standing instructions** are one markdown document in `assistant.instructions`,
+edited in Settings' Assistant tab and appended to the system prompt on every model call a
+turn makes, in the app and in Telegram. Both the body and its history live under the
+`assistant` module's own settings keys, not `chat`, because the chat module never reads
+this document: the assistant module's prompt builder and turn runner are what consume it.
+Each save versions the previous body into `assistant.instructionsHistory`, newest first,
+twenty kept; the twenty-first push drops the oldest. The document is refused above 8000
+characters on save, warned about from 6000 in the editor, and the cap is enforced in code
+because the document reaches every message and an unbounded document is unbounded cost.
+Both keys are `internal`, so only the assistant module's own routes can write them, which
+keeps the history complete: a write that skipped versioning would silently defeat the
+feature.
+
+Precedence is stated in the prompt: the user's document beats the defaults, and DocMind's
+own code beats both, because an instruction is a prompt and a prompt can be argued with.
+What the document can change and what it cannot, and where each guard actually lives:
+
+| Guard | Where it is |
+|-------|-------------|
+| Whether a writing tool is offered to the model at all | `allowWritingTools` filter, `createAssistantService` |
+| Whether a `destructive` capability skips its confirmation | the record's flag, read by the confirmation state machine |
+| Which capabilities exist, and their schemas | `assistant.registry.ts` |
+| That document text never reaches a call that can call a tool | `answerFromDocuments` doing its own retrieval |
+| The 8000 character cap and the twenty version history | `saveInstructions` |
+| That the settings API cannot write the document | `internal: true` |
+
+None of these move into the document, ever: the temptation on a future bug is to add a
+line to the default document instead of writing the guard, and this table is what settles
+that argument.
 
 ## Delivery Phases
 

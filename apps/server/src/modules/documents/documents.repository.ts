@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { Database } from "../database/database.js";
 import { buildCategoryPaths, collectDescendantIds } from "../tags/tags.models.js";
 import { sortEvaluationsTable } from "../rules/rules.tables.js";
@@ -20,6 +20,7 @@ const listColumns = {
   contentHash: documentsTable.contentHash,
   storageDriver: documentsTable.storageDriver,
   storageKey: documentsTable.storageKey,
+  source: documentsTable.source,
   extractionStatus: documentsTable.extractionStatus,
   extractionError: documentsTable.extractionError,
   ruleStatus: documentsTable.ruleStatus,
@@ -36,6 +37,7 @@ const listColumns = {
   documentTypeSource: documentsTable.documentTypeSource,
   documentDate: documentsTable.documentDate,
   triageStatus: documentsTable.triageStatus,
+  parentDocumentId: documentsTable.parentDocumentId,
   deletedAt: documentsTable.deletedAt,
   createdAt: documentsTable.createdAt,
   updatedAt: documentsTable.updatedAt,
@@ -125,12 +127,14 @@ export function createDocumentsRepository({ db }: { db: Database }) {
       documentTypeId,
       tagId,
       view = "all",
+      storageDriver,
     }: {
       userId: string;
       categoryId?: string;
       documentTypeId?: string;
       tagId?: string;
       view?: DocumentView;
+      storageDriver?: string;
     }): Promise<DocumentListRow[]> {
       const conditions = await buildViewConditions(userId, view);
       // Fetched once and reused for both the categoryId filter (descendant ids) and the
@@ -148,6 +152,11 @@ export function createDocumentsRepository({ db }: { db: Database }) {
         const ids = linked.map((r) => r.documentId);
         conditions.push(inArray(documentsTable.id, ids.length > 0 ? ids : ["__none__"]));
       }
+      // Applied here rather than inside buildViewConditions: that helper is shared with
+      // the rule rerun (rules.usecases.ts), the summary backfill (summary.usecases.ts)
+      // and reembedAll (search.usecases.ts), and those must keep seeing every document
+      // whatever storage holds it.
+      if (storageDriver) conditions.push(eq(documentsTable.storageDriver, storageDriver));
 
       const rows = await db
         .select(listColumns)
@@ -168,8 +177,11 @@ export function createDocumentsRepository({ db }: { db: Database }) {
       }));
     },
 
-    async countByUser({ userId, view }: { userId: string; view: DocumentView }): Promise<number> {
+    async countByUser({ userId, view, storageDriver }: { userId: string; view: DocumentView; storageDriver?: string }): Promise<number> {
       const conditions = await buildViewConditions(userId, view);
+      // See listByUser: the jobs that share buildViewConditions must keep counting or
+      // listing every document, whatever storage holds it.
+      if (storageDriver) conditions.push(eq(documentsTable.storageDriver, storageDriver));
       const [row] = await db
         .select({ count: sql<number>`count(*)` })
         .from(documentsTable)
@@ -216,8 +228,72 @@ export function createDocumentsRepository({ db }: { db: Database }) {
       const [row] = await db
         .select()
         .from(documentsTable)
-        .where(and(eq(documentsTable.userId, userId), eq(documentsTable.contentHash, contentHash)));
+        .where(and(eq(documentsTable.userId, userId), eq(documentsTable.contentHash, contentHash), isNull(documentsTable.deletedAt)));
       return row ?? null;
+    },
+
+    // The direct children of a document, for example the attachments a mail arrived
+    // with. Used to delete a subtree explicitly rather than relying only on the
+    // database's own cascade.
+    async findChildren({ userId, documentId }: { userId: string; documentId: string }): Promise<Document[]> {
+      return db
+        .select()
+        .from(documentsTable)
+        .where(and(eq(documentsTable.userId, userId), eq(documentsTable.parentDocumentId, documentId)));
+    },
+
+    // For the telegram watcher: which documents from a given source have finished the
+    // two independent jobs a reply could say something about. embeddingStatus is left
+    // out on purpose, it changes what search can find, not what a reply would say.
+    // Oldest first and capped, so one poll cycle never tries to send an unbounded
+    // burst of messages after, say, a long outage.
+    async listFinishedSince({
+      userId,
+      source,
+      since,
+      sinceId,
+      limit = 20,
+    }: {
+      userId: string;
+      source: string;
+      since: string;
+      // Id of the document at `since`, so the cursor matches the query's own
+      // (createdAt, id) order. Without it, two documents sharing the exact createdAt
+      // at the watermark would mean the one not yet reported can never satisfy a plain
+      // gt(createdAt, since) again. Left undefined only for a watermark with no id yet.
+      sinceId?: string;
+      limit?: number;
+    }): Promise<DocumentListRow[]> {
+      const pastWatermark = sinceId
+        ? or(gt(documentsTable.createdAt, since), and(eq(documentsTable.createdAt, since), gt(documentsTable.id, sinceId)))!
+        : gt(documentsTable.createdAt, since);
+      const rows = await db
+        .select(listColumns)
+        .from(documentsTable)
+        .where(
+          and(
+            eq(documentsTable.userId, userId),
+            eq(documentsTable.source, source),
+            isNull(documentsTable.deletedAt),
+            inArray(documentsTable.summaryStatus, ["done", "failed"]),
+            inArray(documentsTable.ruleStatus, ["done", "failed"]),
+            pastWatermark,
+          ),
+        )
+        .orderBy(asc(documentsTable.createdAt), asc(documentsTable.id))
+        .limit(limit);
+
+      const pathMap = await loadCategoryPathMap(userId);
+      const typeNameMap = await loadDocumentTypeNameMap(userId);
+      const documentIds = rows.map((r) => r.id);
+      const tagsMap = await loadTagsByDocument(documentIds);
+      return rows.map((row) => ({
+        ...row,
+        categoryPath: row.categoryId ? (pathMap.get(row.categoryId) ?? null) : null,
+        documentTypeName: row.documentTypeId ? (typeNameMap.get(row.documentTypeId) ?? null) : null,
+        tags: tagsMap.get(row.id) ?? [],
+        fields: [],
+      }));
     },
 
     async update({

@@ -4,8 +4,9 @@ import { jsonSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/json-schema";
 import { toJsonSchema } from "@valibot/to-json-schema";
 import { createError } from "../../../shared/errors/errors.js";
 import { sanitizeProviderError } from "../ai.models.js";
-import type { AiAdapter, ChatMessage, ModelInfo, StructuredResult, EmbedResult, TestResult } from "../ai.types.js";
+import type { AiAdapter, ChatMessage, ChatStreamPart, ModelInfo, StructuredResult, EmbedResult, TestResult, ToolDefinition } from "../ai.types.js";
 import type { AdapterConfig } from "./adapter.types.js";
+import type { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/messages.js";
 
 const DEFAULT_MAX_TOKENS = 4096;
 
@@ -24,6 +25,29 @@ function wrapError(err: unknown, apiKey: string): never {
     message: sanitizeMessage(err, apiKey),
     status: 502,
   });
+}
+
+function toAnthropicTool(tool: ToolDefinition): AnthropicTool {
+  const jsonSchema = toJsonSchema(tool.schema);
+  const { $schema: _, ...cleanSchema } = jsonSchema as Record<string, unknown>;
+  return {
+    name: tool.name,
+    description: tool.description,
+    input_schema: cleanSchema as AnthropicTool["input_schema"],
+  };
+}
+
+// A tool_use block's input arrives as a JSON string assembled from partial_json
+// fragments across several content_block_delta events. Malformed JSON is handed back
+// as the raw string rather than repaired, so the caller's schema validation fails on
+// it with a clear message.
+function parseToolArguments(raw: string): unknown {
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
 }
 
 export function createAnthropicAdapter(config: AdapterConfig): AiAdapter {
@@ -107,7 +131,7 @@ export function createAnthropicAdapter(config: AdapterConfig): AiAdapter {
       }
     },
 
-    async streamChat({ model, messages, maxTokens }): Promise<AsyncIterable<string>> {
+    async streamChat({ model, messages, maxTokens, tools }): Promise<AsyncIterable<ChatStreamPart>> {
       try {
         // Anthropic takes the system prompt as a separate top-level field, not as a
         // message with role "system". Pull every system-role entry out of the array
@@ -124,13 +148,37 @@ export function createAnthropicAdapter(config: AdapterConfig): AiAdapter {
           max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
           ...(systemParts.length > 0 ? { system: systemParts.join("\n\n") } : {}),
           messages: conversation,
+          ...(tools && tools.length > 0 ? { tools: tools.map(toAnthropicTool) } : {}),
         });
 
         return {
           async *[Symbol.asyncIterator]() {
+            // A tool_use content block opens with its id and name at content_block_start,
+            // then its input arrives across one or more input_json_delta fragments keyed
+            // by the block's index, and content_block_stop closes it. The fragments are
+            // not valid JSON until the block closes, so they are concatenated per index
+            // and only parsed, and only yielded, at that point.
+            const toolCalls = new Map<number, { id: string; name: string; args: string }>();
             for await (const event of stream) {
-              if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-                yield event.delta.text;
+              if (event.type === "content_block_start" && event.content_block.type === "tool_use") {
+                toolCalls.set(event.index, { id: event.content_block.id, name: event.content_block.name, args: "" });
+                continue;
+              }
+              if (event.type === "content_block_delta") {
+                if (event.delta.type === "text_delta") {
+                  yield { type: "text", text: event.delta.text };
+                } else if (event.delta.type === "input_json_delta") {
+                  const call = toolCalls.get(event.index);
+                  if (call) call.args += event.delta.partial_json;
+                }
+                continue;
+              }
+              if (event.type === "content_block_stop") {
+                const call = toolCalls.get(event.index);
+                if (call) {
+                  toolCalls.delete(event.index);
+                  yield { type: "toolCall", id: call.id, name: call.name, arguments: parseToolArguments(call.args) };
+                }
               }
             }
           },
