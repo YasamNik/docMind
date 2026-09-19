@@ -1,14 +1,13 @@
 # The assistant: triage, tools, and instructions
 
 Date: 2026-09-19
-Feature list: extends #19. Introduces the instruction layer the later secretary features
-(#20 calendar, #21 tasks, #22 morning brief, #32 renewals) will all plug into.
+Feature list: extends #19. Introduces the layer the later secretary features (#20 calendar,
+#21 tasks, #22 morning brief, #32 renewals) plug into.
 
 ## Why
 
-The assistant currently answers questions and takes `/note`. Everything else it could do
-needs a command prefix, and a secretary you have to issue commands to is a command line
-with manners. The user's words:
+The assistant answers questions and takes `/note`. Everything else needs a command prefix,
+and a secretary you issue commands to is a command line with manners. The user's words:
 
 > "behind the chat we have a powerful LLM that I'd like to do its own triage to understand
 > what type of question / conversation is that: document related, adding new note, adding
@@ -20,145 +19,182 @@ with manners. The user's words:
 
 ## What the user decided
 
-Asked on 2026-09-19:
+- **Instructions are a markdown document edited in Settings**, versioned.
+- **When unsure, ask, then remember.**
+- **One brain for both surfaces**, confirmed knowing it changes the in-app chat: that page
+  stops refusing questions its documents cannot answer and gains the same tools as the bot.
+- **Every write confirms**, stricter than recommended, chosen knowingly.
+- **One nullable column on `chat_sessions`** to hold a pending confirmation. Approved
+  2026-09-19.
 
-- **Instructions are a markdown document edited in Settings**, versioned so a change can be
-  seen and rolled back.
-- **When unsure, ask, then remember**: act on the answer and offer to write the choice into
-  the instructions so the question is not asked twice.
-- **One brain for both surfaces.** The in-app chat and the Telegram bot share instructions
-  and triage. Only what the medium allows differs.
-- **Every write confirms**, including saving a note. Stricter than recommended, chosen
-  knowingly: the cost is that every note is two exchanges.
+## What the first review corrected
+
+A first draft claimed the tools "all exist today". The usecases do. The wire protocol does
+not, and that is the largest piece of work here.
+
+**Neither adapter supports tool calling.** `openai-compatible.adapter.ts` builds
+`{ model, messages, stream: true, max_tokens }` and yields only
+`chunk.choices[0]?.delta?.content`. `anthropic.adapter.ts` yields only
+`content_block_delta` text. `AiProviderCapabilities` has no `tools` flag. This spec now
+treats tool calling as new work in the AI layer, sequenced first.
+
+**The model can do it.** Checked against OpenRouter's model list: the configured chat slot,
+`~deepseek/deepseek-pro-latest`, reports `tools` in `supported_parameters`. So the
+destination is known rather than hoped for.
 
 ## Design
 
-### 1. Triage is tool choice, not a separate pass
+### 1. Tool calling in the AI layer
 
-A classify-then-act design costs two model calls on every message, including "thanks". So
-the assistant is given tools and the act of choosing one is the triage. One call, one
-answer, and asking a clarifying question is itself one of the tools rather than a branch in
-our code.
+`streamChat` currently yields strings. It becomes a typed event stream:
 
-Tools at the start, all of which exist today:
+```ts
+type ChatStreamPart =
+  | { type: "text"; text: string }
+  | { type: "toolCall"; id: string; name: string; arguments: unknown };
+```
 
-| Tool | What it does |
-|------|--------------|
-| `answerFromDocuments` | the current RAG path, the default for anything about the library |
-| `saveNote` | what `/note` does now |
-| `searchWeb` | what `/web` does now, still OpenRouter only |
-| `startNewThread` | what `/new` does now |
-| `askUser` | ask one short question when the intent is genuinely ambiguous |
-| `proposeInstruction` | offer to write a rule, never write one silently |
+Each adapter reassembles its own provider's representation into that shape. They are two
+different parsing problems and the abstraction is the point: OpenAI-style calls arrive as
+fragmented deltas carrying index, id, name and argument chunks that must be concatenated
+into valid JSON before use, while Anthropic sends discrete `tool_use` content blocks. The
+caller sees neither.
 
-The slash commands stay as exact shortcuts, because a person who types `/note` means it and
-should not be second-guessed. They bypass triage entirely.
+Arguments are parsed with the tool's valibot schema. A malformed call is retried once with
+the parse error fed back, then reported honestly rather than guessed at.
 
-**A capability registry, not a switch.** Each tool is a record with a name, a description
-the model reads, a valibot schema for its arguments, whether it writes, and a handler.
-Adding reminders (#21) or calendar (#20) later means adding a record, exactly as adding a
-storage driver means adding a definition. Nothing in the router changes.
+**A `supportsTools` capability, checked before offering tools.** Not every model on
+OpenRouter supports them, and a model that silently ignores tools would make the assistant
+appear to work while never saving anything. When the configured chat model does not support
+tools, the assistant says so plainly and falls back to answering from documents only, the
+same way `/web` refuses on a non-OpenRouter slot rather than pretending.
 
-### 2. The instructions document
+### 2. Triage is tool choice
 
-One markdown document per user, in `chat.instructions`, shipped with a default body the
-user can edit or delete. It is appended to the system prompt on every turn, under a heading
-that marks it as the user's own standing instructions.
+A classify-then-act design costs two model calls on every message, including "thanks".
+Choosing a tool is the triage, in the same call as the answer, and asking a clarifying
+question is a tool rather than a branch in our code.
+
+| Tool | Writes | What it does |
+|------|--------|--------------|
+| `answerFromDocuments` | no | the existing RAG path, the default for anything about the library |
+| `saveNote` | yes | what `/note` does now |
+| `searchWeb` | no | what `/web` does now, OpenRouter only |
+| `startNewThread` | no | what `/new` does now |
+| `askUser` | no | one short question when the intent is genuinely ambiguous |
+| `proposeInstruction` | yes | offer a rule, never write one silently |
+
+Slash commands stay as exact shortcuts and bypass triage: someone who types `/note` means
+it.
+
+**A capability registry, not a switch.** Each tool is a record: name, the description the
+model reads, a valibot schema, `writes`, `destructive`, and a handler. Reminders and
+calendar later are records. Nothing in the router changes.
+
+### 3. The instructions document
+
+One markdown document in `chat.instructions`, shipped with an editable default, appended to
+the system prompt every turn under a heading marking it as the user's standing
+instructions.
 
 **Versioned.** Each save pushes the previous body onto `chat.instructionsHistory`, capped at
-the last twenty versions with timestamps, so a bad edit is one click from undone. Settings
-are a key value store, so this needs no migration.
+twenty versions with timestamps. Settings are key value, so no migration.
 
-**It costs money on every message.** The document rides in the system prompt, so a thousand
-words is paid for on every "ok". The editor shows the current size and warns past a
-threshold, the same way the sorting page warns about the cost of a large rule set. This is
-stated in the editor, not buried here.
+**Capped, not merely warned about.** The first draft relied on a size warning, which the
+review correctly called protection that protects nothing: `MAX_CONTEXT_CHARS` bounds only
+the retrieved-chunk block, so an unbounded instructions document is unbounded cost on every
+message and eventually a provider error rather than graceful degradation. The document is
+therefore refused above 8000 characters on save, with the editor showing the size and
+warning from 6000. A cap that the code enforces, not a sentence asking nicely.
 
-**Precedence, stated in the prompt itself:** the user's instructions win over the defaults,
-and the safety rules in section 4 win over both. An instruction is a prompt, and a prompt
-can be argued with, so anything that must hold is enforced in code rather than asked for in
-words.
+**Precedence, stated in the prompt:** the user's instructions beat the defaults, and the
+guards in section 5 beat both. An instruction is a prompt and a prompt can be argued with,
+so anything that must hold is code.
 
-### 3. Asking, and remembering
+### 4. Asking, and remembering
 
-When the intent is ambiguous the model calls `askUser` with one short question. The answer
-arrives as the next turn and the original request is carried through, so the user does not
-repeat themselves.
+Ambiguity calls `askUser` with one short question. The answer arrives as the next turn and
+the original request carries through, so nothing is retyped.
 
-Having acted, the assistant may offer once: "Want me to always treat messages like that as
-a note?" Accepting appends a line to the instructions, shown before it is written. Declining
-is remembered for the thread so the same offer does not repeat.
+Having acted, the assistant may offer once to write the choice into the instructions,
+showing the exact line before writing it. A decline is remembered for the thread.
 
-**What triggers an offer is a correction, not a count.** "You have asked this three times"
-is hard to measure and easy to get wrong. "You told me I got it wrong" is unambiguous, and
-the sorting engine already learns from corrections exactly this way (#24). Repetition
-counting can come later if corrections prove too rare a signal.
+**The trigger is a correction.** "You have asked three times" is hard to measure. "You told
+me I got it wrong" is clear.
 
-### 4. Confirmation, and the one rule that is not negotiable
+One honesty correction from the review: this is a weaker analogy to the sorting engine than
+the first draft claimed. Sorting detects a correction deterministically, by seeing a
+user change what a rule applied. Detecting "no, that was meant as a note" in free text is
+itself a model judgment, so it carries the same reliability risk as tool selection. It is a
+softer signal wearing the same name, and the offer is always shown before anything is
+written, which is what makes that acceptable.
 
-Every tool that writes confirms first. The confirmation names what will happen in one line
-and waits for a yes.
+### 5. Confirmation, and the guard that is not negotiable
 
-- **In the app**, the confirmation is a pair of buttons in the chat stream.
-- **In Telegram**, it is an inline keyboard on the message. This means handling
-  `callback_query` updates, which the poll loop does not do yet: that is new work, and it is
-  the right cost, because "reply yes" in a chat thread is ambiguous the moment two
-  confirmations overlap.
+Every writing tool proposes and waits.
 
-**Deleting is always confirmed and cannot be loosened by any instruction.** Everything else
-can be relaxed per case in the instructions document, once the user tires of confirming
-notes. The guard lives in the capability record (`writes: true`, `destructive: true`), not
-in the prompt, so no wording can talk the model out of it.
+**Where a pending proposal lives:** `chat_sessions.pending_tool_call`, nullable, holding the
+tool name and its parsed arguments as JSON until answered, then cleared. One additive column,
+approved by the user. It is per session, which settings could not be without inventing
+dynamic keys, and a Telegram conversation is already a chat session, so both surfaces use
+one mechanism.
 
-### 5. One brain, two surfaces
+- **In the app**, a new `ChatStreamEvent` variant carries the proposal, and the chat stream
+  renders a pair of buttons. This is a server to client protocol change, not a UI detail.
+- **In Telegram**, an inline keyboard on the message, which means the poll loop must handle
+  `callback_query` updates. It does not today. That is real work, and it is the right cost:
+  "reply yes" is ambiguous the moment two confirmations overlap.
 
-The in-app chat and the bot share the system prompt, the instructions, the capability
-registry and the triage. The differences are only what the medium allows: Telegram has no
-file preview and uses inline keyboards, the app renders citations as links and confirmations
-as buttons.
+**Deleting is always confirmed and no instruction can loosen it.** The guard is the
+`destructive` flag on the capability record, not a sentence in the prompt.
 
-This replaces today's split between `CHAT_SYSTEM_PROMPT` and
-`TELEGRAM_ASSISTANT_SYSTEM_PROMPT`, which were already drifting. One prompt, one place to
-change it.
+### 6. One brain, two surfaces
 
-### 6. What this costs
+`CHAT_SYSTEM_PROMPT` and `TELEGRAM_ASSISTANT_SYSTEM_PROMPT` merge into one. The in-app chat
+gains tools and stops refusing what its documents cannot answer, which the user confirmed
+knowing it changes that page.
 
-One model call per message, plus one more per tool round trip when the model calls a tool
-and then speaks. So a plain question is one call as today; saving a note is two, plus the
-confirmation turn. The instructions document adds its own length to every call.
+Document-scoped sessions (`chat_sessions.documentScope`) stay narrow: a session pinned to
+particular documents answers from them and does not save notes or search the web. No client
+creates one today, so this is a latent case being settled before it becomes a bug.
 
-The cheap-message guard already in place (a bare "ok" or an emoji is answered without a
-model call) matters more now and stays.
+### 7. What this costs
 
-### 7. Testing
+One call per message, plus one per tool round trip, plus the instructions on every call. The
+cheap-message guard (a bare "ok" answered without a model call) matters more now and stays.
 
-- The capability registry is data: a unit test that every record has a description, a
-  schema, and correct write and destructive flags, so a new tool cannot be added without
-  declaring what it does.
-- Triage is tested against a fake adapter by asserting which tool the model was offered and
-  what happened when it chose each one, including `askUser`.
-- Confirmation is tested as a state machine: a write tool proposes, nothing happens until a
-  yes, a no discards it, and a second proposal while one is pending does not confuse them.
-- The delete guard has its own test: an instruction that says "never ask before deleting"
-  does not stop the confirmation.
-- Instructions: saving pushes a version, rollback restores, the history is capped, and the
-  body reaches the system prompt.
+### 8. Testing
 
-## Out of scope
+- The registry is data: every record has a description, a schema, and correct flags.
+- Adapter tool parsing, per adapter, from real fragmented deltas rather than pre-assembled
+  objects. The link fetcher shipped broken because its tests only met a fake.
+- `supportsTools` false: the assistant says so and answers without tools.
+- Confirmation as a state machine: propose, nothing happens until yes, no discards, a second
+  proposal while one is pending does not confuse them, and a restart does not lose it.
+- The delete guard: an instruction saying "never ask before deleting" does not stop it.
+- Instructions: save pushes a version, rollback restores, history is capped, the body
+  reaches the prompt, and 8001 characters is refused.
 
-- Reminders, tasks, calendar. They become capability records when they exist.
-- Counting repetition to propose rules. Corrections first.
-- Multiple instruction documents or per-topic rule sets. One document until one is proven
-  not enough.
+## Delivery: five plans
+
+Sequenced by risk, first is the foundation:
+
+1. **Tool calling in the AI layer.** The typed event stream, both adapters, `supportsTools`.
+   Validate against the real configured model before anything is built on it.
+2. **The capability registry and triage**, wrapping usecases that already exist.
+3. **Confirmation**: the column, the state machine, the new stream event, Telegram
+   `callback_query`.
+4. **The instructions document**: storage, versioning, the enforced cap, the Settings editor.
+5. **Prompt unification and the client confirmation UI.**
+
+`DOCMIND-DESIGN.md` gains a section on this layer once plan 1 lands, since it currently says
+nothing about the assistant at all.
 
 ## Risks
 
-- **Confirmation fatigue.** Every note is two exchanges by the user's explicit choice. If it
-  grates, the instructions loosen it per case, and this spec should be revisited rather than
-  the user quietly working around it.
-- **Tool calling depends on the model.** A model that ignores tools or fabricates arguments
-  degrades the whole feature. Arguments are valibot parsed and a malformed call is retried
-  once, then reported honestly rather than guessed at.
-- **The instructions are a prompt.** They can be argued with, ignored, or contradicted by a
-  long conversation. Anything that must hold is code, which is why the delete guard is not a
-  sentence in a markdown file.
+- **Confirmation fatigue.** Every note is two exchanges, by choice. If it grates, the
+  instructions loosen it per case and this spec is revisited rather than worked around.
+- **Tool calling is model-dependent.** Verified for the current slot; a model change can
+  remove it, which is what `supportsTools` exists to catch loudly.
+- **The instructions are a prompt.** They can be ignored or argued with. Anything that must
+  hold is code.

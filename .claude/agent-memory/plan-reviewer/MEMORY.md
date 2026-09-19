@@ -14,3 +14,5 @@
 - [Storage S3/scope plan review](review-plan-storage-s3-scope.md) -- prior spec fixes verified real; storage.usecases.ts lacks documentsRepository, wrong test harness assumed, lib-storage Upload always multiparts streams
 - [Telegram intake spec review](review-spec-telegram-intake.md) -- "no new table" breaks at the completion-notifier requirement, job fan-out is not a chain, poller has no settings-reactivity design, DNS TOCTOU underspecified
 - [Background loop / notification gap lesson](lesson-background-loop-and-notification-gaps.md) -- no post-write settings hook, no job-completion hook, DNS-resolve-then-check needs a custom lookup function to close TOCTOU
+- [Assistant instructions/tool-calling spec review](review-spec-assistant-instructions.md) -- neither AI adapter supports tool calling today, confirmation state machine has no storage design, needs redesign
+- [Tool-calling / pending-confirmation lesson](lesson-tool-calling-and-pending-confirmation.md) -- check AiAdapter for real tools support before trusting "tools exist today"; propose-then-confirm needs a named pending-state store
