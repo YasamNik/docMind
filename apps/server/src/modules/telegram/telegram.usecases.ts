@@ -27,6 +27,9 @@ import { telegramUpdateSchema, type TelegramMessage, type TelegramUpdate } from 
 
 // Own poll loop in the shape of jobs.runner.ts: re-reads its token every cycle instead
 // of reacting to a settings write, because settingsService has no post-write hook.
+// Two such loops run side by side, one for the long update poll and one for the
+// finished-document notifier, so a quiet chat holding the poll open for up to
+// pollTimeoutSeconds never delays the notifier's own short cycle.
 
 type ClientFactory = (args: { token: string }) => TelegramClient;
 
@@ -64,6 +67,7 @@ export function createTelegramService({
   logger = createLogger("telegram"),
   pollTimeoutSeconds = 25,
   idleIntervalMs = 1000,
+  notifyIntervalMs = 3000,
   appBaseUrl = "http://localhost:5173",
 }: {
   db: Database;
@@ -80,6 +84,10 @@ export function createTelegramService({
   logger?: Logger;
   pollTimeoutSeconds?: number;
   idleIntervalMs?: number;
+  // How often the finished-document notifier looks for new work, on its own clock.
+  // getUpdates can hold a connection open for pollTimeoutSeconds, and the notifier
+  // must not wait behind it, so this is unrelated to idleIntervalMs on purpose.
+  notifyIntervalMs?: number;
   // Where the app is reachable from a phone, so the second reply can link straight to
   // the document rather than just naming it.
   appBaseUrl?: string;
@@ -89,7 +97,8 @@ export function createTelegramService({
   // so it has no home in the usecases layer documentsService already covers.
   const documentsRepository = createDocumentsRepository({ db });
   let running = false;
-  let loop: Promise<void> | null = null;
+  let pollLoop: Promise<void> | null = null;
+  let notifyLoop: Promise<void> | null = null;
 
   async function tryPair({
     userId,
@@ -262,14 +271,24 @@ export function createTelegramService({
     if (last) await settingsService.setInternal(userId, "telegram.lastReportedAt", last.createdAt);
   }
 
-  async function runOnce(): Promise<void> {
+  // Shared by pollUpdatesOnce and notifyOnce so each resolves the sole user and the
+  // token independently: they run on separate clocks and neither may block on the
+  // other to find out whether there is a bot to talk to.
+  async function resolveClient(): Promise<{ userId: string; client: TelegramClient } | undefined> {
     const userId = await getUserId();
-    if (!userId) return;
-
+    if (!userId) return undefined;
     const token = await settingsService.get<string>(userId, "telegram.botToken");
-    if (!token) return;
+    if (!token) return undefined;
+    return { userId, client: clientFactory({ token }) };
+  }
 
-    const client = clientFactory({ token });
+  // The long-polling half of the cycle. getUpdates can hold its connection open for up
+  // to pollTimeoutSeconds, so nothing that needs to run sooner than that may live here.
+  async function pollUpdatesOnce(): Promise<void> {
+    const resolved = await resolveClient();
+    if (!resolved) return;
+    const { userId, client } = resolved;
+
     const lastUpdateId = (await settingsService.get<number>(userId, "telegram.lastUpdateId")) ?? 0;
     const updates = await client.getUpdates({ offset: lastUpdateId + 1, timeoutSeconds: pollTimeoutSeconds });
 
@@ -284,36 +303,60 @@ export function createTelegramService({
       const updateId = readUpdateId(raw);
       if (updateId !== undefined) await settingsService.setInternal(userId, "telegram.lastUpdateId", updateId);
     }
-
-    await reportFinishedDocuments({ userId, client });
   }
 
-  async function start() {
-    // Telegram answers a second concurrent getUpdates for the same token with a 409,
-    // so this guard is not optional: it is what keeps there being only one poller.
-    if (running) return;
-    running = true;
-    loop = (async () => {
+  // The finished-document half of the cycle, kept short on purpose so it never sits
+  // behind a long poll. Only ever called from one place at a time, either here or from
+  // the dedicated notify loop below, never both, so the lastReportedAt read-then-write
+  // in reportFinishedDocuments never overlaps itself.
+  async function notifyOnce(): Promise<void> {
+    const resolved = await resolveClient();
+    if (!resolved) return;
+    await reportFinishedDocuments(resolved);
+  }
+
+  async function runOnce(): Promise<void> {
+    await pollUpdatesOnce();
+    await notifyOnce();
+  }
+
+  // One sequential loop per concern: each awaits its own action to finish before
+  // sleeping and looping again, which is what keeps a slow or failing cycle from
+  // overlapping with the next one of the same kind. The poll loop and the notify loop
+  // never share a body, so a long getUpdates call can never delay a report.
+  function runLoop({ action, idleMs, label }: { action: () => Promise<void>; idleMs: number; label: string }): Promise<void> {
+    return (async () => {
       let attempt = 0;
       while (running) {
         try {
-          await runOnce();
+          await action();
           attempt = 0;
         } catch (error) {
           attempt += 1;
-          logger.warn({ err: (error as Error).message, attempt }, "Telegram poll cycle failed");
+          logger.warn({ err: (error as Error).message, attempt, loop: label }, "Telegram loop cycle failed");
         }
         if (!running) break;
-        const waitMs = attempt > 0 ? backoffDelayMs(attempt) : idleIntervalMs;
+        const waitMs = attempt > 0 ? backoffDelayMs(attempt) : idleMs;
         await new Promise((resolve) => setTimeout(resolve, waitMs));
       }
     })();
   }
 
+  async function start() {
+    // Telegram answers a second concurrent getUpdates for the same token with a 409,
+    // so this guard is not optional: it is what keeps there being only one poller, and
+    // it also keeps start() from ever spawning a second notify loop alongside it.
+    if (running) return;
+    running = true;
+    pollLoop = runLoop({ action: pollUpdatesOnce, idleMs: idleIntervalMs, label: "poll" });
+    notifyLoop = runLoop({ action: notifyOnce, idleMs: notifyIntervalMs, label: "notify" });
+  }
+
   async function stop() {
     running = false;
-    await loop;
-    loop = null;
+    await Promise.all([pollLoop, notifyLoop]);
+    pollLoop = null;
+    notifyLoop = null;
   }
 
   return { runOnce, start, stop };

@@ -524,3 +524,70 @@ describe("telegram service, the second reply", () => {
     expect(await settingsService.get<string>(userId, "telegram.lastReportedAt")).not.toBe("");
   });
 });
+
+describe("telegram service, background loops", () => {
+  // Regression test for the second reply arriving up to pollTimeoutSeconds late: the
+  // update poll used to gate the finished-document report behind it in the same cycle.
+  it("sends the finished document report while an update poll is still outstanding", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    await settingsService.setInternal(userId, "telegram.lastReportedAt", "2020-01-01T00:00:00.000Z");
+    const { document } = await documentsService.upload({
+      userId,
+      name: "slow-poll.txt",
+      mimeType: "text/plain",
+      body: Readable.from(["waiting on a slow poll"]),
+      source: "telegram",
+    });
+    await markSortedAndSummarized({ documentId: document.id });
+
+    const sent: { chatId: number; text: string }[] = [];
+    let getUpdatesCalls = 0;
+    let releaseGetUpdates: (() => void) | undefined;
+    // Stays unresolved until the test releases it, standing in for a long poll that has
+    // not come back yet.
+    const outstandingPoll = new Promise<void>((resolve) => {
+      releaseGetUpdates = resolve;
+    });
+
+    const client: TelegramClient = {
+      async getUpdates() {
+        getUpdatesCalls += 1;
+        await outstandingPoll;
+        return [];
+      },
+      async getFile() {
+        throw new Error("not used in this test");
+      },
+      async sendMessage({ chatId, text }) {
+        sent.push({ chatId, text });
+      },
+    };
+
+    const telegram = createTelegramService({
+      db,
+      settingsService,
+      documentsService,
+      getUserId: async () => userId,
+      clientFactory: () => client,
+      fetchLinkPage: fetchLinkPageNotConfigured,
+      idleIntervalMs: 10,
+      notifyIntervalMs: 20,
+    });
+
+    await telegram.start();
+    try {
+      const deadline = Date.now() + 2000;
+      while (sent.length === 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+
+      expect(getUpdatesCalls).toBeGreaterThan(0);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.text).toContain("slow-poll.txt");
+    } finally {
+      releaseGetUpdates?.();
+      await telegram.stop();
+    }
+  });
+});
