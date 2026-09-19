@@ -3,9 +3,10 @@ import { Readable } from "node:stream";
 import * as v from "valibot";
 import { isAppError } from "../../shared/errors/errors.js";
 import { createLogger, type Logger } from "../../shared/logger/logger.js";
-import { missingNoteTextReply, newThreadReply, textDocumentName } from "../assistant/assistant.models.js";
+import type { AssistantService } from "../assistant/assistant.usecases.js";
 import { TELEGRAM_ASSISTANT_SYSTEM_PROMPT } from "../chat/chat.models.js";
-import type { ChatService, ChatStreamEvent } from "../chat/chat.usecases.js";
+import type { ChatService } from "../chat/chat.usecases.js";
+import type { Citation } from "../chat/chat.types.js";
 import type { Database } from "../database/database.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
@@ -35,12 +36,12 @@ import {
 } from "./telegram.models.js";
 import { telegramUpdateSchema, type TelegramMessage, type TelegramUpdate } from "./telegram.schemas.js";
 
-// Only what the assistant turn actually calls: creating a session, sending a message,
-// and reading back its own last message to tell a cheap acknowledgement from a real
-// answer to a question it just asked. Kept narrow on purpose so a test can hand this a
-// chat service backed by a fake AI adapter without also standing in for every route
-// chat.usecases.ts serves.
-type TelegramChatService = Pick<ChatService, "createSession" | "sendMessage" | "listMessages">;
+// Only what stays a direct chat.usecases.ts call once the assistant owns the turn
+// itself: creating a session, and reading back a session's own last message to tell a
+// cheap acknowledgement from a real answer to a question it just asked. Kept narrow on
+// purpose so a test can hand this a chat service backed by a fake AI adapter without
+// also standing in for every route chat.usecases.ts serves.
+type TelegramChatService = Pick<ChatService, "createSession" | "listMessages">;
 
 // Own poll loop in the shape of jobs.runner.ts: re-reads its token every cycle instead
 // of reacting to a settings write, because settingsService has no post-write hook.
@@ -87,6 +88,7 @@ export function createTelegramService({
   settingsService,
   documentsService,
   chatService,
+  assistantService,
   getUserId,
   clientFactory = createTelegramClient,
   fetchLinkPage = fetchReadablePage,
@@ -104,10 +106,15 @@ export function createTelegramService({
   db: Database;
   settingsService: SettingsService;
   documentsService: DocumentsService;
-  // The same chat service the app's own chat page uses: retrieval, history and
-  // citations are its implementation, not a second one grown here. The assistant
-  // passes its own system prompt (TELEGRAM_ASSISTANT_SYSTEM_PROMPT) on every call.
+  // The same chat service the app's own chat page uses, narrowed to what this module
+  // still calls directly: creating the bridged session and reading it back for the
+  // cheap-message guard. Everything else about a turn, including retrieval, history
+  // and citations, goes through assistantService below.
   chatService: TelegramChatService;
+  // runTurn for a plain message, runCommand for /note, /web and /new. One path shared
+  // with the app's own chat page once plan 5 wires it in; Telegram just supplies its
+  // own system prompt (TELEGRAM_ASSISTANT_SYSTEM_PROMPT) and its own thread pointer.
+  assistantService: AssistantService;
   // There is exactly one Telegram-paired account, and this loop runs with no HTTP
   // session to read it from. Resolved fresh every cycle so a user created after the
   // process started is picked up without a restart, the same way the token is.
@@ -237,25 +244,6 @@ export function createTelegramService({
     await client.sendMessage({ chatId, text: duplicateOf ? duplicateReply(document.name) : receivedReply(document.name) });
   }
 
-  // /note does exactly what plain text used to do: the code moved, the behavior did
-  // not. Empty text (the whole point of /note typed with nothing after it) asks for
-  // the note rather than filing a blank document.
-  async function handleNote({ userId, client, chatId, text }: { userId: string; client: TelegramClient; chatId: number; text: string }) {
-    const trimmed = text.trim();
-    if (!trimmed) {
-      await client.sendMessage({ chatId, text: missingNoteTextReply() });
-      return;
-    }
-    const { document, duplicateOf } = await documentsService.upload({
-      userId,
-      name: textDocumentName(trimmed),
-      mimeType: "text/plain",
-      body: Readable.from([trimmed]),
-      source: "telegram",
-    });
-    await client.sendMessage({ chatId, text: duplicateOf ? duplicateReply(document.name) : receivedReply(document.name) });
-  }
-
   // Said once, ever, the first time plain text arrives after notes moved behind /note.
   async function noteMigrationNoticeIfDue({ userId, client, chatId }: { userId: string; client: TelegramClient; chatId: number }) {
     const alreadySent = await settingsService.get<boolean>(userId, "telegram.noteMigrationNoticeSent");
@@ -275,6 +263,14 @@ export function createTelegramService({
     return session.id;
   }
 
+  // The one thing every thread reset does on this surface: forget the bridged session
+  // so the next turn starts a fresh one. Passed to the assistant as startNewThread, so
+  // a model-chosen startNewThread call and a typed /new clear the exact same key, and
+  // used directly by the stale-session retry below.
+  async function clearChatSession(userId: string): Promise<void> {
+    await settingsService.setInternal(userId, "telegram.chatSessionId", "");
+  }
+
   // A word from isCheapMessage's list is filler only until it answers a question the
   // assistant itself just asked, read straight off the current session's own last
   // message rather than guessed at. No session yet, or one that no longer resolves,
@@ -292,16 +288,12 @@ export function createTelegramService({
     }
   }
 
-  // Runs one turn of the assistant conversation through the app's own chat service,
-  // with its own system prompt so it talks like a person instead of refusing when no
-  // document matched. streamChat has no token stream on Telegram's side, so the reply
-  // is consumed to completion here and sent as one message, split if it runs long.
-  // web is set only for a /web turn: it attaches OpenRouter's live web search to this
-  // one call (ai.usecases.ts) and never carries over, so the very next plain message
-  // is an ordinary turn again. A chat slot that is not on OpenRouter refuses instead
-  // of quietly answering without it, since aiService.streamChat throws a plain-English
-  // error for that case and it reaches the user through the same errorMessage path a
-  // missing chat model already uses below.
+  // Runs one turn of the assistant conversation through the shared assistant service,
+  // keeping exactly three responsibilities of its own: the cheap acknowledgement short
+  // circuit, the stale-session retry, and presentation, since runTurn and runCommand
+  // hand back a plain result rather than a token stream. web is set only for a /web
+  // turn: it runs the searchWeb tool directly instead of letting the model triage, and
+  // never carries over, so the very next plain message triages again from scratch.
   async function handleAssistantTurn({
     userId,
     client,
@@ -321,23 +313,41 @@ export function createTelegramService({
       return;
     }
 
-    // requireSession and search.search both run before chat.usecases.ts's own try
-    // block (chat.usecases.ts sendMessage), so a stored session id that no longer
-    // resolves, most often because the same session was deleted from the app's own
-    // Chat page (chat.routes.ts, ChatPage.tsx: it is an ordinary chat_sessions row),
-    // rejects this call outright instead of surfacing as a streamed error event. Left
-    // uncaught, that used to escape pollUpdatesOnce's retry loop, which keeps retrying
-    // the exact same broken session id, and the user got no reply at all, forever,
-    // unless they happened to send /new. One retry on a fresh session recovers the
-    // conversation; any other failure still gets a plain reply rather than silence.
-    async function startTurn(): Promise<AsyncGenerator<ChatStreamEvent>> {
+    // A stored session id that no longer resolves, most often because the same
+    // session was deleted from the app's own Chat page (chat.routes.ts, ChatPage.tsx:
+    // it is an ordinary chat_sessions row), rejects runTurn outright with
+    // chat.session_not_found (chat.usecases.ts, appendUserMessage) rather than
+    // surfacing as part of a normal result. Left uncaught, that used to escape
+    // pollUpdatesOnce's retry loop, which keeps retrying the exact same broken session
+    // id, and the user got no reply at all, forever, unless they happened to send
+    // /new. One retry on a fresh session recovers the conversation; any other failure
+    // still gets a plain reply rather than silence.
+    async function startTurn(): Promise<{ reply: string; citations: Citation[]; toolUsed: string | null }> {
       const sessionId = await ensureChatSession({ userId });
-      return chatService.sendMessage({ userId, sessionId, content: trimmed, systemPrompt: TELEGRAM_ASSISTANT_SYSTEM_PROMPT, web });
+      const startNewThread = () => clearChatSession(userId);
+      if (web) {
+        return assistantService.runCommand({
+          userId,
+          sessionId,
+          surface: "telegram",
+          tool: "searchWeb",
+          args: { question: trimmed },
+          startNewThread,
+        });
+      }
+      return assistantService.runTurn({
+        userId,
+        sessionId,
+        surface: "telegram",
+        text: trimmed,
+        basePrompt: TELEGRAM_ASSISTANT_SYSTEM_PROMPT,
+        startNewThread,
+      });
     }
 
-    let generator: AsyncGenerator<ChatStreamEvent>;
+    let result: { reply: string; citations: Citation[]; toolUsed: string | null };
     try {
-      generator = await startTurn();
+      result = await startTurn();
     } catch (error) {
       const staleSession = isAppError(error) && error.code === "chat.session_not_found";
       logger.error({ userId, err: (error as Error).message, staleSession }, "Telegram assistant turn failed before generating a reply");
@@ -345,9 +355,9 @@ export function createTelegramService({
         await client.sendMessage({ chatId, text: assistantTroubleReply() });
         return;
       }
-      await settingsService.setInternal(userId, "telegram.chatSessionId", "");
+      await clearChatSession(userId);
       try {
-        generator = await startTurn();
+        result = await startTurn();
       } catch (retryError) {
         logger.error({ userId, err: (retryError as Error).message }, "Telegram assistant turn failed again after starting a fresh chat session");
         await client.sendMessage({ chatId, text: assistantTroubleReply() });
@@ -355,24 +365,11 @@ export function createTelegramService({
       }
     }
 
-    let fullText = "";
-    let sourceNames: string[] = [];
-    let errorMessage: string | undefined;
-    for await (const event of generator) {
-      if (event.event === "token") fullText += event.data;
-      else if (event.event === "done") sourceNames = event.data.citations.map((c) => c.documentName);
-      else if (event.event === "error") errorMessage = event.data.message;
-    }
-
-    const reply = errorMessage ?? assistantReplyText({ answer: stripCitationMarkers(fullText), sourceNames, web });
+    const sourceNames = result.citations.map((citation) => citation.documentName);
+    const reply = assistantReplyText({ answer: stripCitationMarkers(result.reply), sourceNames, web: result.toolUsed === "searchWeb" });
     for (const part of splitForTelegram(reply)) {
       await client.sendMessage({ chatId, text: part });
     }
-  }
-
-  async function handleNewThread({ userId, client, chatId }: { userId: string; client: TelegramClient; chatId: number }) {
-    await settingsService.setInternal(userId, "telegram.chatSessionId", "");
-    await client.sendMessage({ chatId, text: newThreadReply() });
   }
 
   async function handleUpdate({ userId, client, update }: { userId: string; client: TelegramClient; update: TelegramUpdate }) {
@@ -401,8 +398,22 @@ export function createTelegramService({
       await handleFile({ userId, client, chatId, message, intent });
       return;
     }
+    // /note and /new run their own capability directly through the assistant, with no
+    // triage and no model call: a slash command is a person stating exactly what they
+    // want, so it is its own confirmation (assistant.usecases.ts, runCommand). Neither
+    // touches the bridged chat session, saveNote taking no part in it at all and
+    // startNewThread clearing it through the same startNewThread callback runTurn uses
+    // when the model chooses that tool on its own.
     if (intent.kind === "note") {
-      await handleNote({ userId, client, chatId, text: intent.text });
+      const result = await assistantService.runCommand({
+        userId,
+        sessionId: null,
+        surface: "telegram",
+        tool: "saveNote",
+        args: { text: intent.text },
+        startNewThread: () => clearChatSession(userId),
+      });
+      await client.sendMessage({ chatId, text: result.reply });
       return;
     }
     if (intent.kind === "link") {
@@ -410,12 +421,20 @@ export function createTelegramService({
       return;
     }
     if (intent.kind === "newThread") {
-      await handleNewThread({ userId, client, chatId });
+      const result = await assistantService.runCommand({
+        userId,
+        sessionId: null,
+        surface: "telegram",
+        tool: "startNewThread",
+        args: {},
+        startNewThread: () => clearChatSession(userId),
+      });
+      await client.sendMessage({ chatId, text: result.reply });
       return;
     }
-    // /web is the one command that attaches live web search to the turn, and only
-    // this one call: the next plain message runs handleAssistantTurn with web left
-    // at its default of false.
+    // /web runs the searchWeb tool directly instead of letting the model triage, and
+    // only for this one message: the next plain message runs handleAssistantTurn with
+    // web left at its default of false.
     if (intent.kind === "web") {
       await handleAssistantTurn({ userId, client, chatId, text: intent.text, web: true });
       return;

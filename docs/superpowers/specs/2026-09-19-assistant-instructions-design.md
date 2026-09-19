@@ -191,6 +191,10 @@ Sequenced by risk, first is the foundation:
 1. **Tool calling in the AI layer.** The typed event stream, both adapters, `supportsTools`.
    Validate against the real configured model before anything is built on it.
 2. **The capability registry and triage**, wrapping usecases that already exist.
+   `saveNote` ships as a real, tested handler here, but it is withheld from the model
+   until plan 3 lands `pending_tool_call`: the model is offered every record where
+   `writes` is false, and a slash command such as `/note` writes immediately in the
+   meantime, since typing the command is itself the confirmation.
 3. **Confirmation**: the column, the state machine, the new stream event, Telegram
    `callback_query`.
 4. **The instructions document**: storage, versioning, the enforced cap, the Settings editor.

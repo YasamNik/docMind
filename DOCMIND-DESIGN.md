@@ -432,6 +432,13 @@ pair of buttons) and Telegram (an inline keyboard, which means the poll loop han
 `callback_query`) share one mechanism. Deleting is always confirmed, and no instruction can
 loosen that: the guard is the `destructive` flag on the record, not a sentence in a prompt.
 
+That confirmation state machine is not built yet. `saveNote` is a real, registered,
+tested handler today, but the model is never offered it: the registry filters to
+capabilities where `writes` is false until `pending_tool_call` exists to hold a
+proposal. A slash command is unaffected either way, since typing `/note` is itself the
+confirmation, not something triage decided on its own; `/note` writes immediately today
+and keeps doing so once the model can propose a write of its own.
+
 **The user's standing instructions** are one markdown document in `chat.instructions`,
 appended to the system prompt each turn, versioned into `chat.instructionsHistory` (twenty
 versions), and refused above 8000 characters. The cap is enforced in code, because an

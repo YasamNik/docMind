@@ -10,6 +10,8 @@ import { aiSettingDefinitions } from "../ai/ai.settings.js";
 import type { AiAdapter, ChatStreamPart, ModelInfo, StructuredResult, TestResult } from "../ai/ai.types.js";
 import { createAiService } from "../ai/ai.usecases.js";
 import { aiProviderRegistry } from "../ai/providers/index.js";
+import { assistantSettingDefinitions } from "../assistant/assistant.settings.js";
+import { createAssistantService, type AssistantService } from "../assistant/assistant.usecases.js";
 import { createChatService, type ChatService } from "../chat/chat.usecases.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import { createDocumentsService } from "../documents/documents.usecases.js";
@@ -42,6 +44,25 @@ function asyncChatPartsOf(chunks: string[]): AsyncIterable<ChatStreamPart> {
       for (const chunk of chunks) yield { type: "text", text: chunk };
     },
   };
+}
+
+// A plain chat message now makes a triage call before an answer exists: the model
+// calls a tool on the first streamChat call, and the tool's own answering call is the
+// second. Scripts that pair so a test only has to say what the tool call and the
+// answer look like, instead of hand rolling call counting in every test.
+function toolThenText({ tool, args, text }: { tool: string; args: unknown; text: string }): AiAdapter["streamChat"] {
+  let calls = 0;
+  return vi.fn(async () => {
+    calls += 1;
+    if (calls === 1) {
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "toolCall" as const, id: "call_1", name: tool, arguments: args };
+        },
+      };
+    }
+    return asyncChatPartsOf([text]);
+  });
 }
 
 const userId = "user-1";
@@ -165,11 +186,16 @@ let db: Awaited<ReturnType<typeof createTestDatabase>>["db"];
 let settingsService: ReturnType<typeof createSettingsService>;
 let documentsService: ReturnType<typeof createDocumentsService>;
 let chatService: ChatService;
+let assistantService: AssistantService;
 // Reassigned within a test to script what the model returns for that turn. Reading
 // through this indirection, rather than rebuilding the whole ai/search/chat stack per
 // test, is what lets "keeps the thread" script two different replies for two turns of
 // the same conversation.
 let streamChatImpl: AiAdapter["streamChat"];
+// Empty by default, so supportsTools has nothing to restrict and a plain turn's
+// triage call goes ahead. A test on the no-tools notice overrides this to report the
+// configured model back with supportsTools: false.
+let listModelsImpl: AiAdapter["listModels"];
 
 function fakeChatAdapter(): AiAdapter {
   return {
@@ -178,7 +204,7 @@ function fakeChatAdapter(): AiAdapter {
     streamChat: (...args) => streamChatImpl(...args),
     embed: vi.fn(async () => ({ vectors: [], dimension: 0 })),
     recognizeImage: vi.fn(async () => ({ text: "" })),
-    listModels: vi.fn(async () => [] as ModelInfo[]),
+    listModels: (...args) => listModelsImpl(...args),
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1, message: "ok" }) as TestResult),
   };
 }
@@ -196,7 +222,13 @@ beforeEach(async () => {
   ({ db } = await createTestDatabase());
   settingsService = createSettingsService({
     db,
-    registry: createSettingsRegistry([...storageSettingDefinitions, ...telegramSettingDefinitions, ...aiSettingDefinitions, ...searchSettingDefinitions]),
+    registry: createSettingsRegistry([
+      ...storageSettingDefinitions,
+      ...telegramSettingDefinitions,
+      ...aiSettingDefinitions,
+      ...searchSettingDefinitions,
+      ...assistantSettingDefinitions,
+    ]),
     config: { settingsEncryptionKey: "22".repeat(32), env: { DOCUMENT_STORAGE_ROOT: root } },
   });
   const storageService = createStorageService({ settingsService, countDocuments: async () => 0 });
@@ -205,6 +237,7 @@ beforeEach(async () => {
   // Not configured by default (no ai.model.chat), so a test that never touches the
   // assistant gets the same graceful "no model configured" path production would.
   streamChatImpl = vi.fn(async () => asyncChatPartsOf(["Okay."]));
+  listModelsImpl = vi.fn(async () => [] as ModelInfo[]);
   const adapter = fakeChatAdapter();
   const aiService = createAiService({
     settingsService,
@@ -213,6 +246,7 @@ beforeEach(async () => {
   });
   const searchService = createSearchService({ db, aiService, settingsService });
   chatService = createChatService({ db, aiService, searchService });
+  assistantService = createAssistantService({ chatService, documentsService, aiService, settingsService });
 });
 
 afterEach(() => rm(root, { recursive: true, force: true }));
@@ -233,6 +267,7 @@ function buildService(
     settingsService,
     documentsService,
     chatService,
+    assistantService,
     getUserId: async () => userId,
     clientFactory: () => client,
     fetchLinkPage,
@@ -470,7 +505,7 @@ describe("telegram service", () => {
     expect(sent).toHaveLength(1);
   });
 
-  it("files /note as a document, the same way plain text used to", async () => {
+  it("files /note as a document, the same way plain text used to, with no model call at all", async () => {
     await settingsService.set(userId, { "telegram.botToken": "111:token" });
     await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
     const { client, sent } = fakeTelegram({
@@ -483,6 +518,20 @@ describe("telegram service", () => {
     const documents = await documentsService.list({ userId });
     expect(documents.map((d) => d.name)).toContain("buy milk.txt");
     expect(sent[0]?.text).toMatch(/got it/i);
+    expect(streamChatImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not create a chat session for a user who only ever sends /note", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    const { client } = fakeTelegram({
+      batches: [[updateWithCommand({ updateId: 1, fromId: PAIRED_ID, command: "/note", argument: "buy milk" })]],
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(await chatService.listSessions(userId)).toHaveLength(0);
   });
 
   it("asks for the note text when /note arrives with nothing after it", async () => {
@@ -596,6 +645,7 @@ describe("telegram service", () => {
       settingsService,
       documentsService,
       chatService,
+      assistantService,
       getUserId: async () => userId,
       clientFactory: () => client,
       fetchLinkPage: fetchLinkPageNotConfigured,
@@ -626,10 +676,10 @@ describe("telegram service, the assistant", () => {
     await settingsService.setInternal(userId, "telegram.noteMigrationNoticeSent", true);
   }
 
-  it("answers a question about a document, and says which one it used", async () => {
+  it("answers a document question by choosing answerFromDocuments, and names what it used", async () => {
     await pairAndConfigureChat();
     await uploadWithChunk("lease.txt", "The lease renews on March 1st.");
-    streamChatImpl = vi.fn(async () => asyncChatPartsOf(["The lease renews March 1st [1]."]));
+    streamChatImpl = toolThenText({ tool: "answerFromDocuments", args: {}, text: "The lease renews March 1st [1]." });
     const { client, sent } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "when does my lease renew?" })]] });
     const telegram = buildService(client);
 
@@ -639,6 +689,58 @@ describe("telegram service, the assistant", () => {
     expect(sent[0]?.text).toContain("The lease renews March 1st");
     expect(sent[0]?.text).toContain("lease.txt");
     expect(sent[0]?.text).not.toContain("[1]");
+  });
+
+  it("searches the web when the model chooses it, without the user typing /web", async () => {
+    await pairAndConfigureChat();
+    streamChatImpl = toolThenText({
+      tool: "searchWeb",
+      args: { question: "weather in ankara tomorrow" },
+      text: "Sunny and 22 degrees in Ankara tomorrow.",
+    });
+    const { client, sent } = fakeTelegram({
+      batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "what's the weather in ankara tomorrow" })]],
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toContain("Sunny and 22 degrees");
+    expect(sent[0]?.text).toMatch(/web/i);
+  });
+
+  it("asks one short question back when the model chooses askUser", async () => {
+    await pairAndConfigureChat();
+    streamChatImpl = vi.fn(async () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "toolCall" as const, id: "call_1", name: "askUser", arguments: { question: "Should I file this under Finance or Personal" } };
+      },
+    }));
+    const { client, sent } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "sort this out" })]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toBe("Should I file this under Finance or Personal?");
+  });
+
+  it("tells the user once when the chat model cannot use tools, and answers anyway", async () => {
+    await pairAndConfigureChat();
+    listModelsImpl = vi.fn(async () => [{ id: "test-chat-model", label: "Test", supportsTools: false }] as ModelInfo[]);
+    await uploadWithChunk("invoice.txt", "Rent is $1200 per month.");
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf(["The rent is $1200 [1]."]));
+    const { client, sent } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "what is my rent" })]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toMatch(/tools/i);
+    expect(sent[0]?.text).toContain("The rent is $1200");
+    expect(sent[0]?.text).toContain("invoice.txt");
+    expect(streamChatImpl).toHaveBeenCalledTimes(1);
   });
 
   it("answers an ordinary question without documents rather than refusing", async () => {
@@ -1137,6 +1239,7 @@ describe("telegram service, background loops", () => {
       settingsService,
       documentsService,
       chatService,
+      assistantService,
       getUserId: async () => userId,
       clientFactory: () => client,
       fetchLinkPage: fetchLinkPageNotConfigured,

@@ -175,9 +175,8 @@ export function createServer({
   const summaryService = createSummaryService({ db, aiService });
   const fieldsRepository = createFieldsRepository({ db });
   const chatService = createChatService({ db, aiService, searchService });
-  // No route yet and no caller yet: Telegram moves onto runTurn and runCommand in the
-  // next task. allowWritingTools stays at its default of false (Decision 1 in the
-  // assistant triage plan) until chat_sessions.pending_tool_call exists.
+  // allowWritingTools stays at its default of false (Decision 1 in the assistant
+  // triage plan) until chat_sessions.pending_tool_call exists.
   const assistantService = createAssistantService({ chatService, documentsService, aiService, settingsService });
   const jobRunner = createJobRunner({
     db,
@@ -193,6 +192,7 @@ export function createServer({
     settingsService,
     documentsService,
     chatService,
+    assistantService,
     getUserId: async () => {
       const [row] = await db.select({ id: authUserTable.id }).from(authUserTable).limit(1);
       return row?.id;
