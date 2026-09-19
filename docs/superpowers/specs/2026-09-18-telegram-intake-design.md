@@ -1,8 +1,8 @@
 # Telegram intake
 
 Date: 2026-09-18
-Feature list item: #15 (Telegram intake). Item #19, the smart bot that answers questions
-and sets reminders, is a later feature and is out of scope here.
+Feature list item: #15 (Telegram intake). Item #19, the assistant that answers questions,
+holds a conversation and reaches the web, is a separate spec that builds on this one.
 
 ## Why
 
@@ -22,7 +22,7 @@ at sending files. A personal bot turns it into a second front door.
 
 Notes with sections (#16) and the software tools collection (#14) do not exist yet. Rather
 than build either as a side effect of this feature, all three inputs become documents and
-run the pipeline that already exists: extraction, summary, smart fields, rules, sorting.
+run the pipeline that already exists.
 
 | Input | Becomes |
 |-------|---------|
@@ -30,164 +30,225 @@ run the pipeline that already exists: extraction, summary, smart fields, rules, 
 | Text message | A `text/plain` document holding the message, titled by the summary model |
 | Link | A document holding the fetched page's readable text, with the source URL kept |
 
-When #14 and #16 land, the router chooses a different destination for text and links, and
-nothing else about this feature changes. That is the reason the routing decision lives in
-one small function rather than being spread through the poller.
+Verified against the code: `documentsService.upload` takes a plain `Readable`, a name and a
+mime type with no file-specific assumptions, and `text.extractor.ts` already handles
+`text/plain`, so a text note needs no new extractor. When #14 and #16 land, the router
+chooses a different destination and nothing else here changes.
+
+## The one database change
+
+**Approved by the user on 2026-09-18.** One column on `documents`:
+
+```
+source text not null default 'upload'
+```
+
+Values: `upload`, `telegram`, `email`. Every existing row keeps the default, so the
+migration is additive and needs no data path.
+
+It exists because the second reply must fire only for documents the bot created, and there
+is nowhere to record that today. It was chosen over a Telegram-only flag because email
+intake (#18) needs exactly the same thing next, and because "show me everything that
+arrived by email" is a filter worth having later. The chat id is deliberately not stored:
+pairing allows exactly one Telegram user, so there is only ever one chat to reply into.
 
 ## Design
 
-### 1. Transport: long polling, inside the server process
+### 1. Transport: long polling, in its own loop
 
 The bot uses `getUpdates` long polling, not a webhook. A webhook needs a stable public
 HTTPS address; this project's remote access is a Cloudflare quick tunnel whose hostname
-changes on every restart, so a webhook would break constantly. Polling also works with no
-inbound connectivity at all.
+changes on every restart. Polling also works with no inbound connectivity at all.
 
-The poller is a loop owned by the telegram module, started at server boot when a bot token
-is configured, and stopped when the token is cleared. It requests updates with a 30 second
-timeout, handles each update, and records the last handled `update_id` so a restart neither
-replays nor skips. On a network error it backs off (1s, doubling to a 60s ceiling) and
-keeps trying, because the phone is expected to work whether or not the desktop's network
-blipped.
+**This is a deliberate departure from the jobs table**, which `DOCMIND-DESIGN.md`
+anticipates using for an `email_poll` job type. A `getUpdates` call holds a connection open
+for up to 30 seconds, which does not fit the runner's discrete-task-with-retries model.
+Telegram polling is therefore its own loop, in the shape of `jobs.runner.ts` but owned by
+the telegram module. The design doc gains a line saying so.
 
-Only one poller may run: Telegram rejects concurrent `getUpdates` for the same token with
-a 409, which would otherwise show up as a confusing error loop. The module keeps a single
-instance and logs a clear message if a second start is attempted.
+**How the loop learns about settings changes:** it re-reads `telegram.botToken` at the top
+of every cycle. There is no post-write hook in the settings service (only `beforeSet`, used
+today for AI model validation), and inventing a push mechanism for one consumer is not
+worth it. With no token the loop idles; when a token appears it starts polling; when the
+token is cleared it stops. The cost is up to one cycle of delay after saving the token.
+
+Only one poller may run: Telegram answers a second concurrent `getUpdates` for the same
+token with a 409. The module holds a single instance and refuses to start twice.
+
+The last handled `update_id` is stored in `telegram.lastUpdateId` so a restart neither
+replays nor skips. On a network error the loop backs off from 1s to a 60s ceiling.
 
 ### 2. Pairing
 
-`telegram.botToken` (secret) is pasted into Settings by the user, taken from BotFather.
+`telegram.botToken` (secret) is pasted into Settings by the user, from BotFather.
 
 `telegram.pairingCode` is generated by DocMind and shown in Settings: six characters, no
-ambiguous ones. The user sends it to the bot as an ordinary message. The bot compares it,
-stores the sender's Telegram user id in `telegram.pairedUserId`, clears the code, and
-replies that pairing succeeded.
+ambiguous ones. The user sends it to the bot as an ordinary message. The bot compares it
+with a timing safe comparison, stores the sender's Telegram user id in
+`telegram.pairedUserId`, clears the code, and replies that pairing succeeded.
 
 Until a pairing exists, every message except a correct code is ignored with no reply, so an
 unpaired bot leaks nothing about its purpose. After pairing, messages from any other user
-id are ignored silently for the same reason. Settings offers Unpair, which clears the id
-and issues a fresh code.
+id are ignored silently. Settings offers Unpair, which clears the id and issues a new code.
 
-The code is compared with a timing safe comparison and is single use. It is not a secret in
-the strong sense, since possession of the bot token is the real gate, but a code that can
-be brute forced over an evening would make the bot bindable by anyone who learned the token
-existed.
+### 3. Turning an update into an intent
 
-### 3. Receiving a message
+A pure function in `telegram.models.ts` maps a validated update to one of four intents:
+pairing code, file, text, or link. The raw update JSON is parsed with valibot in
+`telegram.schemas.ts` first, because it is an external boundary like any other.
 
-Each update is turned into one of four intents by a pure function in `telegram.models.ts`:
-pairing code, file, text, or link. The rules:
-
-- A message with `document`, `photo`, `video`, or `audio` is a file. A photo arrives as
+- A message carrying `document`, `photo`, `video` or `audio` is a file. A photo arrives in
   several sizes; the largest is taken.
-- A message whose text is exactly one URL is a link.
+- A message is a **link** when Telegram's own `entities` array marks the whole message as a
+  single `url` or `text_link`. Telegram already parses URLs, so using `entities` rather
+  than a regex avoids disagreeing with what the user saw highlighted in their client.
 - Any other non-empty text is a text note, unless no pairing exists and it matches the
   pairing code.
-- A media group (several photos sent at once) arrives as several updates and produces
-  several documents. No grouping is attempted.
+- A media group arrives as several updates and produces several documents. No grouping.
 
 Anything else (stickers, locations, edits, channel posts) is ignored.
 
 ### 4. Files
 
 The file is downloaded through `getFile` and streamed into the existing upload usecase, so
-storage, deduplication, extraction and sorting behave exactly as they do for a browser
-upload. The document's name is the Telegram filename when there is one, otherwise a name
-built from the date and the message id.
+storage, deduplication, extraction and sorting behave exactly as for a browser upload. The
+name is the Telegram filename when there is one, otherwise one built from the date and the
+message id.
 
-**Telegram caps bot downloads at 20 MB.** Above that, `getFile` fails and no workaround
-exists short of running a local Bot API server. The bot replies saying the file is too
-large for Telegram and to upload it in the app instead, naming the 20 MB limit, because the
-alternative is a silent failure the user cannot diagnose.
+**Telegram caps bot downloads at 20 MB.** Above that `getFile` fails and there is no
+workaround short of running a local Bot API server. The bot replies naming the limit and
+suggesting the app, because the alternative is a failure the user cannot diagnose.
 
-**A photo sent as a photo is recompressed by Telegram**, which costs OCR accuracy on
-receipts and forms. The same image sent as a file keeps the original. The bot mentions this
-once, on the first compressed photo it ever receives, and never again: a hint that repeats
-on every receipt becomes noise.
+**A photo sent as a photo is recompressed by Telegram**, costing OCR accuracy on receipts
+and forms. The same image sent as a file keeps the original. The bot says this once, on the
+first compressed photo it ever receives, and never again.
+
+**A duplicate is not silence.** `documentsService.upload` dedupes by content hash and
+returns the existing document without enqueueing any jobs, so a re-sent file would
+otherwise get "processing" and then nothing forever. The bot detects the duplicate from the
+upload result and replies that it already has this one, with a link to it.
 
 ### 5. Text
 
-The message becomes a `text/plain` document whose extracted text is the message itself, so
-the extraction step has nothing to do and the summary model titles it like any other
-document. Until the title arrives, the document is named from its first line, truncated.
+The message becomes a `text/plain` document whose content is the message itself. The
+summary model titles it like any other document; until then it is named from its first
+line, truncated.
 
 ### 6. Links
 
-A message that is exactly one URL is fetched server side and stored as a document
-containing the page's readable text, with the source URL kept in the document so chat and
-search can cite where it came from.
+A link message is fetched server side and stored as a document containing the page's
+readable text, with the source URL kept.
+
+**Readable text extraction uses `@mozilla/readability` with `linkedom`.** Readability is
+the algorithm every reader mode uses, and linkedom parses HTML into a DOM at a fraction of
+jsdom's weight. Both are new dependencies, which is the reason this is named here rather
+than left as "extract the readable text".
 
 Fetching a user-supplied URL from the server is the one genuinely dangerous part of this
 feature, so the fetch is guarded:
 
 - `http` and `https` only. Every other scheme is refused.
-- The resolved address must be public. Loopback, link local, and the private ranges are
-  refused, checked after DNS resolution rather than by inspecting the hostname, so
-  `localhost.attacker.com` resolving to 127.0.0.1 does not slip through.
-- Redirects are followed at most three times and each hop is re-checked against the same
-  rule, since the first response is free to redirect to an internal address.
-- The response is capped at 10 MB and 20 seconds, and only `text/html` and `text/plain`
-  are read as pages. Anything else is refused with a reply saying so.
+- **The resolved address must be public, and the connection must go to the address that was
+  checked.** Resolving the hostname, validating the IP, then calling `fetch(url)` would
+  resolve a second time at connect and reopen the rebinding hole it was meant to close. The
+  guard therefore supplies a custom `lookup` to an undici `Agent` (`connect.lookup`), so
+  resolution happens once, is validated, and the socket is pinned to that address.
+  Loopback, link local, unique local and the private ranges are all refused.
+- Redirects are followed at most three times, each hop re-checked the same way, because the
+  first response is free to redirect inward.
+- The response is capped at 10 MB and 20 seconds, and only `text/html` and `text/plain` are
+  read. Anything else is refused with a reply saying so.
 
-This is the one place in DocMind where an outside string causes an outbound request, which
-is why the guard is spelled out here rather than left to the implementer.
+### 7. The second reply
 
-### 7. Replies
+Jobs do not form a chain. Verified in `extraction.usecases.ts`: after extraction succeeds,
+`rules`, `embedding` and `summarize` are enqueued as three independent jobs in one
+transaction, and `jobs.runner.ts` has no completion hook of any kind. So there is no "end
+of the chain" to hang a notification on.
 
-Two, as asked for.
+Instead the telegram module watches its own documents. Each cycle it looks for documents
+with `source = 'telegram'` that have not been reported yet and whose `summaryStatus` and
+`ruleStatus` have both reached a terminal state (`done` or `failed`), and sends one message
+naming the title, category and tags, with a link into the app. `embeddingStatus` is
+deliberately not part of the condition: embedding affects search, not anything the reply
+says.
 
-The first is immediate: "Got it, processing." It is sent before any slow work so the phone
-shows something within a second.
+This keeps the coupling one way. The rules and summary modules know nothing about Telegram;
+the telegram module reads two status columns it does not own. A document whose statuses end
+in `failed` still gets a message, naming the stage that failed, because silence is the
+worst outcome on a phone.
 
-The second comes when the document finishes sorting, and carries what was decided: the
-title, the category, the tags, and a link to the document in the app. The document already
-moves through a job chain (extraction, then summary and rules), so this is a notification
-at the end of that chain rather than a new pipeline. Documents that arrived any other way
-produce no Telegram message, so the notifier only fires for documents the bot created,
-which means the document needs to record that it came from Telegram and from which chat.
+"Not reported yet" is tracked in memory for the life of the process, with the timestamp of
+the last report stored in settings so a restart does not re-announce everything: on start
+the loop only considers documents created after the last reported one.
 
-A failure at any stage also replies, saying which stage failed in plain words. The
-alternative, silence, is the worst outcome for a phone-first path: the user cannot tell the
-difference between a slow model and a lost document.
+### 8. Settings and routes
 
-### 8. Settings
+| Key | Secret | Internal | Purpose |
+|-----|--------|----------|---------|
+| `telegram.botToken` | yes | no | From BotFather |
+| `telegram.pairedUserId` | no | yes | The one Telegram user allowed to use this bot |
+| `telegram.pairingCode` | no | yes | Current code, cleared once used |
+| `telegram.lastUpdateId` | no | yes | Poll cursor |
+| `telegram.lastReportedAt` | no | yes | Newest document already announced |
 
-| Key | Secret | Purpose |
-|-----|--------|---------|
-| `telegram.botToken` | yes | From BotFather |
-| `telegram.pairedUserId` | no | The one Telegram user allowed to use this bot |
-| `telegram.pairingCode` | no | Current code, cleared once used |
-| `telegram.lastUpdateId` | internal | Poll cursor, never shown |
+Everything except the token is `internal`, so the auto-generated settings form does not
+render a pairing code as an editable text box. The telegram module therefore needs its own
+routes for the things the form cannot do:
 
-A Telegram tab (or a section on an existing settings tab) shows the token field, the
-pairing state, the code when unpaired, and an Unpair action, with a setup guide covering
-BotFather: `/newbot`, pick a name, copy the token, paste it here, send the code.
+- `GET /api/telegram/status` returns whether a token is set, whether it is paired, the
+  paired account's display name, and the current pairing code when unpaired.
+- `POST /api/telegram/pairing-code` issues a fresh code.
+- `POST /api/telegram/unpair` clears the pairing.
 
-### 9. Testing
+The Settings page gains a Telegram section: the token field, the pairing state, the code,
+an Unpair action, and a setup guide covering BotFather (`/newbot`, pick a name, copy the
+token, paste it here, send the code).
 
-- `telegram.models.ts` is pure and unit tested: update to intent, for every supported
-  message shape and the ignored ones, plus the URL guard's address rules including a
-  hostname that resolves to a private address and a redirect chain that turns inward.
-- The poller is tested against a fake Telegram transport, not the network: an update with a
-  file produces a document, an update from a wrong user id produces nothing, an update that
-  repeats an already handled id is skipped, and a poll failure backs off and recovers.
-- The two replies are asserted by capturing what the fake transport was asked to send.
-- No test performs a network call, and no test needs a bot token.
+### 9. Module layout
+
+`apps/server/src/modules/telegram/`: `telegram.schemas.ts` (valibot over the raw update),
+`telegram.models.ts` (pure update to intent, pure reply text), `telegram.client.ts` (the
+Bot API calls), `telegram.usecases.ts` (the loop, intake, the notifier),
+`telegram.settings.ts`, `telegram.routes.ts`. No repository: the only table it reads is
+`documents`, through that module.
+
+### 10. Testing
+
+- `telegram.models.ts` unit tested: every supported message shape and the ignored ones,
+  the entities-based link rule, and the reply text.
+- The URL guard unit tested: private and loopback addresses refused, a hostname resolving
+  to a private address refused, a redirect chain turning inward refused, an oversized or
+  wrong-typed response refused.
+- The loop tested against a fake transport: a file update produces a document, a wrong user
+  id produces nothing, an already handled update id is skipped, a failure backs off and
+  recovers, a duplicate file gets the duplicate reply.
+- The notifier tested by driving a document's statuses to terminal and asserting exactly one
+  message, and that a browser-uploaded document produces none.
+- No test performs a network call and none needs a bot token.
+
+## Delivery: three plans
+
+Split so the open questions in the riskiest parts cannot stall the rest.
+
+1. **Core intake.** The migration, transport, pairing, settings and routes, files and text,
+   the first reply, the duplicate reply. Usable on its own.
+2. **Links.** The fetch guard and readable text extraction, isolated because it is the
+   security-sensitive part and deserves its own review.
+3. **The second reply.** The notifier loop over `source = 'telegram'` documents.
 
 ## Out of scope
 
-- Item #19, the smart bot: questions, reminders, digests.
+- Item #19: conversation, questions, reminders, digests, web access.
 - Voice notes (#17), which need the transcription slot.
 - Grouping a media group into one document.
-- Outbound notifications unrelated to intake, such as expiry nudges (#32).
 
 ## Risks
 
-- **The 20 MB ceiling** is Telegram's, not ours, and it will surprise the user at some
-  point. The reply text is the mitigation.
-- **A long poll holds a connection open.** If the process is killed without closing it,
-  Telegram may hold the next `getUpdates` briefly. Harmless, but it makes a restart look
-  slow for a few seconds.
-- **The bot token is a bearer credential.** Anyone holding it can read everything sent to
-  the bot. It is stored encrypted like every other secret, and pairing means a leaked token
-  still cannot inject documents, since messages from an unpaired id are ignored.
+- **The 20 MB ceiling** is Telegram's and will surprise the user eventually. The reply is
+  the mitigation.
+- **The bot token is a bearer credential.** Stored encrypted like every secret. Pairing
+  means a leaked token still cannot inject documents, since an unpaired id is ignored.
+- **The notifier polls.** One extra query per cycle against an indexed status pair, only
+  while a token is configured. Cheap, but it is a second loop in the process and should be
+  reviewed if a third ever appears.
