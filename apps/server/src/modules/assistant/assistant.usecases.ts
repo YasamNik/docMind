@@ -14,6 +14,7 @@ import {
   assistantTroubleReply,
   buildAssistantPrompt,
   commandTurnText,
+  DEFAULT_INSTRUCTIONS,
   MAX_INSTRUCTIONS_CHARS,
   pushInstructionVersion,
   toolsUnsupportedNotice,
@@ -82,6 +83,7 @@ export function createAssistantService({
       source: resolved.source,
       maxChars: MAX_INSTRUCTIONS_CHARS,
       warnChars: WARN_INSTRUCTIONS_CHARS,
+      shippedDefault: DEFAULT_INSTRUCTIONS,
       history,
     };
   }

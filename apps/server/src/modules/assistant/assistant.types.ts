@@ -22,6 +22,12 @@ export type InstructionsView = {
   source: SettingSource;
   maxChars: number;
   warnChars: number;
+  // The shipped default document's own text, constant across every user and every
+  // call, returned so a client can offer "reset to the shipped default" without
+  // holding a second copy of DEFAULT_INSTRUCTIONS that could drift from this one.
+  // Named apart from body, which is the live document, so the two can never be
+  // confused at a call site.
+  shippedDefault: string;
   history: InstructionVersion[];
 };
 

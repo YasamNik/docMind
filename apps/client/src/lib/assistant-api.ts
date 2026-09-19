@@ -7,6 +7,9 @@ export type InstructionsView = {
   source: string;
   maxChars: number;
   warnChars: number;
+  // The shipped default document's own text, so the tab can offer a reset without
+  // holding its own copy that could drift from the server's.
+  shippedDefault: string;
   history: InstructionVersion[];
 };
 

@@ -41,6 +41,7 @@ describe("assistant instructions routes", () => {
     expect(body.source).toBe("default");
     expect(body.maxChars).toBe(MAX_INSTRUCTIONS_CHARS);
     expect(body.warnChars).toBe(WARN_INSTRUCTIONS_CHARS);
+    expect(body.shippedDefault).toBe(DEFAULT_INSTRUCTIONS);
     expect(body.history).toEqual([]);
   });
 
@@ -57,6 +58,7 @@ describe("assistant instructions routes", () => {
     const body = await res.json();
     expect(body.body).toBe("Keep replies short.");
     expect(body.source).toBe("db");
+    expect(body.shippedDefault).toBe(DEFAULT_INSTRUCTIONS);
     expect(body.history).toHaveLength(1);
     expect(body.history[0].body).toBe(DEFAULT_INSTRUCTIONS);
   });

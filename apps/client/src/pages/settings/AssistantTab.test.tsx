@@ -22,12 +22,15 @@ vi.mock("@/lib/assistant-api", () => ({
   },
 }));
 
+const SHIPPED_DEFAULT = "The shipped default document, exactly as the server sends it.";
+
 function baseView(): InstructionsView {
   return {
     body: "Keep replies short.",
     source: "db",
     maxChars: 8000,
     warnChars: 6000,
+    shippedDefault: SHIPPED_DEFAULT,
     history: [
       { body: "An older version of my instructions.", replacedAt: "2026-09-18T14:02:00.000Z" },
       { body: "The very first version I wrote.", replacedAt: "2026-09-10T09:00:00.000Z" },
@@ -138,6 +141,50 @@ describe("AssistantTab", () => {
         "Your instructions are 8001 characters, over the 8000 character limit. Shorten them and save again.",
       ),
     );
+  });
+
+  it("fills the editor with the shipped default without saving anything", async () => {
+    renderTab();
+    const textarea = await screen.findByDisplayValue("Keep replies short.");
+
+    fireEvent.click(screen.getByRole("button", { name: /reset to the shipped default/i }));
+
+    expect(textarea).toHaveDisplayValue(SHIPPED_DEFAULT);
+    expect(saveInstructions).not.toHaveBeenCalled();
+  });
+
+  it("keeps the previous text recoverable in history once a reset is saved", async () => {
+    saveInstructions.mockResolvedValueOnce({
+      ...baseView(),
+      body: SHIPPED_DEFAULT,
+      history: [{ body: "Keep replies short.", replacedAt: "2026-09-19T10:00:00.000Z" }, ...baseView().history],
+    });
+    renderTab();
+    await screen.findByDisplayValue("Keep replies short.");
+
+    fireEvent.click(screen.getByRole("button", { name: /reset to the shipped default/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(saveInstructions).toHaveBeenCalledWith(SHIPPED_DEFAULT));
+    expect(await screen.findByText(`In use until ${formatReplacedAt("2026-09-19T10:00:00.000Z")}`)).toBeInTheDocument();
+  });
+
+  it("disables the reset control once the editor already holds the shipped default", async () => {
+    instructions.mockResolvedValueOnce({ ...baseView(), body: SHIPPED_DEFAULT });
+    renderTab();
+    await screen.findByDisplayValue(SHIPPED_DEFAULT);
+
+    expect(screen.getByRole("button", { name: /reset to the shipped default/i })).toBeDisabled();
+  });
+
+  it("re-disables reset once an edit brings the text back to the shipped default", async () => {
+    renderTab();
+    const textarea = await screen.findByDisplayValue("Keep replies short.");
+    const resetButton = screen.getByRole("button", { name: /reset to the shipped default/i });
+    expect(resetButton).not.toBeDisabled();
+
+    fireEvent.change(textarea, { target: { value: SHIPPED_DEFAULT } });
+    expect(resetButton).toBeDisabled();
   });
 
   it("lists previous versions newest first, with when each stopped being used", async () => {

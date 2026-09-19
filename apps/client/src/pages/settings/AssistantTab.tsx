@@ -58,6 +58,7 @@ export function AssistantTab() {
   const length = draft.length;
   const overCap = length > data.maxChars;
   const unchanged = draft === data.body;
+  const isShippedDefault = draft === data.shippedDefault;
 
   let counterClass = "text-muted-foreground";
   if (overCap) counterClass = "text-destructive";
@@ -94,9 +95,22 @@ export function AssistantTab() {
               </p>
             )}
           </div>
-          <Button onClick={() => save.mutate(draft)} disabled={unchanged || overCap || save.isPending}>
-            {save.isPending ? "Saving..." : "Save"}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={() => save.mutate(draft)} disabled={unchanged || overCap || save.isPending}>
+              {save.isPending ? "Saving..." : "Save"}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setDraft(data.shippedDefault)}
+              disabled={isShippedDefault}
+            >
+              Reset to the shipped default
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Reset only fills the editor with the shipped default. It does not change anything until you save,
+            and saving it is an ordinary save, so what you have now becomes a version you can restore later.
+          </p>
         </CardContent>
       </Card>
 
