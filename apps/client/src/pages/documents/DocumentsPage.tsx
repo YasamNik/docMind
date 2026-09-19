@@ -9,6 +9,7 @@ import { UploadDropzone } from "@/components/documents/UploadDropzone";
 import { DATE_FILTER_OPTIONS, dateFilterBadgeLabel, matchesDateFilter, type DateFilterValue } from "@/lib/date-filter";
 import { documentsApi, type DocumentListFilters, type DocumentRow } from "@/lib/documents-api";
 import { formatBytes, formatDate, formatDocumentDate } from "@/lib/format";
+import { storageApi } from "@/lib/storage-api";
 import { categoriesApi, tagsApi } from "@/lib/tags-api";
 
 const VIEW_LABELS: Record<string, string> = { needs_review: "Needs review", trash: "Trash" };
@@ -234,6 +235,9 @@ export function DocumentsPage() {
 
   const { data: categories = [] } = useQuery({ queryKey: ["categories"], queryFn: categoriesApi.list });
   const { data: tags = [] } = useQuery({ queryKey: ["tags"], queryFn: tagsApi.list });
+  const { data: storageDrivers = [] } = useQuery({ queryKey: ["storage-drivers"], queryFn: () => storageApi.list() });
+  const activeStorage = storageDrivers.find((d) => d.active) ?? null;
+  const otherStorageDocumentCount = storageDrivers.filter((d) => !d.active).reduce((sum, d) => sum + d.documentCount, 0);
 
   const selectedIds = [...selected];
   const invalidateAndClear = () => { queryClient.invalidateQueries({ queryKey: ["documents"] }); setSelected(new Set()); };
@@ -281,6 +285,14 @@ export function DocumentsPage() {
           </Link>
         )}
       </div>
+      {activeStorage && (
+        <p className="text-sm text-muted-foreground">
+          Showing documents on {activeStorage.label}
+          {otherStorageDocumentCount > 0 && (
+            <> · {otherStorageDocumentCount} document{otherStorageDocumentCount === 1 ? "" : "s"} on other storages</>
+          )}
+        </p>
+      )}
       <UploadDropzone onUploaded={() => queryClient.invalidateQueries({ queryKey: ["documents"] })} />
       {selected.size > 0 && filters.view !== "trash" && (
         <div className="flex items-center gap-2 rounded-full bg-primary/10 px-4 py-2 text-sm">

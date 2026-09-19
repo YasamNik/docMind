@@ -115,6 +115,13 @@ vi.mock("@/lib/documents-api", () => ({
   documentsApi: { list: (filters?: unknown) => listMock(filters) },
 }));
 vi.mock("@/components/documents/UploadDropzone", () => ({ UploadDropzone: () => null }));
+const storageDriversMock = vi.fn(async () => [
+  { id: "local", label: "Local filesystem", guide: { title: "", intro: "", steps: [], notes: [] }, configured: true, documentCount: 2, active: true },
+  { id: "s3", label: "Amazon S3", guide: { title: "", intro: "", steps: [], notes: [] }, configured: true, documentCount: 5, active: false },
+]);
+vi.mock("@/lib/storage-api", () => ({
+  storageApi: { list: () => storageDriversMock() },
+}));
 const fieldValuesMock = vi.fn(async (_key: string) => ["invoice", "receipt"]);
 vi.mock("@/lib/fields-api", () => ({
   fieldsApi: { values: (key: string) => fieldValuesMock(key) },
@@ -268,5 +275,21 @@ describe("DocumentsPage", () => {
     const future = await screen.findByText("Mar 1, 2099");
     expect(future.closest("td")).not.toHaveTextContent("expired");
     expect(future.closest("td")?.className).not.toContain("text-destructive");
+  });
+
+  it("shows which storage is active and how many documents live elsewhere", async () => {
+    renderAt("/documents");
+    expect(await screen.findByText(/Showing documents on Local filesystem/)).toBeInTheDocument();
+    expect(screen.getByText(/5 documents on other storages/)).toBeInTheDocument();
+  });
+
+  it("does not mention other storages when every document is on the active one", async () => {
+    storageDriversMock.mockResolvedValueOnce([
+      { id: "local", label: "Local filesystem", guide: { title: "", intro: "", steps: [], notes: [] }, configured: true, documentCount: 2, active: true },
+      { id: "s3", label: "Amazon S3", guide: { title: "", intro: "", steps: [], notes: [] }, configured: false, documentCount: 0, active: false },
+    ]);
+    renderAt("/documents");
+    expect(await screen.findByText("Showing documents on Local filesystem")).toBeInTheDocument();
+    expect(screen.queryByText(/on other storages/)).not.toBeInTheDocument();
   });
 });
