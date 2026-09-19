@@ -363,7 +363,7 @@ export function SortingPage() {
             )}
           </div>
           <DialogFooter>
-            <p className="text-xs text-muted-foreground">Create these as tags, categories, or types on the Tags page, then enable auto-sorting.</p>
+            <p className="text-xs text-muted-foreground">Create these as tags and categories on their own pages, then enable auto-sorting.</p>
           </DialogFooter>
         </DialogContent>
       </Dialog>

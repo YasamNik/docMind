@@ -36,11 +36,12 @@ vi.mock("@/lib/documents-api", () => ({ documentsApi: { list: () => listDocument
 const backfillFn = vi.fn(async () => ({ enqueued: 2, skipped: 1 }));
 vi.mock("@/lib/fields-api", () => ({ fieldsApi: { backfill: () => backfillFn() } }));
 
+const suggestFn = vi.fn(async () => ({ suggestions: [{ name: "Legal", type: "tag", description: "Legal documents", reasoning: "Documents mention legal." }] }));
 vi.mock("@/lib/sort-api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/sort-api")>("@/lib/sort-api");
   return {
     ...actual,
-    sortApi: { list: () => listProposals(), count: (scope: string) => countFn(scope), run: (t: string, id: string, scope: string) => runFn(t, id, scope), apply: (accept: string[], dismiss: string[]) => applyFn(accept, dismiss) },
+    sortApi: { list: () => listProposals(), count: (scope: string) => countFn(scope), run: (t: string, id: string, scope: string) => runFn(t, id, scope), apply: (accept: string[], dismiss: string[]) => applyFn(accept, dismiss), suggest: () => suggestFn() },
   };
 });
 
@@ -169,5 +170,13 @@ describe("SortingPage", () => {
     await waitFor(() => expect(screen.getByText("Accept selected").closest("button")).toBeEnabled());
     fireEvent.click(screen.getByText("Accept selected"));
     await waitFor(() => expect(applyFn).toHaveBeenCalledWith(["eval_1"], []));
+  });
+
+  it("shows rule suggestions without promising types or mentioning only the Tags page", async () => {
+    suggestFn.mockResolvedValueOnce({ suggestions: [{ name: "Legal", type: "tag", description: "Legal documents", reasoning: "Documents mention legal." }] });
+    renderPage();
+    fireEvent.click(await screen.findByText("Suggest rules"));
+    expect(await screen.findByText("Rule suggestions")).toBeInTheDocument();
+    expect(screen.getByText(/Create these as tags and categories on their own pages, then enable auto-sorting\./)).toBeInTheDocument();
   });
 });
