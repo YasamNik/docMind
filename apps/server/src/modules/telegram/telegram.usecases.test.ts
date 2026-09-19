@@ -899,6 +899,35 @@ describe("telegram service, the assistant", () => {
     const sessions = await chatService.listSessions(userId);
     expect(sessions.map((s) => s.id)).toContain(newSessionId);
   });
+
+  // End-to-end confirmation of the runHandler fix (assistant.usecases.ts): the same
+  // stale-session recovery above only ever fired for a plain message, since runTurn
+  // rejects outright before any try/catch of its own. A slash command such as /web
+  // runs through runCommand instead, so this proves the whole path still ends in a
+  // real answer and a repaired pointer, not just the one narrow spot the unit-level
+  // regression test in assistant.usecases.test.ts checks directly.
+  it("recovers when the stored chat session was deleted elsewhere, for a /web command too", async () => {
+    await pairAndConfigureChat();
+    await settingsService.set(userId, { "ai.openrouter.apiKey": "sk-or-v1-test", "ai.model.chat": "openrouter://test-chat-model" });
+    await settingsService.setInternal(userId, "telegram.chatSessionId", "session-that-no-longer-exists");
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf(["Around 5 degrees and cloudy in Ottawa today."]));
+    const { client, sent } = fakeTelegram({
+      batches: [[updateWithCommand({ updateId: 1, fromId: PAIRED_ID, command: "/web", argument: "what's the weather in ottawa" })]],
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toContain("Around 5 degrees and cloudy in Ottawa today.");
+    expect(sent[0]?.text).not.toMatch(/not found/i);
+
+    const newSessionId = await settingsService.get<string>(userId, "telegram.chatSessionId");
+    expect(newSessionId).toBeTruthy();
+    expect(newSessionId).not.toBe("session-that-no-longer-exists");
+    const sessions = await chatService.listSessions(userId);
+    expect(sessions.map((s) => s.id)).toContain(newSessionId);
+  });
 });
 
 describe("telegram service, /web", () => {

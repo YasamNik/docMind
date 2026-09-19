@@ -446,6 +446,30 @@ describe("assistant service, runCommand", () => {
     expect(messages[1]?.content).toBe("Sunny and 20C.");
   });
 
+  // Regression test: a /web command on a non-OpenRouter chat model gets its own
+  // plain-English reply from searchWeb's own failure path (registry.ts), not a thrown
+  // error, so runCommand used to still report toolUsed as "searchWeb" for it. Telegram
+  // reads toolUsed to decide whether to append "Searched the web for this." to the
+  // reply (assistantReplyText, telegram.usecases.ts), so a failed search must not
+  // claim the tool ran.
+  it("does not report toolUsed for a /web command whose own search never ran", async () => {
+    const { t, userId } = await setup();
+    await t.services.settingsService.set(userId, { "ai.anthropic.apiKey": "sk-ant-test", "ai.model.chat": "anthropic://claude-sonnet-4-20250514" });
+    const session = await t.services.chatService.createSession({ userId });
+
+    const result = await t.services.assistantService.runCommand({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      tool: "searchWeb",
+      args: { question: "weather today" },
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.reply).toMatch(/openrouter/i);
+    expect(result.toolUsed).toBeNull();
+  });
+
   it("reads recordsTurn, not whether a session happens to exist", async () => {
     const { t, userId } = await setup();
     const session = await t.services.chatService.createSession({ userId });
@@ -529,5 +553,47 @@ describe("assistant service, runCommand", () => {
       "assistant.invalid_arguments",
     );
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  // Regression test: a capability whose own session no longer resolves once used to
+  // come back as an ordinary reply, since runHandler caught every AppError including
+  // chat.session_not_found and turned it into reply text. Nothing here has a
+  // recordsTurn append afterward to catch the same failure a second time, so this is
+  // the direct proof that runHandler itself lets a stale session escape rather than
+  // relying on some other call happening to check the session again.
+  it("lets a stale session escape as a real error, not as reply text a user could read", async () => {
+    const { t, userId } = await setup();
+    const handler = vi.fn(async () => {
+      throw createError({ code: "chat.session_not_found", message: 'Chat session "sess_gone" not found', status: 404 });
+    });
+    const staleSessionCapability: Capability = {
+      name: "staleSessionTool",
+      description: "Always hits a session that no longer resolves, for testing runCommand's own error handling.",
+      schema: v.object({}),
+      writes: false,
+      destructive: false,
+      recordsTurn: false,
+      handler,
+    };
+    const assistantService = createAssistantService({
+      chatService: t.services.chatService,
+      documentsService: t.services.documentsService,
+      aiService: t.services.aiService,
+      settingsService: t.services.settingsService,
+      capabilities: { staleSessionTool: staleSessionCapability },
+    });
+
+    await expectAppError(
+      () =>
+        assistantService.runCommand({
+          userId,
+          sessionId: "sess_gone",
+          surface: "telegram",
+          tool: "staleSessionTool",
+          args: {},
+          startNewThread: vi.fn(async () => {}),
+        }),
+      "chat.session_not_found",
+    );
   });
 });

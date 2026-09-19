@@ -24,7 +24,12 @@ export type ToolContext = {
   startNewThread: () => Promise<void>;
 };
 
-export type ToolResult = { reply: string; citations: Citation[] };
+// failed marks a reply that came from a handler's own graceful failure path rather
+// than the tool actually doing its job, such as searchWeb's own plain-English answer
+// when the chat model has no web search (assistant.registry.ts). Left unset on a real
+// result. runCommand reads it to decide whether toolUsed should name the tool at all
+// (assistant.usecases.ts), so a failure never gets credited as a success downstream.
+export type ToolResult = { reply: string; citations: Citation[]; failed?: boolean };
 
 export type Capability = {
   name: string;

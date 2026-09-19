@@ -99,7 +99,7 @@ const searchWeb = defineCapability({
       return { reply: text, citations: parseCitations(text, chunks) };
     } catch (error) {
       if (isAppError(error) && error.code === "ai.web_search_unsupported") {
-        return { reply: error.message, citations: [] };
+        return { reply: error.message, citations: [], failed: true };
       }
       throw error;
     }

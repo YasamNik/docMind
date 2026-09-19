@@ -86,9 +86,18 @@ export function createAssistantService({
 
   // Runs one capability's handler and never lets a failure escape as a thrown error: an
   // AppError's own message already reads as a sentence a person can act on (the /web on
-  // a non-OpenRouter slot case is the existing example), so it is used as is. Anything
-  // else becomes the generic trouble reply and is logged with the tool's name (Decision
-  // 6 in the assistant triage plan).
+  // a non-OpenRouter slot case is the existing example), so it is used as is, marked
+  // failed so the caller never credits it as a real result. Anything else becomes the
+  // generic trouble reply and is logged with the tool's name (Decision 6 in the
+  // assistant triage plan).
+  //
+  // chat.session_not_found is the one exception: it is not a sentence a user can act
+  // on, and it means the surface's own idea of the current conversation is wrong, not
+  // that the tool failed. It is left to escape here rather than caught into a reply, so
+  // whichever surface called runTurn or runCommand sees it and can recover, the way
+  // Telegram already retries once on a fresh session (handleAssistantTurn,
+  // telegram.usecases.ts). Catching it lower, in a specific surface only, would leave
+  // every other caller of a capability free to swallow it again by accident.
   async function runHandler({ name, args, ctx }: { name: string; args: unknown; ctx: ToolContext }): Promise<ToolResult> {
     try {
       const capability = capabilities[name];
@@ -97,9 +106,10 @@ export function createAssistantService({
       }
       return await capability.handler(args, ctx);
     } catch (error) {
-      if (isAppError(error)) return { reply: error.message, citations: [] };
+      if (isAppError(error) && error.code === "chat.session_not_found") throw error;
+      if (isAppError(error)) return { reply: error.message, citations: [], failed: true };
       logger.error({ tool: name, err: error instanceof Error ? error.message : String(error) }, "Assistant tool handler failed");
-      return { reply: assistantTroubleReply(), citations: [] };
+      return { reply: assistantTroubleReply(), citations: [], failed: true };
     }
   }
 
@@ -234,7 +244,7 @@ export function createAssistantService({
     tool: string;
     args: unknown;
     startNewThread: () => Promise<void>;
-  }): Promise<{ reply: string; citations: Citation[]; toolUsed: string }> {
+  }): Promise<{ reply: string; citations: Citation[]; toolUsed: string | null }> {
     const capability = capabilities[tool];
     if (!capability) {
       throw createError({ code: "assistant.unknown_tool", message: `Unknown tool "${tool}"`, status: 400 });
@@ -255,7 +265,11 @@ export function createAssistantService({
       await chatService.appendAssistantMessage({ userId, sessionId, content: result.reply, citations: result.citations });
     }
 
-    return { reply: result.reply, citations: result.citations, toolUsed: tool };
+    // failed means the reply came from the handler's own graceful failure path, not
+    // from the tool actually doing its job, so it must not be credited as the tool
+    // that answered (Telegram's "Searched the web for this" footer, assistantReplyText
+    // in telegram.usecases.ts, reads toolUsed for exactly this).
+    return { reply: result.reply, citations: result.citations, toolUsed: result.failed ? null : tool };
   }
 
   return { runTurn, runCommand };
