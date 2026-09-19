@@ -42,6 +42,18 @@ async function readAll(stream: Readable) {
   return Buffer.concat(chunks).toString();
 }
 
+// Counts files only, not the directories the local driver's own put() leaves behind
+// on disk even after delete() removes the file inside them.
+async function countFiles(dir: string): Promise<number> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  let count = 0;
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    count += entry.isDirectory() ? await countFiles(full) : 1;
+  }
+  return count;
+}
+
 describe("documents service", () => {
   it("uploads, stores, and reads back a file", async () => {
     const { document, duplicateOf } = await documents.upload({ userId, name: "notes.txt", mimeType: "text/plain", body: Readable.from(["hello"]) });
@@ -145,6 +157,71 @@ describe("documents service", () => {
 
     await documents.purge({ userId, documentId: mail.id });
     await expect(documents.get({ userId, documentId: attachment.id })).rejects.toMatchObject({ code: "documents.not_found" });
+  });
+
+  it("a hash match with a matching parent reuses the row and leaves no orphaned storage object", async () => {
+    const { document: mail } = await documents.upload({ userId, name: "mail.txt", mimeType: "text/plain", body: Readable.from(["body"]), source: "email" });
+    const first = await documents.upload({
+      userId, name: "invoice.pdf", mimeType: "application/pdf", body: Readable.from(["same bytes"]),
+      source: "email", parentDocumentId: mail.id,
+    });
+    const filesAfterFirst = await countFiles(root);
+
+    // Same mail retried: the existing row's parentDocumentId already matches this call's.
+    const retry = await documents.upload({
+      userId, name: "invoice.pdf", mimeType: "application/pdf", body: Readable.from(["same bytes"]),
+      source: "email", parentDocumentId: mail.id,
+    });
+
+    expect(retry.document.id).toBe(first.document.id);
+    expect(retry.duplicateOf).toBe(first.document.id);
+    const filesAfterRetry = await countFiles(root);
+    expect(filesAfterRetry).toBe(filesAfterFirst);
+  });
+
+  it("a hash match with a differing parent creates a second row with its own storage key", async () => {
+    const { document: mail1 } = await documents.upload({ userId, name: "mail1.txt", mimeType: "text/plain", body: Readable.from(["body1"]), source: "email" });
+    const { document: mail2 } = await documents.upload({ userId, name: "mail2.txt", mimeType: "text/plain", body: Readable.from(["body2"]), source: "email" });
+
+    const first = await documents.upload({
+      userId, name: "invoice.pdf", mimeType: "application/pdf", body: Readable.from(["shared bytes"]),
+      source: "email", parentDocumentId: mail1.id,
+    });
+    const second = await documents.upload({
+      userId, name: "invoice.pdf", mimeType: "application/pdf", body: Readable.from(["shared bytes"]),
+      source: "email", parentDocumentId: mail2.id,
+    });
+
+    expect(second.document.id).not.toBe(first.document.id);
+    expect(second.duplicateOf).toBeUndefined();
+    expect(second.document.storageKey).not.toBe(first.document.storageKey);
+    expect(second.document.contentHash).toBe(first.document.contentHash);
+    expect(second.document.parentDocumentId).toBe(mail2.id);
+
+    // The original row is untouched: still linked to its own mail, not re-parented.
+    const stillFirst = await documents.get({ userId, documentId: first.document.id });
+    expect(stillFirst.parentDocumentId).toBe(mail1.id);
+
+    // Both storage keys have live bytes behind them.
+    const { stream: firstStream } = await documents.openFile({ userId, documentId: first.document.id });
+    expect(await readAll(firstStream)).toBe("shared bytes");
+    const { stream: secondStream } = await documents.openFile({ userId, documentId: second.document.id });
+    expect(await readAll(secondStream)).toBe("shared bytes");
+  });
+
+  it("a hash match against a trashed row never reuses it and does not throw", async () => {
+    const { document: original } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["trashed content"]) });
+    await documents.remove({ userId, documentId: original.id });
+
+    const second = await documents.upload({ userId, name: "b.txt", mimeType: "text/plain", body: Readable.from(["trashed content"]) });
+
+    expect(second.document.id).not.toBe(original.id);
+    expect(second.duplicateOf).toBeUndefined();
+
+    const repository = createDocumentsRepository({ db });
+    const stillTrashed = await repository.findById({ userId, documentId: original.id });
+    expect(stillTrashed?.deletedAt).not.toBeNull();
+    expect((await documents.get({ userId, documentId: second.document.id })).name).toBe("b.txt");
   });
 
   it("cascades at the database level too, when a parent row is deleted directly rather than through purge()", async () => {

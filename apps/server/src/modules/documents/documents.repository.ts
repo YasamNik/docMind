@@ -208,7 +208,7 @@ export function createDocumentsRepository({ db }: { db: Database }) {
       const [row] = await db
         .select()
         .from(documentsTable)
-        .where(and(eq(documentsTable.userId, userId), eq(documentsTable.contentHash, contentHash)));
+        .where(and(eq(documentsTable.userId, userId), eq(documentsTable.contentHash, contentHash), isNull(documentsTable.deletedAt)));
       return row ?? null;
     },
 

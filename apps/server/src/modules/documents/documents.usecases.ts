@@ -166,8 +166,16 @@ export function createDocumentsService({
         throw createError({ code: "documents.too_large", message: `Uploads are limited to ${maxUploadBytes} bytes`, status: 413 });
       }
 
+      // A hash match is only the same upload when it also carries this call's own
+      // parent, or neither call has one. A mail retried mid-move lands here with the
+      // exact parentDocumentId it used before, so reusing the row keeps retries safe.
+      // A different mail, or a plain upload, must not reuse a row parented elsewhere
+      // (or not parented at all): parentDocumentId is only ever set at creation, so
+      // the existing row is left untouched and this call gets its own child row
+      // instead, with the bytes already written above kept rather than deleted.
       const existing = await repository.findByHash({ userId, contentHash: sha256 });
-      if (existing) {
+      const shouldReuse = existing !== null && (existing.parentDocumentId ?? null) === (parentDocumentId ?? null);
+      if (shouldReuse) {
         await driver.delete({ key: stored.key });
         return { document: await getEnrichedOrThrow(userId, existing.id), duplicateOf: existing.id };
       }

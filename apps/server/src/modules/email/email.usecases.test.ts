@@ -190,14 +190,12 @@ describe("email service", () => {
     expect(enrichedAttachment.source).toBe("email");
   });
 
-  // Documents a known gap rather than a desired behavior: documentsService.upload()
-  // dedupes on contentHash and hands back the existing document unchanged, ignoring
-  // the parentDocumentId this call site passes. So when a mail's attachment carries
-  // bytes that already exist as a document, the new mail ends up with no child link
-  // even though the message plainly had an attachment. Whether an existing document
-  // should be re-linked onto a later parent is an open product decision this test
-  // takes no position on; it only pins down what happens today.
-  it("an attachment whose content already exists leaves the new mail without a child link", async () => {
+  // An attachment whose bytes already exist as a standalone document, unrelated to any
+  // mail, must not leave the new mail without a child link. The dedupe only reuses a
+  // row when the existing row already carries this exact parent; here the existing
+  // row has no parent at all, so the mail gets its own child document instead of
+  // silently losing its attachment.
+  it("an attachment whose content already exists as a standalone document still gets its own child link", async () => {
     await configureImap();
     const raw = await fixtureBuffer("attachment-with-note.eml");
     const parsed = await simpleParser(raw, { keepCidLinks: true });
@@ -222,13 +220,20 @@ describe("email service", () => {
     const docs = await documentsService.list({ userId });
     const mail = docs.find((d) => d.name === "Invoice for March.txt");
     expect(mail).toBeDefined();
-    // No second attachment document was created: the upload deduped onto the one
-    // already there instead.
-    expect(docs.filter((d) => d.name === attachment.name)).toHaveLength(1);
+    // A second document with the same name now exists: the mail's own child copy,
+    // alongside the standalone one that was already there.
+    const attachmentDocs = docs.filter((d) => d.name === attachment.name);
+    expect(attachmentDocs).toHaveLength(2);
 
-    const enrichedAttachment = await documentsService.get({ userId, documentId: preexisting.id });
-    expect(enrichedAttachment.parentDocumentId).not.toBe(mail!.id);
-    expect(enrichedAttachment.parentDocumentId).toBeNull();
+    const newChild = attachmentDocs.find((d) => d.id !== preexisting.id);
+    expect(newChild).toBeDefined();
+    const enrichedChild = await documentsService.get({ userId, documentId: newChild!.id });
+    expect(enrichedChild.parentDocumentId).toBe(mail!.id);
+
+    // The preexisting standalone document is untouched: same id, still no parent.
+    const enrichedPreexisting = await documentsService.get({ userId, documentId: preexisting.id });
+    expect(enrichedPreexisting.id).toBe(preexisting.id);
+    expect(enrichedPreexisting.parentDocumentId).toBeNull();
   });
 
   it("moves a handled message to the Done folder", async () => {
