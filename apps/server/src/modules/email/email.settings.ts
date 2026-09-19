@@ -3,8 +3,8 @@ import { defineSetting } from "../settings/settings.registry.js";
 import type { SettingDefinition } from "../settings/settings.types.js";
 
 // IMAP intake settings, in the shape telegram.settings.ts established: the handful
-// of things a person types in, plus one internal field the loop keeps for itself so
-// the settings page can surface why the last cycle did not go through.
+// of things a person types in, plus one internal field the loop keeps for itself to
+// record why the last cycle did not go through, for diagnosis only.
 export const emailSettingDefinitions: SettingDefinition[] = [
   defineSetting({
     key: "email.imap.host",
@@ -67,6 +67,6 @@ export const emailSettingDefinitions: SettingDefinition[] = [
     schema: v.string(),
     internal: true,
     default: "",
-    doc: "The reason the last cycle failed, if it did. Surfaced on the settings page.",
+    doc: "The reason the last cycle failed, if it did. Kept for diagnosis only; nothing surfaces it yet.",
   }),
 ];

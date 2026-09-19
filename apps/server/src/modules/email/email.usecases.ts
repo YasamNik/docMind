@@ -23,6 +23,9 @@ const BYTES_PER_MB = 1024 * 1024;
 // processing-sized slice of it, so it asks listFolder for everything rather than the
 // batchSize the loop itself uses.
 const TEST_FOLDER_LIMIT = Number.MAX_SAFE_INTEGER;
+// What email.imap.lastError gets when a cycle fails for a reason imapFailureReason
+// cannot name, so that setting never ends up holding an arbitrary error's own text.
+const GENERIC_CYCLE_FAILURE_REASON = "the mailbox could not be checked";
 
 export type EmailClientFactory = (config: { host: string; port: number; user: string; password: string }) => Promise<ImapClient>;
 export type EmailTestResult = { ok: boolean; message: string };
@@ -272,8 +275,12 @@ export function createEmailService({
     if (!connection) return;
 
     const { folder, doneFolder, failedFolder, maxMessageSizeBytes, ...credentials } = connection;
-    const client = await clientFactory(credentials);
+    // Declared outside the try so the finally block below can tell "the client was
+    // never created" apart from "the client was created and something after it
+    // failed", and only close a connection that actually exists.
+    let client: ImapClient | undefined;
     try {
+      client = await clientFactory(credentials);
       await client.ensureFolder({ folder: doneFolder });
       await client.ensureFolder({ folder: failedFolder });
 
@@ -283,11 +290,15 @@ export function createEmailService({
       }
       await settingsService.setInternal(userId, "email.imap.lastError", "");
     } catch (error) {
-      const reason = (error as Error)?.message ?? String(error);
-      await settingsService.setInternal(userId, "email.imap.lastError", reason);
+      // email.imap.lastError is a plain, non-secret settings row meant for a person
+      // to read, not a log. imapFailureReason picks a short, curated reason back out
+      // of the client's own sanitized error; anything else, including a clientFactory
+      // that is not email.client.ts's own createImapClient, only ever contributes a
+      // short fixed string here, never its own message text.
+      await settingsService.setInternal(userId, "email.imap.lastError", imapFailureReason(error) ?? GENERIC_CYCLE_FAILURE_REASON);
       throw error;
     } finally {
-      await client.close();
+      if (client) await client.close();
     }
   }
 
@@ -304,6 +315,10 @@ export function createEmailService({
           attempt = 0;
         } catch (error) {
           attempt += 1;
+          // The server log is the diagnosis surface and is never returned by the API,
+          // so the full underlying message goes here on purpose, unlike the short,
+          // curated reason runOnce persists to email.imap.lastError above: change 1
+          // already closes the one path by which a password could reach this far.
           logger.warn({ err: (error as Error)?.message ?? String(error), attempt }, "Email loop cycle failed");
         }
         if (!running) break;

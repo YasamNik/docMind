@@ -117,16 +117,25 @@ export async function createImapClient({
   commandTimeoutMs?: number;
   connectionFactory?: ImapConnectionFactory;
 }) {
-  const connection = connectionFactory({
-    host,
-    port,
-    secure: true,
-    auth: { user, pass: password },
-    connectionTimeout: connectTimeoutMs,
-    greetingTimeout: connectTimeoutMs,
-    socketTimeout: commandTimeoutMs,
-    logger: false,
-  });
+  let connection: ImapConnection;
+  try {
+    connection = connectionFactory({
+      host,
+      port,
+      secure: true,
+      auth: { user, pass: password },
+      connectionTimeout: connectTimeoutMs,
+      greetingTimeout: connectTimeoutMs,
+      socketTimeout: commandTimeoutMs,
+      logger: false,
+    });
+  } catch (error) {
+    // The factory call itself can throw synchronously, before withTimeout or the
+    // try/catch around connect() below ever get a chance at it, and the underlying
+    // library's own text is exactly what the rest of this module refuses to forward:
+    // rebuild it through the same imapError()/reasonFor() path so nothing raw escapes.
+    throw imapError({ operation: "connect", host, reason: reasonFor(error) });
+  }
 
   try {
     await withTimeout(connection.connect(), { timeoutMs: connectTimeoutMs, operation: "connect", host });

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { simpleParser } from "mailparser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createError } from "../../shared/errors/errors.js";
 import { createTestDatabase } from "../../shared/test/database.test-utils.js";
@@ -13,6 +14,7 @@ import { createSettingsService } from "../settings/settings.usecases.js";
 import { storageSettingDefinitions } from "../storage/storage.settings.js";
 import { createStorageService } from "../storage/storage.usecases.js";
 import type { ImapClient } from "./email.client.js";
+import { documentsFromMail } from "./email.models.js";
 import { emailSettingDefinitions } from "./email.settings.js";
 import { createEmailService, type EmailClientFactory } from "./email.usecases.js";
 
@@ -186,6 +188,47 @@ describe("email service", () => {
     const enrichedAttachment = await documentsService.get({ userId, documentId: attachment!.id });
     expect(enrichedAttachment.parentDocumentId).toBe(mail!.id);
     expect(enrichedAttachment.source).toBe("email");
+  });
+
+  // Documents a known gap rather than a desired behavior: documentsService.upload()
+  // dedupes on contentHash and hands back the existing document unchanged, ignoring
+  // the parentDocumentId this call site passes. So when a mail's attachment carries
+  // bytes that already exist as a document, the new mail ends up with no child link
+  // even though the message plainly had an attachment. Whether an existing document
+  // should be re-linked onto a later parent is an open product decision this test
+  // takes no position on; it only pins down what happens today.
+  it("an attachment whose content already exists leaves the new mail without a child link", async () => {
+    await configureImap();
+    const raw = await fixtureBuffer("attachment-with-note.eml");
+    const parsed = await simpleParser(raw, { keepCidLinks: true });
+    const { attachments } = documentsFromMail(parsed);
+    const attachment = attachments[0];
+    if (!attachment) throw new Error("fixture is expected to carry an attachment");
+
+    const { document: preexisting } = await documentsService.upload({
+      userId,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      body: Readable.from([attachment.content]),
+      source: "upload",
+    });
+
+    const mailbox = createFakeMailbox({ raw: { 1: raw } });
+    mailbox.seed("DocMind", [1]);
+    const email = buildService(async () => mailbox.client);
+
+    await email.runOnce();
+
+    const docs = await documentsService.list({ userId });
+    const mail = docs.find((d) => d.name === "Invoice for March.txt");
+    expect(mail).toBeDefined();
+    // No second attachment document was created: the upload deduped onto the one
+    // already there instead.
+    expect(docs.filter((d) => d.name === attachment.name)).toHaveLength(1);
+
+    const enrichedAttachment = await documentsService.get({ userId, documentId: preexisting.id });
+    expect(enrichedAttachment.parentDocumentId).not.toBe(mail!.id);
+    expect(enrichedAttachment.parentDocumentId).toBeNull();
   });
 
   it("moves a handled message to the Done folder", async () => {
@@ -390,6 +433,25 @@ describe("email service", () => {
 
     expect(mailbox.fetchedUids).toHaveLength(20);
     expect(mailbox.messagesIn("DocMind")).toHaveLength(totalMessages - 20);
+  });
+
+  // Regression test for a raw error escaping into a settings row meant for a
+  // person's own eyes. email.imap.lastError is not a secret, but it is not a log
+  // either, and the library or the network can hand back text that was never meant
+  // to be shown back verbatim.
+  it("keeps a raw error message out of the persisted lastError setting", async () => {
+    await configureImap();
+    const rawMessage = "smtp said: LOGIN user hunter2 failed";
+    const email = buildService(async () => {
+      throw new Error(rawMessage);
+    });
+
+    await expect(email.runOnce()).rejects.toThrow(rawMessage);
+
+    const lastError = await settingsService.get<string>(userId, "email.imap.lastError");
+    expect(lastError).toBeTruthy();
+    expect(lastError).not.toContain("hunter2");
+    expect(lastError).not.toBe(rawMessage);
   });
 
   it("backs off after a connection failure and recovers", async () => {

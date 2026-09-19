@@ -59,6 +59,22 @@ describe("createImapClient", () => {
     });
   });
 
+  it("keeps the password out of a synchronous throw from the connection factory itself", async () => {
+    const password = "correct-horse-battery-staple";
+    const connectionFactory: ImapConnectionFactory = () => {
+      throw new Error(`could not construct client for "me@example.com" with password "${password}"`);
+    };
+
+    const attempt = createImapClient({ host: HOST, port: 993, user: "me@example.com", password, connectionFactory });
+
+    await expectAppError(() => attempt, "email.imap_error");
+    await attempt.catch((error: Error) => {
+      expect(error.message).toBe(`IMAP connect to ${HOST}: failed`);
+      expect(error.message).not.toContain(password);
+      expect(error.stack ?? "").not.toContain(password);
+    });
+  });
+
   it("force closes the connection if connecting fails, so a failed attempt leaks no socket", async () => {
     const connection = createFakeConnection({ connect: vi.fn().mockRejectedValue(new Error("nope")) });
 
