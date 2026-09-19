@@ -460,4 +460,51 @@ describe("DocumentDetailPage extracted fields", () => {
     await screen.findByText("Rent");
     expect(screen.queryByText("Extracted details")).not.toBeInTheDocument();
   });
+
+  it("stacks into one column below md and reads as three columns from md up", async () => {
+    getMock.mockImplementationOnce(async () => ({
+      ...documentDetail,
+      fields: [
+        {
+          id: "f_1",
+          documentId: "doc_1",
+          key: "documentType",
+          value: "invoice",
+          valueNumber: null,
+          valueDate: null,
+          currency: null,
+          confidence: 0.95,
+          source: "llm" as const,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    }));
+    renderPage();
+    const term = await screen.findByText("Type");
+    const grid = term.closest("dl");
+    expect(grid?.className).toContain("grid-cols-1");
+    expect(grid?.className).toContain("md:grid-cols-3");
+  });
+});
+
+describe("DocumentDetailPage layout stacking", () => {
+  afterEach(() => {
+    getMock.mockImplementation(async () => documentDetail);
+  });
+
+  it("stacks the title and the action buttons below md and puts them side by side from md up", async () => {
+    renderPage();
+    const heading = await screen.findByRole("heading", { name: "invoice.pdf" });
+    const header = heading.closest("div")?.parentElement;
+    expect(header?.className).toContain("flex-col");
+    expect(header?.className).toContain("md:flex-row");
+  });
+
+  it("gives the PDF preview a shorter max height below md than from md up", async () => {
+    renderPage();
+    const preview = await screen.findByTitle("Preview");
+    expect(preview.className).toContain("h-[45vh]");
+    expect(preview.className).toContain("md:h-[70vh]");
+  });
 });

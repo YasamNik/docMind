@@ -28,7 +28,7 @@ function ExtractedFieldsCard({ fields }: { fields: ExtractedField[] }) {
         <CardTitle className="text-base">Extracted details</CardTitle>
       </CardHeader>
       <CardContent>
-        <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-3">
+        <dl className="grid grid-cols-1 gap-x-4 gap-y-3 text-sm md:grid-cols-3">
           {present.map((f) => (
             <div key={f.key}>
               <dt className="text-xs text-muted-foreground">{fieldLabel(f.key)}</dt>
@@ -115,14 +115,14 @@ function Preview({ id, mimeType, storageDriver, queryClient }: { id: string; mim
   // is a real change to how the preview loads, not a small addition, so it is left as a
   // follow-up rather than built here.
   if (mimeType === "application/pdf")
-    return <iframe title="Preview" src={url} className="w-full h-[70vh] rounded-[28px] border border-border" />;
+    return <iframe title="Preview" src={url} className="h-[45vh] w-full rounded-[28px] border border-border md:h-[70vh]" />;
   if (mimeType?.startsWith("image/"))
     return (
       <img
         src={url}
         alt="Preview"
         onError={handleLoadError}
-        className="max-h-[70vh] rounded-[28px] border border-border"
+        className="max-h-[45vh] rounded-[28px] border border-border md:max-h-[70vh]"
       />
     );
   return (
@@ -395,7 +395,7 @@ export function DocumentDetailPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           {document.categoryPath && (
             <p className="text-[10px] uppercase tracking-widest text-primary font-semibold">

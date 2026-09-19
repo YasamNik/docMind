@@ -59,7 +59,7 @@ function ResultCard({ result, query, otherStorageLabel }: { result: SearchResult
   return (
     <Card>
       <CardContent className="space-y-2">
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-start justify-between gap-2 md:flex-nowrap md:items-center">
           <Link to={`/documents/${result.documentId}`} className="font-heading text-base underline-offset-2 hover:underline">
             {result.documentName}
           </Link>
@@ -129,9 +129,9 @@ export function SearchPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <h1 className="font-heading text-2xl">Search</h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {trimmedQuery.length > 0 && (
             <Button size="sm" variant="outline" onClick={() => saveSearch.mutate()} disabled={saveSearch.isPending}>
               Save search
@@ -147,7 +147,7 @@ export function SearchPage() {
         placeholder="Search your documents..."
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        className="max-w-xl"
+        className="w-full md:max-w-xl"
       />
       {trimmedQuery.length === 0 ? (
         <p className="text-sm text-muted-foreground">Search your documents by keyword or meaning</p>

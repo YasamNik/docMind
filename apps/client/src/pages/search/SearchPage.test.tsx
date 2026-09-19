@@ -102,3 +102,27 @@ describe("SearchPage", () => {
     expect(screen.getByText("Amazon S3")).toBeInTheDocument();
   });
 });
+
+describe("SearchPage layout stacking", () => {
+  it("gives the search field full width below md and caps it from md up", () => {
+    renderPage();
+    const input = screen.getByPlaceholderText("Search your documents...");
+    expect(input.className).toContain("w-full");
+    expect(input.className).toContain("md:max-w-xl");
+  });
+
+  it("stacks the heading and the action buttons below md and puts them side by side from md up", () => {
+    renderPage();
+    const heading = screen.getByRole("heading", { name: "Search" });
+    expect(heading.parentElement?.className).toContain("flex-col");
+    expect(heading.parentElement?.className).toContain("md:flex-row");
+  });
+
+  it("lets a result's link and badges wrap onto their own line below md", async () => {
+    renderPage();
+    fireEvent.change(screen.getByPlaceholderText("Search your documents..."), { target: { value: "rent" } });
+    const link = await screen.findByRole("link", { name: "Lease agreement.pdf" });
+    expect(link.parentElement?.className).toContain("flex-wrap");
+    expect(link.parentElement?.className).toContain("md:flex-nowrap");
+  });
+});

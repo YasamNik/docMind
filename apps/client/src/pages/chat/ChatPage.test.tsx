@@ -45,7 +45,22 @@ vi.mock("@/lib/storage-api", () => ({
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  // @ts-expect-error test-only cleanup of a browser API jsdom does not implement by default
+  delete window.matchMedia;
 });
+
+// Simulates the phone breakpoint so ChatPage renders the full-width conversation with
+// the sessions sheet, instead of the desktop two column layout. Without this,
+// window.matchMedia does not exist in jsdom and the page reads as desktop, same as
+// every test above that never calls this.
+function mockMobileViewport() {
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    matches: query === "(max-width: 767px)",
+    media: query,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+}
 
 function renderPage() {
   const queryClient = new QueryClient();
@@ -218,5 +233,85 @@ describe("ChatPage", () => {
     }
 
     expect((screen.getByPlaceholderText("Ask about your documents...") as HTMLInputElement).value).toBe("What licence");
+  });
+});
+
+describe("ChatPage on a phone", () => {
+  it("does not render the desktop sessions sidebar", async () => {
+    mockMobileViewport();
+    listSessionsMock.mockResolvedValueOnce([
+      { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+    ]);
+    const { container } = renderPage();
+    await screen.findByText("Chats");
+    expect(container.querySelector('[data-slot="card"]')).not.toBeInTheDocument();
+    // Exactly one "New chat" button exists at rest: the sheet holding the second one is closed.
+    expect(screen.getByText("New chat")).toBeInTheDocument();
+  });
+
+  it("opens the sessions sheet from the header and switches chats from it", async () => {
+    mockMobileViewport();
+    listSessionsMock.mockResolvedValueOnce([
+      { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+    ]);
+    getSessionMock.mockResolvedValueOnce({
+      session: { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+      messages: [],
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByText("Chats"));
+    const sheet = within(await screen.findByRole("dialog"));
+    fireEvent.click(sheet.getByText("Lease question"));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(await screen.findByPlaceholderText("Ask about your documents...")).toBeInTheDocument();
+  });
+
+  it("still sends a message from the composer", async () => {
+    mockMobileViewport();
+    listSessionsMock.mockResolvedValueOnce([
+      { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+    ]);
+    getSessionMock.mockResolvedValueOnce({
+      session: { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+      messages: [],
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new ReadableStream({ start: (c) => c.close() }), { status: 200 }),
+    );
+
+    renderPage();
+    fireEvent.click(await screen.findByText("Chats"));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Lease question"));
+
+    const input = await screen.findByPlaceholderText("Ask about your documents...");
+    fireEvent.change(input, { target: { value: "When is rent due?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("When is rent due?")).toBeInTheDocument();
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/api/chat/sessions/sess_1/messages");
+  });
+
+  it("deletes a session from the compact list after confirming", async () => {
+    mockMobileViewport();
+    listSessionsMock.mockResolvedValueOnce([
+      { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+    ]);
+    renderPage();
+    fireEvent.click(await screen.findByText("Chats"));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByLabelText("Delete chat"));
+    const confirmDialog = within(await screen.findByRole("dialog", { name: "Delete this chat?" }));
+    fireEvent.click(confirmDialog.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(deleteSessionMock).toHaveBeenCalledWith("sess_1"));
+  });
+
+  it("does not render the mobile layout at a normal viewport", async () => {
+    listSessionsMock.mockResolvedValueOnce([
+      { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+    ]);
+    renderPage();
+    await screen.findByText("Lease question");
+    expect(screen.queryByText("Chats")).not.toBeInTheDocument();
   });
 });

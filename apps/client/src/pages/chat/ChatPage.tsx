@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageCircle, Trash2 } from "lucide-react";
+import { MessageCircle, MessagesSquare, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { chatApi, type ChatMessage, type ChatSession, type Citation } from "@/lib/chat-api";
 import { formatDate } from "@/lib/format";
 import { storageApi } from "@/lib/storage-api";
+import { useIsMobile } from "@/lib/use-media-query";
 
 type UiMessage = ChatMessage & { streaming?: boolean };
 
@@ -147,6 +148,155 @@ function SessionListItem({
         </Button>
       </CardContent>
     </Card>
+  );
+}
+
+// One title-and-timestamp row rather than the desktop's rounded Card: inside a sheet
+// that is already its own scrollable surface, a dozen cards each the height of a phone
+// row would push the list itself off screen. This is the same session data, the same
+// delete action, sized to be scanned as a list instead of a stack of tiles.
+function CompactSessionRow({
+  session,
+  active,
+  onSelect,
+  onDelete,
+}: {
+  session: ChatSession;
+  active: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") onSelect();
+      }}
+      className={`flex min-h-11 cursor-pointer items-center justify-between gap-2 rounded-2xl px-3 ${
+        active ? "bg-primary/10" : "hover:bg-muted"
+      }`}
+    >
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium">{session.title ?? "New chat"}</p>
+        <p className="text-xs text-muted-foreground">{formatDate(session.updatedAt)}</p>
+      </div>
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="ghost"
+        aria-label="Delete chat"
+        className="h-11 w-11 shrink-0"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+      >
+        <Trash2 className="h-4 w-4" />
+      </Button>
+    </div>
+  );
+}
+
+function ConversationEmptyState({ className = "" }: { className?: string }) {
+  return (
+    <div className={`flex flex-1 flex-col items-center justify-center gap-2 text-center text-muted-foreground ${className}`}>
+      <MessageCircle className="h-8 w-8" />
+      <p>Start a new chat to ask questions about your documents.</p>
+    </div>
+  );
+}
+
+function MessageThread({
+  messages,
+  otherStorageLabel,
+  className,
+}: {
+  messages: UiMessage[];
+  otherStorageLabel: (storageDriver: string) => string | null;
+  className: string;
+}) {
+  return (
+    <div className={className}>
+      {messages.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Ask a question about your documents.</p>
+      ) : (
+        messages.map((message) => <MessageBubble key={message.id} message={message} otherStorageLabel={otherStorageLabel} />)
+      )}
+    </div>
+  );
+}
+
+function Composer({
+  input,
+  onInputChange,
+  sending,
+  onSubmit,
+  formClassName,
+  inputClassName = "flex-1",
+  sendButtonClassName = "",
+}: {
+  input: string;
+  onInputChange: (value: string) => void;
+  sending: boolean;
+  onSubmit: () => void;
+  formClassName: string;
+  inputClassName?: string;
+  sendButtonClassName?: string;
+}) {
+  return (
+    <form
+      className={formClassName}
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit();
+      }}
+    >
+      <Input
+        placeholder="Ask about your documents..."
+        value={input}
+        onChange={(e) => onInputChange(e.target.value)}
+        disabled={sending}
+        className={inputClassName}
+      />
+      <Button type="submit" disabled={sending || input.trim().length === 0} className={sendButtonClassName}>
+        Send
+      </Button>
+    </form>
+  );
+}
+
+function DeleteSessionDialog({
+  deleting,
+  onCancel,
+  onConfirm,
+  pending,
+}: {
+  deleting: ChatSession | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+  pending: boolean;
+}) {
+  return (
+    <Dialog open={deleting !== null} onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Delete this chat?</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          This deletes &quot;{deleting?.title ?? "New chat"}&quot; and its messages. This cannot be undone.
+        </p>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="button" variant="destructive" disabled={pending} onClick={onConfirm}>
+            Delete
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -291,6 +441,95 @@ export function ChatPage() {
   }
 
   const sortedSessions = sortByRecent(sessions);
+  const isMobile = useIsMobile();
+  const [sessionsOpen, setSessionsOpen] = useState(false);
+
+  function selectSession(id: string) {
+    setSelectedId(id);
+    setSessionsOpen(false);
+  }
+
+  // Below md the sessions list moves off the main screen entirely: the conversation
+  // gets the full width, the composer sits above the safe area, and the session list
+  // opens from a header button instead of sharing the screen as a second column.
+  if (isMobile) {
+    return (
+      <div className="flex h-[calc(100dvh-9rem)] w-full min-w-0 flex-col gap-3">
+        <div className="flex items-center justify-between gap-2">
+          <Button type="button" variant="outline" size="sm" className="min-h-11 gap-1.5" onClick={() => setSessionsOpen(true)}>
+            <MessagesSquare className="h-4 w-4" />
+            Chats
+          </Button>
+          <Button type="button" size="sm" className="min-h-11" onClick={() => createSession.mutate()} disabled={createSession.isPending}>
+            New chat
+          </Button>
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[2rem] bg-card">
+          {selectedId === null ? (
+            <ConversationEmptyState className="px-6" />
+          ) : (
+            <>
+              <MessageThread messages={messages} otherStorageLabel={otherStorageLabel} className="flex-1 space-y-4 overflow-y-auto p-4" />
+              <Composer
+                input={input}
+                onInputChange={setInput}
+                sending={sending}
+                onSubmit={() => void sendMessage()}
+                formClassName="flex items-center gap-2 border-t border-border p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+                inputClassName="h-11 flex-1"
+                sendButtonClassName="h-11 min-w-16"
+              />
+            </>
+          )}
+        </div>
+
+        {/* DialogContent is already a full screen sheet with its own scroll and a sticky
+            header below md, and the app's usual centered card at md and up, so the
+            sessions list needs no positioning of its own here. */}
+        <Dialog open={sessionsOpen} onOpenChange={setSessionsOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Chats</DialogTitle>
+            </DialogHeader>
+            <Button
+              type="button"
+              className="min-h-11 w-full"
+              onClick={() => {
+                createSession.mutate();
+                setSessionsOpen(false);
+              }}
+              disabled={createSession.isPending}
+            >
+              New chat
+            </Button>
+            {sortedSessions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No chats yet.</p>
+            ) : (
+              <div className="flex flex-col gap-1">
+                {sortedSessions.map((session) => (
+                  <CompactSessionRow
+                    key={session.id}
+                    session={session}
+                    active={session.id === selectedId}
+                    onSelect={() => selectSession(session.id)}
+                    onDelete={() => setDeleting(session)}
+                  />
+                ))}
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        <DeleteSessionDialog
+          deleting={deleting}
+          onCancel={() => setDeleting(null)}
+          onConfirm={() => deleting && deleteSession.mutate(deleting.id)}
+          pending={deleteSession.isPending}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-[calc(100vh-9rem)] gap-6">
@@ -317,66 +556,27 @@ export function ChatPage() {
 
       <div className="flex flex-1 flex-col overflow-hidden rounded-[2rem] bg-card">
         {selectedId === null ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center text-muted-foreground">
-            <MessageCircle className="h-8 w-8" />
-            <p>Start a new chat to ask questions about your documents.</p>
-          </div>
+          <ConversationEmptyState />
         ) : (
           <>
-            <div className="flex-1 space-y-4 overflow-y-auto p-6">
-              {messages.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Ask a question about your documents.</p>
-              ) : (
-                messages.map((message) => (
-                  <MessageBubble key={message.id} message={message} otherStorageLabel={otherStorageLabel} />
-                ))
-              )}
-            </div>
-            <form
-              className="flex items-center gap-2 border-t border-border p-4"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void sendMessage();
-              }}
-            >
-              <Input
-                placeholder="Ask about your documents..."
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                disabled={sending}
-                className="flex-1"
-              />
-              <Button type="submit" disabled={sending || input.trim().length === 0}>
-                Send
-              </Button>
-            </form>
+            <MessageThread messages={messages} otherStorageLabel={otherStorageLabel} className="flex-1 space-y-4 overflow-y-auto p-6" />
+            <Composer
+              input={input}
+              onInputChange={setInput}
+              sending={sending}
+              onSubmit={() => void sendMessage()}
+              formClassName="flex items-center gap-2 border-t border-border p-4"
+            />
           </>
         )}
       </div>
 
-      <Dialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete this chat?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            This deletes &quot;{deleting?.title ?? "New chat"}&quot; and its messages. This cannot be undone.
-          </p>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setDeleting(null)}>
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={deleteSession.isPending}
-              onClick={() => deleting && deleteSession.mutate(deleting.id)}
-            >
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DeleteSessionDialog
+        deleting={deleting}
+        onCancel={() => setDeleting(null)}
+        onConfirm={() => deleting && deleteSession.mutate(deleting.id)}
+        pending={deleteSession.isPending}
+      />
     </div>
   );
 }
