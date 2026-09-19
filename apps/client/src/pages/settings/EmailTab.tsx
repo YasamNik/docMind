@@ -20,9 +20,10 @@ const FIELD_KEYS = [
   "email.imap.doneFolder",
   "email.imap.failedFolder",
   "email.imap.pollSeconds",
+  "email.imap.maxMessageSizeMb",
 ];
 
-const NUMERIC_KEYS = new Set(["email.imap.port", "email.imap.pollSeconds"]);
+const NUMERIC_KEYS = new Set(["email.imap.port", "email.imap.pollSeconds", "email.imap.maxMessageSizeMb"]);
 
 const imapGuide: SetupGuide = {
   title: "Connect a mailbox over IMAP",

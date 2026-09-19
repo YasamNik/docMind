@@ -527,7 +527,7 @@ export function DocumentDetailPage() {
           <DialogHeader>
             <DialogTitle>Delete this document?</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">The file is removed from storage. This cannot be undone.</p>
+          <p className="text-sm text-muted-foreground">It moves to Trash, along with anything attached to it. You can restore it from there.</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteOpen(false)}>
               Cancel
