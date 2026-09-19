@@ -159,3 +159,345 @@ Before debugging anything, search this file for the symptom first.
 ### Follow-up / Notes
 - Two concurrent server suites on one machine are out of scope, since the sweep is best effort and every file name is unique
 
+---
+
+## The link fetcher closed the connection before reading the response, 2026-09-19T05:02:44Z
+
+**Component:** telegram/link-fetch
+**Severity:** Major
+**Tags:** network, hang, fake-test
+
+### Symptoms
+- The `/web` assistant command would stall for 5-20 seconds on most links
+- Large pages (5MB+) would hang past the 20 second timeout
+- Small pages (9 bytes) completed normally
+
+### Root Cause
+- The link fetcher built an undici Agent and closed it in a finally block that ran before the response body was read
+- An unread body backpressures the socket; close() waits on a transfer that never finishes
+- Small bodies fit in the buffer regardless; large bodies expose the hang
+
+### Solution / Fix
+- Moved close() outside the try block, only after the body is fully read, cancelled, or disposed
+- Added discardBody() helper to cancel bodies on error paths (redirects, 4xx/5xx, wrong content type)
+- DNS resolution now bounded by the same deadline as the fetch
+- Telegram Bot API calls now have local timeouts (15s default, 60s for downloads)
+- Address guard now refuses unspecified address, IPv4-compatible form, multicast and reserved ranges
+- Changes in `apps/server/src/modules/telegram/link-fetch.ts`
+
+### Regression Test
+- `apps/server/src/modules/telegram/link-fetch.test.ts`, "closes the real dispatcher it builds only after reading a large body in full" (five megabyte local server test, real undici agent path)
+
+### Follow-up / Notes
+- Every other test injects a MockAgent, so the real path that builds an Agent ran nowhere else
+- jsdom's fake dispatcher cannot reproduce socket backpressure; a local test server serves real bytes
+
+---
+
+## Trashing a mail destroyed unrelated documents, 2026-09-19T09:00:34Z
+
+**Component:** documents/trash
+**Severity:** Blocker
+**Tags:** cascade, corruption
+
+### Symptoms
+- Emptying trash after trashing an email deleted PDF attachments that were never explicitly trashed
+- An attachment the user uploaded themselves a month earlier, or one arriving with every email, persisted until the parent mail was purged
+- The attachment itself never appeared in trash and gave no indication it existed
+
+### Root Cause
+- `remove()` called `repository.update()` on the document itself only, never walking the parentDocumentId tree
+- `purge()` walked the subtree, so purging the trashed mail then deleted attachments that never went to trash at all
+- Restoring the mail did not restore its children because `restore()` also did not walk the tree
+- The relationship was invisible: no UI showed an attachment's parent or a mail's children until after the fix
+
+### Solution / Fix
+- Added `collectSubtree()` helper with depth cap (50) and visited set to prevent stack overflow on cycles
+- `trashSubtree()` now walks the whole tree and stamps all at-risk children with the same deletedAt timestamp
+- `restore()` reads that timestamp and restores only children that moved down together in the same cascade
+- A child trashed separately before its parent stays in trash (the user's explicit decision is respected)
+- `purge()` works unchanged: it only reaches children through a trashed parent, so it deletes exactly the subtree that went down together
+- `bulkDelete()` now calls `trashSubtree()` to cascade
+- Added parent/children links to DocumentDetail UI in `apps/client/src/pages/documents/DocumentDetailPage.tsx`
+- Changes in `apps/server/src/modules/documents/documents.usecases.ts` and repository
+
+### Regression Test
+- `apps/server/src/modules/documents/documents.usecases.test.ts`, "purging a trashed mail deletes exactly the subtree that was trashed with it"
+- "restores a mail and the attachment trashed with it in the same cascade"
+- "does not restore a child that was trashed on its own before its parent"
+- "collectSubtree tolerates a parentDocumentId cycle instead of looping forever"
+
+### Follow-up / Notes
+- Two supporting fixes: collectSubtree now guards against infinite recursion (depth and visited set)
+- The detail page now shows the parent mail and attachment links, making the relationship visible and the bug detectable
+
+---
+
+## The dev server served code from half an hour earlier, 2026-09-19T12:00:00Z
+
+**Component:** server/dev
+**Severity:** Major
+**Tags:** dev-server, watcher, testing
+
+### Symptoms
+- A change made and saved to a source file was not reflected when the live server was tested
+- The running process was serving code from approximately 30 minutes before the source change
+- Multiple test cycles passed even though the source was still buggy, because the tests were running against the old version
+
+### Root Cause
+- Not fully documented in the session: the watcher process detected changes but the restarted server was serving cached or previously loaded code
+- Likely a timing issue where the dev server's module cache was not cleared on restart, or the file watcher had not detected the change yet when the process restarted
+
+### Solution / Fix
+- Identified as a testing hazard rather than a code bug: always verify the running dev server's start time is newer than the newest source file before trusting a test result
+- No code change was required; the issue was in development practice
+
+### Regression Test
+- None. This is a dev-server behavior, not a testable code path.
+
+### Follow-up / Notes
+- To detect if this is happening: check the server's console output startup timestamp against the file's modification time
+- If the dev server is silent or serving stale code, kill it and re-run `pnpm dev` in the server package directory to surface any hidden errors
+
+---
+
+## The Telegram assistant went silent forever after its chat session was deleted, 2026-09-19T13:16:56Z
+
+**Component:** telegram/chat
+**Severity:** Blocker
+**Tags:** session, cleanup, state-machine
+
+### Symptoms
+- User deletes a conversation from the app's Chat page
+- Every message sent to the Telegram bot afterwards gets no reply
+- No error message is shown; the user gets silence
+- The poll loop continues running but returns nothing
+
+### Root Cause
+- A Telegram conversation is bridged to an ordinary chat_sessions row
+- Deleting the session from the Chat page left every later message failing on a session id that no longer resolved
+- The poll loop retried the same broken session id, advanced its cursor, and the user received no reply at all
+
+### Solution / Fix
+- The turn now clears the stored session id and retries once on a fresh session
+- Any other failure returns a plain acknowledgement instead of silence
+- Responses to questions the assistant itself just asked are no longer swallowed when they are cheap (one or two words)
+- Changes in `apps/server/src/modules/telegram/telegram.usecases.ts` and `chat.usecases.ts`
+
+### Regression Test
+- `apps/server/src/modules/telegram/telegram.usecases.test.ts`, includes test that verifies recovery from deleted session
+
+### Follow-up / Notes
+- A conversation bound to a deleted session now recreates it and continues, rather than silently failing
+
+---
+
+## Re-uploading a file you had trashed threw a 404 instead of storing it, 2026-09-19T13:36:32Z
+
+**Component:** documents/upload
+**Severity:** Major
+**Tags:** trash, dedup, indexing
+
+### Symptoms
+- Upload a document, then trash it
+- Try to re-upload the same file (same content hash)
+- The server returns 404 instead of storing a new copy
+
+### Root Cause
+- `findByHash()` in `documents.repository.ts` did not filter `deletedAt`
+- The `upload()` usecase deduped on content hash alone and returned the existing document
+- The next call, `getEnrichedOrThrow()`, refused to read the trashed row and threw 404
+
+### Solution / Fix
+- Changed `findByHash()` to exclude rows where `deletedAt` is not null
+- A re-upload of a trashed file now creates a new row with the same content hash but a different storage key
+- Changes in `apps/server/src/modules/documents/documents.repository.ts`
+
+### Regression Test
+- `apps/server/src/modules/documents/documents.usecases.test.ts`, regression tests in the upload suite
+
+---
+
+## A mail whose attachment already existed was filed with no attachment, 2026-09-19T13:36:32Z
+
+**Component:** email/upload
+**Severity:** Major
+**Tags:** dedup, parentage, recurring
+
+### Symptoms
+- An email arrives with an attachment that was already stored (e.g. a logo on every message, a recurring invoice PDF)
+- The mail is filed but the attachment link is missing
+- The PDF or document sits orphaned in the library with no parent
+- The mail's detail view shows no attachments
+
+### Root Cause
+- `upload()` deduped on content hash alone and returned the existing document unchanged
+- The new call passed `parentDocumentId: mail.id` but was ignored
+- A mail with a recurring attachment never got the attachment link
+
+### Solution / Fix
+- A hash match now counts as the same upload only when it carries the same parent document
+- If a retry (same mail id) replays with the same parent, it stays safe on its original guarantee
+- If a different mail gets the same attachment, it gets its own row and its own storage key
+- The existing row is never re-parented, which would let trashing one mail cascade into a document the user uploaded themselves
+- Changes in `apps/server/src/modules/documents/documents.usecases.ts` (upload logic and `findByHash`)
+
+### Regression Test
+- `apps/server/src/modules/documents/documents.usecases.test.ts`, new tests verify that uploads with different parents create separate rows even with identical content hashes
+
+---
+
+## Typing in the phone chat composer came out backwards, 2026-09-19T13:52:05Z
+
+**Component:** client/chat
+**Severity:** Minor
+**Tags:** input, selection, react, uncontrolled
+
+### Symptoms
+- One message at 13:30Z on 2026-09-19 read "ebAH i Od scOd ecnIl WhatW"
+- Reversed: exactly "WtahW lInce dOcs dO i HAbe"
+- Every character landed at position 0
+- Not reproduced; a guard test is in place
+
+### Root Cause
+- A controlled input component was restoring a selection range after React's commit phase
+- A stale range would put the caret at position 0
+- The race happened only when input events and controlled binding both fired in the same frame
+
+### Solution / Fix
+- Made the input uncontrolled: nothing writes the value back to the DOM
+- No selection to restore, no mechanism for the race to lock the caret at 0
+- The Send button keeps its own flag for whether there is text
+- Removing the controlled binding also stopped a re-render on every keystroke, which exposed another race it had been hiding
+
+### Regression Test
+- `apps/client/src/pages/chat/ChatPage.test.tsx`, "a composer that cannot be typed into backwards" - a guard test that pins the behavior, not a red-then-green proof (jsdom cannot reproduce React's selection restoration)
+
+### Follow-up / Notes
+- Uncontrolled binding exposed a real race: a session whose history resolves after a message has been sent would sync that history over the message and wipe it
+- The sync now stands down once a message has been sent in the selected session, until the selection changes
+
+---
+
+## The assistant told the user it had no way to look in their own documents, 2026-09-19T16:18:24Z
+
+**Component:** assistant/triage
+**Severity:** Major
+**Tags:** prompt, live-model, test-isolation
+
+### Symptoms
+- User asked the Telegram bot a question about their own documents
+- The bot answered "I can't list your saved documents with my current tools"
+- The `answerFromDocuments` tool was present in the tool array
+
+### Root Cause
+- The tool-choosing call was handed a prompt written for a call that gets document text injected into it: "answer from the context given to you in this conversation"
+- Retrieval moved behind the answerFromDocuments tool, so that call never gets context at all
+- The prompt was telling the model on every turn that it had nothing
+- Whether it called the tool anyway rested on one line in the shipped instructions document, which the user can delete
+
+### Solution / Fix
+- Triage now has its own prompt that describes the assistant in terms of the tools it has
+- Prompt says a question about the user's documents goes to the tool rather than to memory
+- Prompt says outright that claiming no way to check is never true
+- Test pins that the guidance survives an instructions document that says nothing about documents
+- Changes in `apps/server/src/modules/assistant/assistant.models.ts`
+
+### Regression Test
+- `apps/server/src/modules/assistant/assistant.models.test.ts`, new test with custom instructions that omit documents entirely
+
+### Follow-up / Notes
+- Found by asking the live model under a terse custom instructions document; every mock test passed
+- A fake adapter never decides it feels unable, so no test would have caught the real model's hesitation
+
+---
+
+## The Telegram bot answered like a search box instead of conversing, 2026-09-19T16:23:20Z
+
+**Component:** assistant/answering
+**Severity:** Major
+**Tags:** prompt, surface, answering-mode
+
+### Symptoms
+- User asked the Telegram bot a question it could not answer from documents
+- The bot responded "I don't have enough information to answer that"
+- The conversational surface was supposed to answer freely instead
+
+### Root Cause
+- Both answering handlers hardcoded the app's chat prompt for every surface after tool calling moved answering behind the `answerFromDocuments` tool
+- The tool call only tells the model what tools it has; it doesn't tell it which prompt to use when answering
+- The Telegram surface inherited the chat prompt's "I don't have enough information" refusal, the exact behavior the conversational prompt existed to prevent
+
+### Solution / Fix
+- The answering prompt now follows the surface through one helper function instead of a ternary at two call sites
+- Telegram and any future conversational surface get their own prompt; the app's chat keeps its own
+- Changes in `apps/server/src/modules/assistant/assistant.models.ts` (new helper)
+
+### Regression Test
+- `apps/server/src/modules/assistant/assistant.models.test.ts`, "getPriceAnswerPrompt chooses the right prompt per surface"
+- `apps/server/src/modules/assistant/assistant.registry.test.ts`, regression tests verify behavior per surface
+
+### Follow-up / Notes
+- Found live, not by a test: the bot's answer revealed the hardcoded prompt
+- Plan 5 moves the app onto this same seam, so the helper future-proofs both surfaces
+
+---
+
+## A failed Telegram send bought a second model call, 2026-09-19T16:33:49Z
+
+**Component:** telegram/delivery
+**Severity:** Major
+**Tags:** idempotency, retry, duplicate
+
+### Symptoms
+- Telegram message delivery fails transiently on the second part of a split reply
+- The user sees a duplicate copy of their question in the chat history
+- The second model call happens (and gets charged) even though the first already produced the full reply
+
+### Root Cause
+- The reply delivery loop had no retry, so a transient Telegram failure threw out of the handler into the poll loop's own retry
+- The retry re-ran the whole turn: another paid model call, another copy of the user's question in the session, and that copy read back as history on the next turn
+- Any ordinary network blip was enough; no crash or bug needed
+
+### Solution / Fix
+- The send now retries on its own (same way a poisoned update is skipped) and gives up quietly
+- A turn that already produced an answer is never run again
+- The cursor stays where it is: advancing before handling would drop a file or note on a crash (losing data is worse than a duplicate reply)
+- The constraint is written next to the cursor code
+- Changes in `apps/server/src/modules/telegram/telegram.usecases.ts`
+
+### Regression Test
+- `apps/server/src/modules/telegram/telegram.usecases.test.ts`, comprehensive tests of send and update delivery, idempotency on retry, and cursor positioning
+
+### Follow-up / Notes
+- Four reviewer memory files moved to `.claude/agent-memory/plan-reviewer/` where all agent memory lives
+- The open question: advancing the cursor before handling would prevent duplicates but risks losing a document on crash; the current choice accepts duplicates to avoid data loss
+
+---
+
+## Cross-cutting: Tests that only meet fakes cannot catch defects in real counterparties, 2026-09-19T17:00:00Z
+
+**Component:** testing
+**Severity:** Major
+**Tags:** test-isolation, fake, mock, integration
+
+### Pattern
+- Four bugs in this batch were never caught by tests because the test injected a fake
+- Link fetcher: every test injected a MockAgent; the real path building an Agent ran nowhere else
+- Triage call: a fake adapter never decides it feels unable; the real model's hesitation was never tested
+- Telegram bot prompt: mock calls always behave as expected; real API never confirmed the prompt worked
+- Telegram failed send: mocks don't fail transiently; the real transport was never stressed
+
+### Impact
+- A test that stubs the counterparty (HTTP client, LLM, message queue) validates only the stub
+- It cannot catch timing issues, selection bugs, or mismatch between the prompt and real behavior
+- It cannot catch that the code path exists and is wired correctly
+
+### Recommendation
+- At least one test per surface should meet the real thing or a high-fidelity stand-in
+- Link fetcher now has a local HTTP server test
+- Triage and answering paths should have one call to a real model before shipping
+- Telegram send/retry paths could stress-test a real transport once, with a slow or lossy mode
+
+---
+
