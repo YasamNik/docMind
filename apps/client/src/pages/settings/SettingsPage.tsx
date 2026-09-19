@@ -4,6 +4,7 @@ import { TabsNav, TabsNavList, TabsNavTab, TabsNavPanel } from "@/components/ui/
 import { AiTab } from "./AiTab";
 import { StorageTab } from "./StorageTab";
 import { TelegramTab } from "./TelegramTab";
+import { EmailTab } from "./EmailTab";
 
 function DataTab() {
   const [exporting, setExporting] = useState(false);
@@ -45,6 +46,7 @@ export function SettingsPage() {
           <TabsNavTab value="ai">AI</TabsNavTab>
           <TabsNavTab value="storage">Storage</TabsNavTab>
           <TabsNavTab value="telegram">Telegram</TabsNavTab>
+          <TabsNavTab value="email">Email</TabsNavTab>
           <TabsNavTab value="data">Data</TabsNavTab>
         </TabsNavList>
         <TabsNavPanel value="ai">
@@ -55,6 +57,9 @@ export function SettingsPage() {
         </TabsNavPanel>
         <TabsNavPanel value="telegram">
           <TelegramTab />
+        </TabsNavPanel>
+        <TabsNavPanel value="email">
+          <EmailTab />
         </TabsNavPanel>
         <TabsNavPanel value="data">
           <DataTab />
