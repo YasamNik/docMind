@@ -27,6 +27,38 @@ learn patterns from, nothing else.
 The point is that DocMind's code is DocMind's own and carries no licensing question,
 whatever license DocMind ends up under.
 
+## DO NOT OVERENGINEER (mandatory)
+
+The user said this on 2026-09-19, with ten exclamation marks, after a one button feature
+came back as a 504 line spec with two new shared directories, a new endpoint and a
+refactor of working code. Read it as a standing instruction, not a mood.
+
+**Build the smallest thing that does what was asked.** Then stop. A feature the user
+described in one sentence should not arrive with an abstraction layer attached.
+
+What overengineering looks like here, all of it real:
+
+- Extracting a shared unit because something is used twice. Twice is not a pattern.
+  Wait for the third, and even then only if the duplication actually hurts.
+- Refactoring working, shipped code so a new feature can reuse it. The new feature can
+  have its own small copy. A regression in a path the user depends on costs more than
+  duplication ever will.
+- A new endpoint, table, column, setting or module when an existing one would carry it.
+- Options, flags and modes nobody asked for. Every one is a thing to configure, document,
+  test and get wrong.
+- Structure built for a future that has not arrived. Build for what is on the table today.
+- A plan or spec longer than the code it describes.
+
+**The test before you add anything:** can I name the thing that breaks today if I leave
+this out? If the answer is a future maybe, leave it out.
+
+**Scaling is per task, not per file.** A one line fix gets a one line fix, not a
+refactor of the function around it. Fix what was asked, mention anything else you saw,
+and move on.
+
+This outranks tidiness, symmetry and reuse. It does not outrank correctness, the guards
+that exist for safety, or the tests this file already requires.
+
 ## Session workflow
 
 1. **Start.** Read the top `WORKLOG.md` entry. Run `git status` and `git log --oneline -10`.
