@@ -188,11 +188,15 @@ export function stripCitationMarkers(text: string): string {
 
 // Names what the reply drew on, once per document, so a confident answer is never
 // mistaken for one backed by nothing. Silent when nothing was used: an ordinary
-// conversational reply gets no footer at all.
-export function assistantReplyText({ answer, sourceNames }: { answer: string; sourceNames: string[] }): string {
+// conversational reply gets no footer at all. web is set only for a /web turn, and
+// says so plainly since knowing the source is the point of asking for the web.
+export function assistantReplyText({ answer, sourceNames, web = false }: { answer: string; sourceNames: string[]; web?: boolean }): string {
   const unique = [...new Set(sourceNames)];
-  if (unique.length === 0) return answer;
-  return `${answer}\n\nUsed ${unique.join(", ")}.`;
+  const notes: string[] = [];
+  if (web) notes.push("Searched the web for this.");
+  if (unique.length > 0) notes.push(`Used ${unique.join(", ")}.`);
+  if (notes.length === 0) return answer;
+  return `${answer}\n\n${notes.join(" ")}`;
 }
 
 // Short acknowledgements a person sends without expecting a real answer: bare

@@ -117,11 +117,15 @@ export function createChatService({
       sessionId,
       content,
       systemPrompt = CHAT_SYSTEM_PROMPT,
+      web = false,
     }: {
       userId: string;
       sessionId: string;
       content: string;
       systemPrompt?: string;
+      // Attaches OpenRouter's live web search to this one turn (see ai.usecases.ts). Only
+      // the Telegram /web command sets this; the in-app chat page never does.
+      web?: boolean;
     }): Promise<AsyncGenerator<ChatStreamEvent>> {
       const session = await requireSession(userId, sessionId);
 
@@ -163,7 +167,7 @@ export function createChatService({
 
       async function* generate(): AsyncGenerator<ChatStreamEvent> {
         try {
-          const stream = await aiService.streamChat({ userId, messages });
+          const stream = await aiService.streamChat({ userId, messages, web });
           let fullText = "";
           for await (const piece of stream) {
             fullText += piece;

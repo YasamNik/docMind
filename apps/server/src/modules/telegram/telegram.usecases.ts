@@ -277,7 +277,25 @@ export function createTelegramService({
   // with its own system prompt so it talks like a person instead of refusing when no
   // document matched. streamChat has no token stream on Telegram's side, so the reply
   // is consumed to completion here and sent as one message, split if it runs long.
-  async function handleAssistantTurn({ userId, client, chatId, text }: { userId: string; client: TelegramClient; chatId: number; text: string }) {
+  // web is set only for a /web turn: it attaches OpenRouter's live web search to this
+  // one call (ai.usecases.ts) and never carries over, so the very next plain message
+  // is an ordinary turn again. A chat slot that is not on OpenRouter refuses instead
+  // of quietly answering without it, since aiService.streamChat throws a plain-English
+  // error for that case and it reaches the user through the same errorMessage path a
+  // missing chat model already uses below.
+  async function handleAssistantTurn({
+    userId,
+    client,
+    chatId,
+    text,
+    web = false,
+  }: {
+    userId: string;
+    client: TelegramClient;
+    chatId: number;
+    text: string;
+    web?: boolean;
+  }) {
     const trimmed = text.trim();
     if (isCheapMessage(trimmed)) {
       await client.sendMessage({ chatId, text: acknowledgementReply() });
@@ -285,7 +303,7 @@ export function createTelegramService({
     }
 
     const sessionId = await ensureChatSession({ userId });
-    const generator = await chatService.sendMessage({ userId, sessionId, content: trimmed, systemPrompt: TELEGRAM_ASSISTANT_SYSTEM_PROMPT });
+    const generator = await chatService.sendMessage({ userId, sessionId, content: trimmed, systemPrompt: TELEGRAM_ASSISTANT_SYSTEM_PROMPT, web });
 
     let fullText = "";
     let sourceNames: string[] = [];
@@ -296,7 +314,7 @@ export function createTelegramService({
       else if (event.event === "error") errorMessage = event.data.message;
     }
 
-    const reply = errorMessage ?? assistantReplyText({ answer: stripCitationMarkers(fullText), sourceNames });
+    const reply = errorMessage ?? assistantReplyText({ answer: stripCitationMarkers(fullText), sourceNames, web });
     for (const part of splitForTelegram(reply)) {
       await client.sendMessage({ chatId, text: part });
     }
@@ -345,10 +363,11 @@ export function createTelegramService({
       await handleNewThread({ userId, client, chatId });
       return;
     }
-    // /web reuses the same conversation for now; live web search is a later change
-    // that attaches to this same turn only for that command.
+    // /web is the one command that attaches live web search to the turn, and only
+    // this one call: the next plain message runs handleAssistantTurn with web left
+    // at its default of false.
     if (intent.kind === "web") {
-      await handleAssistantTurn({ userId, client, chatId, text: intent.text });
+      await handleAssistantTurn({ userId, client, chatId, text: intent.text, web: true });
       return;
     }
     if (intent.kind === "chat") {

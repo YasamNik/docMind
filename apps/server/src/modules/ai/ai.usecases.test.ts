@@ -183,6 +183,39 @@ describe("ai service", () => {
     );
   });
 
+  it("appends the online suffix to the model when web search is requested on an OpenRouter slot", async () => {
+    const { settingsService, aiService, adapter } = await setup();
+    await settingsService.set(userId, {
+      "ai.openrouter.apiKey": "sk-or-v1-test",
+      "ai.model.chat": "openrouter://google/gemini-2.0-flash-001",
+    });
+    const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+      { role: "user", content: "what's the weather in ottawa" },
+    ];
+    const stream = await aiService.streamChat({ userId, messages, web: true });
+    const chunks: string[] = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    expect(chunks.join("")).toBe("hello");
+    expect(adapter.streamChat).toHaveBeenCalledWith({
+      model: "google/gemini-2.0-flash-001:online",
+      messages,
+      maxTokens: undefined,
+    });
+  });
+
+  it("refuses web search when the chat slot is not on OpenRouter", async () => {
+    const { settingsService, aiService, adapter } = await setup();
+    await settingsService.set(userId, {
+      "ai.anthropic.apiKey": "sk-ant-test",
+      "ai.model.chat": "anthropic://claude-sonnet-4-20250514",
+    });
+    await expectAppError(
+      () => aiService.streamChat({ userId, messages: [{ role: "user", content: "hi" }], web: true }),
+      "ai.web_search_unsupported",
+    );
+    expect(adapter.streamChat).not.toHaveBeenCalled();
+  });
+
   it("lists models with cache", async () => {
     const { settingsService, aiService, adapter } = await setup();
     await settingsService.set(userId, { "ai.openrouter.apiKey": "sk-or-v1-test" });

@@ -196,10 +196,16 @@ export function createAiService({
       userId,
       messages,
       maxTokens,
+      web = false,
     }: {
       userId: string;
       messages: ChatMessage[];
       maxTokens?: number;
+      // Attaches OpenRouter's live web search to this one request through the ":online"
+      // model suffix, OpenRouter's documented equivalent of enabling its web plugin. Only
+      // the Telegram /web command ever sets this; every other caller leaves it false, so
+      // web search is never inferred and never carries over to the next request.
+      web?: boolean;
     }): Promise<AsyncIterable<string>> {
       const { model, provider, apiKey, baseUrl } = await resolveSlot(userId, "chat");
       if (!provider.capabilities.text) {
@@ -209,10 +215,18 @@ export function createAiService({
           status: 400,
         });
       }
+      if (web && provider.id !== "openrouter") {
+        throw createError({
+          code: "ai.web_search_unsupported",
+          message: `Provider "${provider.label}" has no web search. /web only works with an OpenRouter chat model, so switch the chat slot in Settings to use it.`,
+          status: 400,
+        });
+      }
       const adapter = buildAdapter(provider, apiKey, baseUrl);
       const start = Date.now();
-      const stream = await adapter.streamChat({ model, messages, maxTokens });
-      logger.info({ task: "chat", model: buildModelUri(provider.id, model), latencyMs: Date.now() - start }, "chat stream started");
+      const requestModel = web ? `${model}:online` : model;
+      const stream = await adapter.streamChat({ model: requestModel, messages, maxTokens });
+      logger.info({ task: "chat", model: buildModelUri(provider.id, model), latencyMs: Date.now() - start, web }, "chat stream started");
       return stream;
     },
 

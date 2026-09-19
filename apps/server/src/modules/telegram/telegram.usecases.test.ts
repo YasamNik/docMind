@@ -729,6 +729,59 @@ describe("telegram service, the assistant", () => {
   });
 });
 
+describe("telegram service, /web", () => {
+  async function pairAndConfigureChat() {
+    await settingsService.set(userId, {
+      "telegram.botToken": "111:token",
+      "ai.openrouter.apiKey": "sk-or-v1-test",
+      "ai.model.chat": "openrouter://test-chat-model",
+    });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    await settingsService.setInternal(userId, "telegram.noteMigrationNoticeSent", true);
+  }
+
+  it("attaches web search for a /web question, and not for the next plain one", async () => {
+    await pairAndConfigureChat();
+    streamChatImpl = vi.fn(async () => asyncIterableOf(["Around 5 degrees and cloudy in Ottawa today."]));
+    const { client, sent } = fakeTelegram({
+      batches: [
+        [updateWithCommand({ updateId: 1, fromId: PAIRED_ID, command: "/web", argument: "what's the weather in ottawa" })],
+        [updateWithText({ updateId: 2, fromId: PAIRED_ID, text: "what about my rent" })],
+      ],
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    await telegram.runOnce();
+
+    expect(streamChatImpl).toHaveBeenCalledTimes(2);
+    expect(streamChatImpl).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: "test-chat-model:online" }));
+    expect(streamChatImpl).toHaveBeenNthCalledWith(2, expect.objectContaining({ model: "test-chat-model" }));
+    expect(sent[0]?.text).toMatch(/web/i);
+  });
+
+  it("says plainly that /web needs an OpenRouter chat model, when it is not", async () => {
+    await settingsService.set(userId, {
+      "telegram.botToken": "111:token",
+      "ai.anthropic.apiKey": "sk-ant-test",
+      "ai.model.chat": "anthropic://claude-sonnet-4-20250514",
+    });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    await settingsService.setInternal(userId, "telegram.noteMigrationNoticeSent", true);
+    streamChatImpl = vi.fn(async () => asyncIterableOf(["should never be reached"]));
+    const { client, sent } = fakeTelegram({
+      batches: [[updateWithCommand({ updateId: 1, fromId: PAIRED_ID, command: "/web", argument: "what's the weather in ottawa" })]],
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toMatch(/openrouter/i);
+    expect(streamChatImpl).not.toHaveBeenCalled();
+  });
+});
+
 describe("telegram service, the second reply", () => {
   it("reports a document once both the summary and the rules have finished", async () => {
     await settingsService.set(userId, { "telegram.botToken": "111:token" });

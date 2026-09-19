@@ -282,6 +282,16 @@ describe("telegram models", () => {
     expect(assistantReplyText({ answer: "Morning!", sourceNames: [] })).toBe("Morning!");
   });
 
+  it("says it searched the web when a /web turn answered", () => {
+    const reply = assistantReplyText({ answer: "Around 5 degrees and cloudy.", sourceNames: [], web: true });
+    expect(reply).toBe("Around 5 degrees and cloudy.\n\nSearched the web for this.");
+  });
+
+  it("names both the web and a document when a /web turn also cited one", () => {
+    const reply = assistantReplyText({ answer: "Your policy covers that.", sourceNames: ["policy.pdf"], web: true });
+    expect(reply).toBe("Your policy covers that.\n\nSearched the web for this. Used policy.pdf.");
+  });
+
   it("treats punctuation-only text and a lone emoji as cheap, not worth a model call", () => {
     expect(isCheapMessage("ok")).toBe(true);
     expect(isCheapMessage("OK!")).toBe(true);
