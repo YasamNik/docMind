@@ -112,6 +112,20 @@ export function createChatService({
     // assistant passes its own sibling prompt (chat.models.ts, TELEGRAM_ASSISTANT_SYSTEM_PROMPT)
     // so it can hold an ordinary conversation instead of refusing when nothing matched,
     // while reusing this same retrieval, history and citation pipeline unchanged.
+    //
+    // requireSession and search.search below run before the try block the streaming
+    // generator wraps, so a bad sessionId rejects this whole call rather than surfacing
+    // as an error event. That is deliberate: chat.routes.ts awaits this call before it
+    // opens the SSE response, so today a deleted session gets the in-app chat client an
+    // ordinary HTTP 404 for its POST. Moving this work inside the generator's own try
+    // would make sendMessage always resolve, which would turn that same request into a
+    // 200 SSE stream carrying an error event instead, a client-visible protocol change
+    // for the app's own chat page. Telegram has no such client to break, since it
+    // consumes the generator itself and only ever shows the user a plain text reply, so
+    // its recovery from a stale telegram.chatSessionId (see handleAssistantTurn in
+    // telegram.usecases.ts) is handled there instead, by catching the rejection and
+    // retrying once on a fresh session, rather than here.
+
     async sendMessage({
       userId,
       sessionId,

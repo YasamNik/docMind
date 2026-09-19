@@ -145,13 +145,6 @@ export function missingNoteTextReply(): string {
   return "What do you want me to note? Send /note followed by the text, like /note buy milk.";
 }
 
-// Placeholder for a plain message before the assistant conversation exists. Replaced
-// once the chat integration lands, but until then the bot still answers something
-// rather than going quiet on a message it used to file.
-export function assistantComingSoonReply(): string {
-  return "I can't talk yet, that's coming very soon. Want to save this as a note instead? Send /note followed by the text.";
-}
-
 // Said once, ever, the first time plain text arrives after notes moved behind /note.
 // Same once-only shape as compressedPhotoNotice: a settings flag remembers it fired.
 export function notesMovedNotice(): string {
@@ -214,6 +207,23 @@ export function isCheapMessage(text: string): boolean {
 
 export function acknowledgementReply(): string {
   return "👍";
+}
+
+// A cheap acknowledgement, such as "sure" or "yep", is a real answer rather than
+// filler when it follows a clarifying question the assistant itself just asked. Read
+// off the trailing question mark on the assistant's last message, so isCheapMessage's
+// own word list never has to special case which acknowledgements can mean yes.
+export function isAnsweringAQuestion(lastAssistantMessage: string | undefined): boolean {
+  if (!lastAssistantMessage) return false;
+  return lastAssistantMessage.trim().endsWith("?");
+}
+
+// Said when a turn fails before there is any real reply to send at all, such as a
+// stored chat session that no longer exists. Short and plain, the same voice as the
+// rest of this module's replies, since the person on the other end just wants to know
+// to try again.
+export function assistantTroubleReply(): string {
+  return "Something went wrong on my end there. Try sending that again.";
 }
 
 export function newThreadReply(): string {

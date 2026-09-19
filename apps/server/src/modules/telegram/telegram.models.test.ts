@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { TelegramUpdate } from "./telegram.schemas.js";
 import {
   acknowledgementReply,
-  assistantComingSoonReply,
   assistantReplyText,
+  assistantTroubleReply,
+  isAnsweringAQuestion,
   compressedPhotoNotice,
   duplicateReply,
   fileDocumentName,
@@ -236,8 +237,15 @@ describe("telegram models", () => {
     expect(missingNoteTextReply()).toMatch(/\/note/);
   });
 
-  it("says plainly that talking is not wired up yet", () => {
-    expect(assistantComingSoonReply()).toMatch(/\/note/);
+  it("apologizes in the module's own voice when a turn fails outright", () => {
+    expect(assistantTroubleReply().length).toBeGreaterThan(0);
+    expect(assistantTroubleReply()).not.toMatch(/error|exception/i);
+  });
+
+  it("reads a cheap word as answering the assistant's own question when its last message asked one", () => {
+    expect(isAnsweringAQuestion("Do you want me to file this under Finance?")).toBe(true);
+    expect(isAnsweringAQuestion("Filed it under Finance.")).toBe(false);
+    expect(isAnsweringAQuestion(undefined)).toBe(false);
   });
 
   it("tells someone once that notes now need /note", () => {

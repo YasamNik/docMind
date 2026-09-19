@@ -4,7 +4,7 @@ import * as v from "valibot";
 import { isAppError } from "../../shared/errors/errors.js";
 import { createLogger, type Logger } from "../../shared/logger/logger.js";
 import { TELEGRAM_ASSISTANT_SYSTEM_PROMPT } from "../chat/chat.models.js";
-import type { ChatService } from "../chat/chat.usecases.js";
+import type { ChatService, ChatStreamEvent } from "../chat/chat.usecases.js";
 import type { Database } from "../database/database.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
@@ -14,12 +14,14 @@ import { createTelegramClient, type TelegramClient } from "./telegram.client.js"
 import {
   acknowledgementReply,
   assistantReplyText,
+  assistantTroubleReply,
   compressedPhotoNotice,
   duplicateReply,
   fileDocumentName,
   fileTooLargeReply,
   finishedDocumentReply,
   intentOf,
+  isAnsweringAQuestion,
   isCheapMessage,
   linkDocumentBody,
   linkDocumentName,
@@ -35,10 +37,12 @@ import {
 } from "./telegram.models.js";
 import { telegramUpdateSchema, type TelegramMessage, type TelegramUpdate } from "./telegram.schemas.js";
 
-// Only what the assistant turn actually calls: creating a session and sending a
-// message. Kept narrow on purpose so a test can hand this a chat service backed by a
-// fake AI adapter without also standing in for every route chat.usecases.ts serves.
-type TelegramChatService = Pick<ChatService, "createSession" | "sendMessage">;
+// Only what the assistant turn actually calls: creating a session, sending a message,
+// and reading back its own last message to tell a cheap acknowledgement from a real
+// answer to a question it just asked. Kept narrow on purpose so a test can hand this a
+// chat service backed by a fake AI adapter without also standing in for every route
+// chat.usecases.ts serves.
+type TelegramChatService = Pick<ChatService, "createSession" | "sendMessage" | "listMessages">;
 
 // Own poll loop in the shape of jobs.runner.ts: re-reads its token every cycle instead
 // of reacting to a settings write, because settingsService has no post-write hook.
@@ -273,6 +277,23 @@ export function createTelegramService({
     return session.id;
   }
 
+  // A word from isCheapMessage's list is filler only until it answers a question the
+  // assistant itself just asked, read straight off the current session's own last
+  // message rather than guessed at. No session yet, or one that no longer resolves,
+  // means there is nothing open for it to be answering.
+  async function isShortCircuitableAcknowledgement({ userId, trimmed }: { userId: string; trimmed: string }): Promise<boolean> {
+    if (!isCheapMessage(trimmed)) return false;
+    const sessionId = await settingsService.get<string>(userId, "telegram.chatSessionId");
+    if (!sessionId) return true;
+    try {
+      const messages = await chatService.listMessages({ userId, sessionId });
+      const last = messages.at(-1);
+      return !isAnsweringAQuestion(last?.role === "assistant" ? last.content : undefined);
+    } catch {
+      return true;
+    }
+  }
+
   // Runs one turn of the assistant conversation through the app's own chat service,
   // with its own system prompt so it talks like a person instead of refusing when no
   // document matched. streamChat has no token stream on Telegram's side, so the reply
@@ -297,13 +318,44 @@ export function createTelegramService({
     web?: boolean;
   }) {
     const trimmed = text.trim();
-    if (isCheapMessage(trimmed)) {
+    if (await isShortCircuitableAcknowledgement({ userId, trimmed })) {
       await client.sendMessage({ chatId, text: acknowledgementReply() });
       return;
     }
 
-    const sessionId = await ensureChatSession({ userId });
-    const generator = await chatService.sendMessage({ userId, sessionId, content: trimmed, systemPrompt: TELEGRAM_ASSISTANT_SYSTEM_PROMPT, web });
+    // requireSession and search.search both run before chat.usecases.ts's own try
+    // block (chat.usecases.ts sendMessage), so a stored session id that no longer
+    // resolves, most often because the same session was deleted from the app's own
+    // Chat page (chat.routes.ts, ChatPage.tsx: it is an ordinary chat_sessions row),
+    // rejects this call outright instead of surfacing as a streamed error event. Left
+    // uncaught, that used to escape pollUpdatesOnce's retry loop, which keeps retrying
+    // the exact same broken session id, and the user got no reply at all, forever,
+    // unless they happened to send /new. One retry on a fresh session recovers the
+    // conversation; any other failure still gets a plain reply rather than silence.
+    async function startTurn(): Promise<AsyncGenerator<ChatStreamEvent>> {
+      const sessionId = await ensureChatSession({ userId });
+      return chatService.sendMessage({ userId, sessionId, content: trimmed, systemPrompt: TELEGRAM_ASSISTANT_SYSTEM_PROMPT, web });
+    }
+
+    let generator: AsyncGenerator<ChatStreamEvent>;
+    try {
+      generator = await startTurn();
+    } catch (error) {
+      const staleSession = isAppError(error) && error.code === "chat.session_not_found";
+      logger.error({ userId, err: (error as Error).message, staleSession }, "Telegram assistant turn failed before generating a reply");
+      if (!staleSession) {
+        await client.sendMessage({ chatId, text: assistantTroubleReply() });
+        return;
+      }
+      await settingsService.setInternal(userId, "telegram.chatSessionId", "");
+      try {
+        generator = await startTurn();
+      } catch (retryError) {
+        logger.error({ userId, err: (retryError as Error).message }, "Telegram assistant turn failed again after starting a fresh chat session");
+        await client.sendMessage({ chatId, text: assistantTroubleReply() });
+        return;
+      }
+    }
 
     let fullText = "";
     let sourceNames: string[] = [];

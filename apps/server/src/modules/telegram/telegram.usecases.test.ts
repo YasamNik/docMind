@@ -738,6 +738,65 @@ describe("telegram service, the assistant", () => {
     expect(streamChatImpl).not.toHaveBeenCalled();
     expect(sent).toHaveLength(2);
   });
+
+  it("treats a cheap acknowledgement as a real answer when it responds to the assistant's own question", async () => {
+    await pairAndConfigureChat();
+    let call = 0;
+    streamChatImpl = vi.fn(async () =>
+      asyncChatPartsOf([call++ === 0 ? "Do you want me to file this under Finance?" : "Filed it under Finance."]),
+    );
+    const { client, sent } = fakeTelegram({
+      batches: [
+        [updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "where should this go" })],
+        [updateWithText({ updateId: 2, fromId: PAIRED_ID, text: "sure" })],
+      ],
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    await telegram.runOnce();
+
+    expect(streamChatImpl).toHaveBeenCalledTimes(2);
+    expect(sent[1]?.text).toContain("Filed it under Finance.");
+    const sessions = await chatService.listSessions(userId);
+    const messages = await chatService.listMessages({ userId, sessionId: sessions[0]!.id });
+    expect(messages.filter((m) => m.role === "user").map((m) => m.content)).toEqual(["where should this go", "sure"]);
+  });
+
+  it("still treats sure as a cheap acknowledgement when there is no open question to answer", async () => {
+    await pairAndConfigureChat();
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf(["should never be reached"]));
+    const { client, sent } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "sure" })]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(streamChatImpl).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(1);
+  });
+
+  // Regression test: a stored telegram.chatSessionId pointing at a chat_sessions row
+  // that no longer exists, such as one deleted from the app's own Chat page, used to
+  // reject chatService.sendMessage before the streaming generator's own try block, so
+  // the rejection escaped handleAssistantTurn uncaught and the user got no reply at all.
+  it("recovers when the stored chat session was deleted elsewhere, instead of going permanently silent", async () => {
+    await pairAndConfigureChat();
+    await settingsService.setInternal(userId, "telegram.chatSessionId", "session-that-no-longer-exists");
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf(["Morning! Nothing on your plate that I can see."]));
+    const { client, sent } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "good morning" })]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toBe("Morning! Nothing on your plate that I can see.");
+
+    const newSessionId = await settingsService.get<string>(userId, "telegram.chatSessionId");
+    expect(newSessionId).toBeTruthy();
+    expect(newSessionId).not.toBe("session-that-no-longer-exists");
+    const sessions = await chatService.listSessions(userId);
+    expect(sessions.map((s) => s.id)).toContain(newSessionId);
+  });
 });
 
 describe("telegram service, /web", () => {
