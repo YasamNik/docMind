@@ -151,6 +151,17 @@ describe("telegram service", () => {
     expect(sent).toEqual([{ chatId: PAIRED_ID, text: expect.stringMatching(/paired/i) }]);
   });
 
+  it("stores the sender's display name when pairing succeeds", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairingCode", "ABC123");
+    const { client } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "abc123" })]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(await settingsService.get(userId, "telegram.pairedName")).toBe("Alex");
+  });
+
   it("says nothing at all when a pairing attempt does not match the stored code", async () => {
     await settingsService.set(userId, { "telegram.botToken": "111:token" });
     await settingsService.setInternal(userId, "telegram.pairingCode", "ABC123");

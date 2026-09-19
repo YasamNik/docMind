@@ -75,17 +75,20 @@ export function createTelegramService({
     client,
     chatId,
     fromId,
+    fromName,
     code,
   }: {
     userId: string;
     client: TelegramClient;
     chatId: number;
     fromId: number;
+    fromName: string;
     code: string;
   }) {
     const storedCode = await settingsService.get<string>(userId, "telegram.pairingCode");
     if (!storedCode || !codesMatch(code, storedCode)) return;
     await settingsService.setInternal(userId, "telegram.pairedUserId", fromId);
+    await settingsService.setInternal(userId, "telegram.pairedName", fromName);
     await settingsService.setInternal(userId, "telegram.pairingCode", "");
     await client.sendMessage({ chatId, text: pairingSucceededReply() });
   }
@@ -159,7 +162,9 @@ export function createTelegramService({
       // Every message except a correct code is ignored with no reply at all here: an
       // unpaired bot must not confirm it received anything, or a stranger who found
       // the bot's username learns it does something worth guessing at.
-      if (intent.kind === "pairing") await tryPair({ userId, client, chatId, fromId, code: intent.code });
+      if (intent.kind === "pairing") {
+        await tryPair({ userId, client, chatId, fromId, fromName: message.from.first_name, code: intent.code });
+      }
       return;
     }
 

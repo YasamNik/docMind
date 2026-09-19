@@ -27,6 +27,13 @@ export const telegramSettingDefinitions: SettingDefinition[] = [
     doc: "Current pairing code shown in Settings, cleared once a pairing succeeds.",
   }),
   defineSetting({
+    key: "telegram.pairedName",
+    schema: v.string(),
+    internal: true,
+    default: "",
+    doc: "Display name of the Telegram user this bot is paired with, captured at pairing time.",
+  }),
+  defineSetting({
     key: "telegram.lastUpdateId",
     schema: v.number(),
     internal: true,

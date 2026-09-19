@@ -51,6 +51,7 @@ import { registerSearchRoutes } from "./modules/search/search.routes.js";
 import { createSearchService } from "./modules/search/search.usecases.js";
 import { registerSummaryRoutes } from "./modules/summary/summary.routes.js";
 import { createSummaryService } from "./modules/summary/summary.usecases.js";
+import { registerTelegramRoutes } from "./modules/telegram/telegram.routes.js";
 import { createTelegramService } from "./modules/telegram/telegram.usecases.js";
 import { registerTagsRoutes } from "./modules/tags/tags.routes.js";
 import { createTagsService } from "./modules/tags/tags.usecases.js";
@@ -207,6 +208,7 @@ export function createServer({
   registerFieldsRoutes({ app, fieldsRepository, summaryService, getUserId });
   registerChatRoutes({ app, chatService, getUserId });
   registerStorageRoutes({ app, storageService, getUserId, settingsEncryptionKey: config.settingsEncryptionKey });
+  registerTelegramRoutes({ app, settingsService, getUserId });
 
   const exportService = createExportService({ db, storageService });
   registerExportRoutes({ app, exportService, getUserId });

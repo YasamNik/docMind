@@ -177,6 +177,18 @@ export function createSettingsService({
       cache.delete(userId);
     },
 
+    // Clears an internal setting back to unset, so get() falls through to its default
+    // or reports undefined. Unpairing telegram uses this to drop the paired user id
+    // rather than writing a sentinel value into a numeric setting.
+    async removeInternal(userId: string, key: string) {
+      const definition = registry.get(key);
+      if (!definition.internal) {
+        throw new Error(`removeInternal called on non-internal setting "${key}"`);
+      }
+      await repository.remove({ userId, key });
+      cache.delete(userId);
+    },
+
     invalidate() {
       cache.clear();
     },
