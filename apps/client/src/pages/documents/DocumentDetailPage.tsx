@@ -77,27 +77,28 @@ function CategoryPicker({ document, id, queryClient }: { document: DocumentDetai
   });
 
   return (
-    <div className="flex items-center gap-2">
-      <select
-        className="rounded-full border border-input bg-secondary px-3 py-1.5 text-sm"
-        value={document.categoryId ?? ""}
-        onChange={(e) => setCategory.mutate(e.target.value || null)}
-      >
-        <option value="">No category</option>
-        {categories.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.path}
-          </option>
-        ))}
-      </select>
-      {document.categorySource === "auto" && <Badge variant="neutral">Auto</Badge>}
+    <div className="flex flex-col gap-1">
+      <span className="text-xs text-muted-foreground">Category</span>
+      <div className="flex items-center gap-2">
+        <select
+          className="rounded-full border border-input bg-secondary px-3 py-1.5 text-sm"
+          aria-label="Document category"
+          value={document.categoryId ?? ""}
+          onChange={(e) => setCategory.mutate(e.target.value || null)}
+        >
+          <option value="">No category</option>
+          {categories.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.path}
+            </option>
+          ))}
+        </select>
+        {document.categorySource === "auto" && <Badge variant="neutral">Auto</Badge>}
+      </div>
     </div>
   );
 }
 
-// Styled with a dashed border rather than the category picker's solid one, since a type
-// has no hierarchy and is chosen from a flat, colour coded list, not a path. The picker
-// stays visually different from CategoryPicker on purpose, matching the badge above.
 // A colour coded pill, never a second breadcrumb line, so a document with both a
 // category and a type never reads as if one taxonomy were repeating the other.
 function DocumentTypeBadge({ documentTypeId, documentTypeName }: { documentTypeId: string | null; documentTypeName: string | null }) {
@@ -112,6 +113,10 @@ function DocumentTypeBadge({ documentTypeId, documentTypeName }: { documentTypeI
   );
 }
 
+// The visible "Type" label and the flat name list (versus CategoryPicker's "Category"
+// label and hierarchical paths) are what actually keep this from reading as a second
+// category picker. The dashed border is a residual visual cue, not load bearing on its
+// own: it would be easy to miss and does nothing for a screen reader.
 function TypePicker({ document, id, queryClient }: { document: DocumentDetail; id: string; queryClient: ReturnType<typeof useQueryClient> }) {
   const { data: types = [] } = useQuery({ queryKey: ["types"], queryFn: typesApi.list });
   const setType = useMutation({
@@ -126,19 +131,22 @@ function TypePicker({ document, id, queryClient }: { document: DocumentDetail; i
   });
 
   return (
-    <select
-      className="rounded-full border border-dashed border-input bg-secondary/60 px-3 py-1.5 text-sm"
-      aria-label="Document type"
-      value={document.documentTypeId ?? ""}
-      onChange={(e) => setType.mutate(e.target.value || null)}
-    >
-      <option value="">No type</option>
-      {types.map((t) => (
-        <option key={t.id} value={t.id}>
-          {t.name}
-        </option>
-      ))}
-    </select>
+    <div className="flex flex-col gap-1">
+      <span className="text-xs text-muted-foreground">Type</span>
+      <select
+        className="rounded-full border border-dashed border-input bg-secondary/60 px-3 py-1.5 text-sm"
+        aria-label="Document type"
+        value={document.documentTypeId ?? ""}
+        onChange={(e) => setType.mutate(e.target.value || null)}
+      >
+        <option value="">No type</option>
+        {types.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.name}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }
 

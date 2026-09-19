@@ -188,6 +188,16 @@ describe("DocumentDetailPage type and category", () => {
     expect(type.closest('[data-slot="badge"]')).not.toBeNull();
   });
 
+  it("labels both pickers visibly and gives each an aria-label of its own", async () => {
+    renderPage();
+    // Visible labels above each select, so the distinction does not rely on the border
+    // style alone, which is easy to miss and invisible to a screen reader.
+    expect(await screen.findByText("Category")).toBeInTheDocument();
+    expect(screen.getByText("Type")).toBeInTheDocument();
+    expect(screen.getByLabelText("Document category")).toBeInTheDocument();
+    expect(screen.getByLabelText("Document type")).toBeInTheDocument();
+  });
+
   it("lets the type be changed with its own picker", async () => {
     renderPage();
     const select = await screen.findByDisplayValue("No type");
