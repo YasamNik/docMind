@@ -117,6 +117,11 @@ async function* chunkStream(initial: Buffer, rest: AsyncIterable<Buffer>, chunkS
 // Above the resumable threshold: start a session, then stream the body to it in fixed
 // size chunks with the Content-Range header each one needs. Never buffers more than one
 // chunk, so a large file never sits whole in memory.
+//
+// Known gap: a chunk that fails partway through is not retried and the session is not
+// resumed. The whole upload fails on the first chunk that answers with neither 308 nor
+// 200, which the caller sees as a clean storage.google_drive_error. Retrying the failed
+// chunk, or resuming the session on a later attempt, is not implemented.
 async function uploadResumable(
   call: Call,
   { name, parentId, mimeType, initial, rest }: {

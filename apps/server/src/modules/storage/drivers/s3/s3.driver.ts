@@ -7,7 +7,8 @@ import { Upload } from "@aws-sdk/lib-storage";
 import * as v from "valibot";
 import { createError } from "../../../../shared/errors/errors.js";
 import { defineSetting } from "../../../settings/settings.registry.js";
-import type { StorageDriver, StorageDriverDefinition } from "../../storage.types.js";
+import type { SettingsService } from "../../../settings/settings.usecases.js";
+import type { StorageDriver, StorageDriverDefinition, StorageLocation } from "../../storage.types.js";
 
 function isNotFound(error: unknown) {
   const status = (error as { $metadata?: { httpStatusCode?: number } } | undefined)?.$metadata?.httpStatusCode;
@@ -22,6 +23,24 @@ function fullKey(prefix: string, key: string) {
   const cleanPrefix = prefix.replace(/\/+$/, "");
   const cleanKey = key.replace(/^\/+/, "");
   return cleanPrefix ? `${cleanPrefix}/${cleanKey}` : cleanKey;
+}
+
+// The settings describeLocation needs, and nothing more: bucket, region, endpoint and
+// prefix are never secret, so this never has to read the access key id or secret access
+// key that create() requires.
+async function readS3LocationSettings({ settings, userId }: { settings: SettingsService; userId: string }) {
+  const bucket = await settings.get<string>(userId, "storage.s3.bucket");
+  const region = await settings.get<string>(userId, "storage.s3.region");
+  const endpoint = await settings.get<string>(userId, "storage.s3.endpoint");
+  const prefix = (await settings.get<string>(userId, "storage.s3.prefix")) ?? "docmind/";
+  if (!bucket || !region) {
+    throw createError({
+      code: "storage.driver_not_configured",
+      message: "The S3 driver needs a bucket and region before it can locate a file.",
+      status: 400,
+    });
+  }
+  return { bucket, region, endpoint: endpoint || undefined, prefix };
 }
 
 export function createS3Driver({
@@ -94,15 +113,24 @@ export function createS3Driver({
         return { ok: false, message: `Cannot reach bucket "${bucket}": ${(error as Error).message}` };
       }
     },
-    describeLocation({ key }) {
-      const objectKey = fullKey(prefix, key);
-      // Only Amazon's own console has a URL shape worth guessing. A custom endpoint means
-      // R2, B2, MinIO or something else entirely, and each puts its browser UI somewhere
-      // different, so the label alone is the honest answer there.
-      const url = endpoint ? undefined : `https://s3.console.aws.amazon.com/s3/object/${bucket}?region=${region}&prefix=${objectKey}`;
-      return { label: `s3://${bucket}/${objectKey}`, url };
-    },
   };
+}
+
+// Pure and settings driven: bucket, region, endpoint and prefix are all non-secret, so
+// this answers without the access key id or secret access key, and therefore without a
+// working client. Only Amazon's own console has a URL shape worth guessing. A custom
+// endpoint means R2, B2, MinIO or something else entirely, and each puts its browser UI
+// somewhere different, so the label alone is the honest answer there.
+export function describeS3Location({ bucket, region, prefix, endpoint, key }: {
+  bucket: string;
+  region: string;
+  prefix: string;
+  endpoint?: string;
+  key: string;
+}): StorageLocation {
+  const objectKey = fullKey(prefix, key);
+  const url = endpoint ? undefined : `https://s3.console.aws.amazon.com/s3/object/${bucket}?region=${region}&prefix=${objectKey}`;
+  return { label: `s3://${bucket}/${objectKey}`, url };
 }
 
 export const s3BucketSetting = defineSetting({
@@ -244,5 +272,9 @@ export const s3DriverDefinition: StorageDriverDefinition = {
     });
 
     return createS3Driver({ bucket, region, prefix, endpoint: endpoint || undefined, client });
+  },
+  async describeLocation({ settings, userId, key }) {
+    const { bucket, region, prefix, endpoint } = await readS3LocationSettings({ settings, userId });
+    return describeS3Location({ bucket, region, prefix, endpoint, key });
   },
 };

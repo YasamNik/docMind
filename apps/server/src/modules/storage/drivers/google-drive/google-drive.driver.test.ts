@@ -1,9 +1,13 @@
 import { Readable } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { OAuth2Client } from "google-auth-library";
+import { describe, expect, it, vi } from "vitest";
+import { createTestDatabase } from "../../../../shared/test/database.test-utils.js";
 import { expectAppError } from "../../../../shared/test/errors.test-utils.js";
+import { createSettingsRegistry } from "../../../settings/settings.registry.js";
+import { createSettingsService } from "../../../settings/settings.usecases.js";
 import { runDriverContractTests } from "../driver-contract.test-utils.js";
-import { createGoogleDriveClient, type DriveFetch } from "./google-drive.client.js";
-import { createGoogleDriveDriver, googleDriveDriverDefinition } from "./google-drive.driver.js";
+import { createGoogleDriveClient, RESUMABLE_CHUNK_SIZE_BYTES, type DriveFetch } from "./google-drive.client.js";
+import { createGoogleDriveDriver, describeGoogleDriveLocation, googleDriveDriverDefinition } from "./google-drive.driver.js";
 
 const DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3/files";
 const RESUMABLE_QUERY_PARAM = "upload_id";
@@ -128,10 +132,10 @@ function makeDriverWithFakeDrive() {
   const { fetchImpl, files, sessions } = createFakeGoogleDrive();
   const drive = createGoogleDriveClient({ getAccessToken: async () => "fake-access-token", fetchImpl });
   const driver = createGoogleDriveDriver({ drive, resolveFolderId: async () => "root-folder-id" });
-  return { driver, drive, files, sessions };
+  return { driver, drive, files, sessions, describeLocation: describeGoogleDriveLocation };
 }
 
-runDriverContractTests("google-drive", async () => makeDriverWithFakeDrive().driver);
+runDriverContractTests("google-drive", async () => makeDriverWithFakeDrive());
 
 describe("google drive driver extras", () => {
   it("uploads a body over five megabytes through a resumable session", async () => {
@@ -146,9 +150,40 @@ describe("google drive driver extras", () => {
     expect(sessions.completed).toBe(0);
   });
 
+  // uploadResumable does not retry a failed chunk or resume the session: it surfaces the
+  // first chunk that answers with neither 308 nor 200 as a clean error and stops. This
+  // locks that gap in as current behavior rather than an accident nobody noticed.
+  it("surfaces a chunk failure partway through a resumable upload as a clean error, with no retry", async () => {
+    let putCount = 0;
+    const fetchImpl: DriveFetch = (async (input, init) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      if (method === "POST" && url.pathname === "/upload/drive/v3/files" && url.searchParams.get("uploadType") === "resumable") {
+        return new Response(null, {
+          status: 200,
+          headers: { Location: `${DRIVE_UPLOAD_BASE}?uploadType=resumable&${RESUMABLE_QUERY_PARAM}=session-fail` },
+        });
+      }
+      if (method === "PUT" && url.pathname === "/upload/drive/v3/files") {
+        putCount += 1;
+        // First chunk of three: accepted, more to come. Second chunk: fails outright,
+        // mid upload, well before the final chunk. Third chunk must never be sent.
+        if (putCount === 1) return new Response(null, { status: 308 });
+        return new Response("rate limited", { status: 500 });
+      }
+      throw new Error(`Unexpected request in this test: ${method} ${url.toString()}`);
+    }) as DriveFetch;
+
+    const drive = createGoogleDriveClient({ getAccessToken: async () => "fake-access-token", fetchImpl });
+    const driver = createGoogleDriveDriver({ drive, resolveFolderId: async () => "root-folder-id" });
+
+    const body = Readable.from([Buffer.alloc(2 * RESUMABLE_CHUNK_SIZE_BYTES + 1024, "x")]);
+    await expectAppError(() => driver.put({ key: "big.bin", body }), "storage.google_drive_error");
+    expect(putCount).toBe(2);
+  });
+
   it("describes a file as a Drive link without a network call", () => {
-    const { driver } = makeDriverWithFakeDrive();
-    expect(driver.describeLocation({ key: "1a2b3c" })).toEqual({
+    expect(describeGoogleDriveLocation({ key: "1a2b3c" })).toEqual({
       label: "Google Drive file 1a2b3c",
       url: "https://drive.google.com/file/d/1a2b3c/view",
     });
@@ -208,6 +243,106 @@ describe("google drive oauth hook", () => {
       clientSecret: "storage.googleDrive.clientSecret",
       refreshToken: "storage.googleDrive.refreshToken",
       accountEmail: "storage.googleDrive.accountEmail",
+    });
+  });
+});
+
+// A fake GaxiosError, shaped the way google-auth-library actually throws one: the
+// message and the response body carry the provider's error code, and the request
+// config carries whatever the library sent, secrets included. None of that may reach an
+// AppError this code throws.
+function fakeInvalidGrantError() {
+  return Object.assign(new Error("invalid_grant"), {
+    response: { data: { error: "invalid_grant", error_description: "Token has been expired or revoked." } },
+    config: {
+      url: "https://oauth2.googleapis.com/token",
+      data: new URLSearchParams({ client_secret: "leaked-client-secret", refresh_token: "leaked-refresh-token" }),
+    },
+  });
+}
+
+describe("google drive oauth error handling", () => {
+  it("turns a revoked or expired refresh token during the code exchange into a reauth prompt, with no secret in it", async () => {
+    const getTokenSpy = vi.spyOn(OAuth2Client.prototype, "getToken").mockRejectedValue(fakeInvalidGrantError());
+    try {
+      let caught: unknown;
+      try {
+        await googleDriveDriverDefinition.oauth!.exchange({
+          code: "bad-code",
+          clientId: "client-id",
+          clientSecret: "leaked-client-secret",
+          redirectUri: "https://example.com/api/storage/drivers/googleDrive/callback",
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as { code?: string } | undefined)?.code).toBe("storage.reauth_required");
+      expect(JSON.stringify(caught)).not.toContain("leaked-client-secret");
+      expect(JSON.stringify(caught)).not.toContain("leaked-refresh-token");
+    } finally {
+      getTokenSpy.mockRestore();
+    }
+  });
+
+  it("turns an unrelated exchange failure into a generic sanitized error rather than the raw one", async () => {
+    const getTokenSpy = vi.spyOn(OAuth2Client.prototype, "getToken").mockRejectedValue(new Error("fetch failed"));
+    try {
+      await expectAppError(
+        () => googleDriveDriverDefinition.oauth!.exchange({
+          code: "code",
+          clientId: "client-id",
+          clientSecret: "client-secret",
+          redirectUri: "https://example.com/api/storage/drivers/googleDrive/callback",
+        }),
+        "storage.google_drive_error",
+      );
+    } finally {
+      getTokenSpy.mockRestore();
+    }
+  });
+
+  it("turns a revoked refresh token into a reauth prompt on a per request refresh, not a raw error", async () => {
+    const { db } = await createTestDatabase();
+    const settings = createSettingsService({
+      db,
+      registry: createSettingsRegistry(googleDriveDriverDefinition.settings),
+      config: { settingsEncryptionKey: "22".repeat(32), env: {} },
+    });
+    const userId = "user-1";
+    await settings.set(userId, {
+      "storage.googleDrive.clientId": "client-id",
+      "storage.googleDrive.clientSecret": "client-secret",
+      "storage.googleDrive.refreshToken": "revoked-refresh-token",
+    });
+    const driver = await googleDriveDriverDefinition.create({ settings, userId });
+
+    const getAccessTokenSpy = vi.spyOn(OAuth2Client.prototype, "getAccessToken").mockRejectedValue(fakeInvalidGrantError());
+    try {
+      await expectAppError(() => driver.exists({ key: "some-file-id" }), "storage.reauth_required");
+    } finally {
+      getAccessTokenSpy.mockRestore();
+    }
+  });
+});
+
+describe("google drive driver definition", () => {
+  it("describes a location with no settings and no connection at all", async () => {
+    const { db } = await createTestDatabase();
+    const settings = createSettingsService({
+      db,
+      registry: createSettingsRegistry(googleDriveDriverDefinition.settings),
+      config: { settingsEncryptionKey: "33".repeat(32), env: {} },
+    });
+    const userId = "user-1";
+
+    // Nothing is set: the state right after Disconnect clears the refresh token and
+    // account email, or before the account was ever connected. create() must refuse;
+    // describeLocation must not need any of it.
+    await expectAppError(() => googleDriveDriverDefinition.create({ settings, userId }), "storage.driver_not_configured");
+    const location = await googleDriveDriverDefinition.describeLocation({ settings, userId, key: "1a2b3c" });
+    expect(location).toEqual({
+      label: "Google Drive file 1a2b3c",
+      url: "https://drive.google.com/file/d/1a2b3c/view",
     });
   });
 });

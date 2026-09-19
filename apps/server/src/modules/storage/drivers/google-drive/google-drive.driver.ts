@@ -1,10 +1,11 @@
 import { basename } from "node:path";
 import type { Readable } from "node:stream";
+import type { Credentials } from "google-auth-library";
 import { OAuth2Client } from "google-auth-library";
 import * as v from "valibot";
 import { createError } from "../../../../shared/errors/errors.js";
 import { defineSetting } from "../../../settings/settings.registry.js";
-import type { StorageDriver, StorageDriverDefinition, StorageOAuth } from "../../storage.types.js";
+import type { StorageDriver, StorageDriverDefinition, StorageLocation, StorageOAuth } from "../../storage.types.js";
 import { createGoogleDriveClient, toBuffer, type GoogleDriveClient } from "./google-drive.client.js";
 
 // Google Drive storage driver. Scope is drive.file only: DocMind can read and write
@@ -94,12 +95,40 @@ export function createGoogleDriveDriver({
         return { ok: false, message: `Cannot reach Google Drive: ${(error as Error).message}` };
       }
     },
-    // No network call: the label and link are built from the id alone, which is what
-    // lets this run while the driver is inactive or unreachable.
-    describeLocation({ key }) {
-      return { label: `Google Drive file ${key}`, url: `https://drive.google.com/file/d/${key}/view` };
-    },
   };
+}
+
+// Pure: the label and link are built from the id alone, needing no setting, no client
+// and no network call, which is what lets this answer while the driver is inactive,
+// unreachable, or disconnected entirely.
+export function describeGoogleDriveLocation({ key }: { key: string }): StorageLocation {
+  return { label: `Google Drive file ${key}`, url: `https://drive.google.com/file/d/${key}/view` };
+}
+
+// google-auth-library surfaces a failed exchange or refresh as a GaxiosError, which
+// carries the request config (headers, body) and the provider's response on properties
+// our own code never touches. Left unwrapped, that object reaches the Hono error
+// handler's logger whole. Every call into the library on this page is wrapped so only a
+// sanitized AppError, with no property of the underlying error, ever leaves this file.
+function isReauthRequired(error: unknown) {
+  const failure = error as { message?: string; response?: { data?: { error?: string } } } | undefined;
+  const reason = failure?.response?.data?.error ?? failure?.message;
+  return reason === "invalid_grant" || reason === "invalid_token" || reason === "unauthorized_client";
+}
+
+function sanitizedGoogleAuthError(error: unknown, action: string) {
+  if (isReauthRequired(error)) {
+    return createError({
+      code: "storage.reauth_required",
+      message: `Google Drive access has expired or been revoked. Reconnect the account, then try ${action} again.`,
+      status: 401,
+    });
+  }
+  return createError({
+    code: "storage.google_drive_error",
+    message: `Google Drive authentication failed while ${action}.`,
+    status: 502,
+  });
 }
 
 const googleDriveOAuth: StorageOAuth = {
@@ -114,7 +143,12 @@ const googleDriveOAuth: StorageOAuth = {
   },
   async exchange({ code, clientId, clientSecret, redirectUri }) {
     const client = new OAuth2Client({ clientId, clientSecret, redirectUri });
-    const { tokens } = await client.getToken({ code, redirect_uri: redirectUri });
+    let tokens: Credentials;
+    try {
+      ({ tokens } = await client.getToken({ code, redirect_uri: redirectUri }));
+    } catch (error) {
+      throw sanitizedGoogleAuthError(error, "exchanging the authorization code");
+    }
 
     if (!tokens.refresh_token) {
       throw createError({
@@ -250,7 +284,12 @@ export const googleDriveDriverDefinition: StorageDriverDefinition = {
 
     const drive = createGoogleDriveClient({
       getAccessToken: async () => {
-        const { token } = await authClient.getAccessToken();
+        let token: string | null | undefined;
+        try {
+          ({ token } = await authClient.getAccessToken());
+        } catch (error) {
+          throw sanitizedGoogleAuthError(error, "refreshing the Google Drive access token");
+        }
         if (!token) {
           throw createError({
             code: "storage.google_drive_error",
@@ -273,5 +312,10 @@ export const googleDriveDriverDefinition: StorageDriverDefinition = {
     }
 
     return createGoogleDriveDriver({ drive, resolveFolderId });
+  },
+  // Needs neither the connection nor the settings above: the key is the Drive file id,
+  // and that id is all the label and link are built from.
+  async describeLocation({ key }) {
+    return describeGoogleDriveLocation({ key });
   },
 };

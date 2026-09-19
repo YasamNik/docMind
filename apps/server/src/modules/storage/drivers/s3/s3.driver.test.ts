@@ -4,8 +4,12 @@ import {
   CompleteMultipartUploadCommand, CreateMultipartUploadCommand, DeleteObjectCommand,
   GetObjectCommand, HeadBucketCommand, HeadObjectCommand, PutObjectCommand, UploadPartCommand,
 } from "@aws-sdk/client-s3";
+import { createTestDatabase } from "../../../../shared/test/database.test-utils.js";
+import { expectAppError } from "../../../../shared/test/errors.test-utils.js";
+import { createSettingsRegistry } from "../../../settings/settings.registry.js";
+import { createSettingsService } from "../../../settings/settings.usecases.js";
 import { runDriverContractTests } from "../driver-contract.test-utils.js";
-import { createS3Driver } from "./s3.driver.js";
+import { createS3Driver, describeS3Location, s3DriverDefinition } from "./s3.driver.js";
 
 // An in-memory S3 that speaks the subset lib-storage actually uses. Keyed by the full
 // object key, so the driver's prefix handling is exercised rather than mocked away.
@@ -75,25 +79,30 @@ function createFakeS3() {
 }
 
 const { client } = createFakeS3();
-runDriverContractTests("s3", async () => createS3Driver({ bucket: "docs", region: "auto", prefix: "docmind/", client }));
+runDriverContractTests("s3", async () => ({
+  driver: createS3Driver({ bucket: "docs", region: "auto", prefix: "docmind/", client }),
+  describeLocation: (args: { key: string }) => describeS3Location({ bucket: "docs", region: "auto", prefix: "docmind/", key: args.key }),
+}));
 
 describe("s3 driver extras", () => {
   it("describes a key as an s3 url including the prefix", () => {
-    const driver = createS3Driver({ bucket: "docs", region: "auto", prefix: "docmind/", client });
-    expect(driver.describeLocation({ key: "user_1/a.pdf" }).label).toBe("s3://docs/docmind/user_1/a.pdf");
+    expect(describeS3Location({ bucket: "docs", region: "auto", prefix: "docmind/", key: "user_1/a.pdf" }).label).toBe(
+      "s3://docs/docmind/user_1/a.pdf",
+    );
   });
 
   it("links to the AWS console for a bucket on Amazon S3 itself", () => {
-    const driver = createS3Driver({ bucket: "docs", region: "us-east-1", prefix: "docmind/", client });
-    expect(driver.describeLocation({ key: "user_1/a.pdf" }).url).toBe(
+    expect(describeS3Location({ bucket: "docs", region: "us-east-1", prefix: "docmind/", key: "user_1/a.pdf" }).url).toBe(
       "https://s3.console.aws.amazon.com/s3/object/docs?region=us-east-1&prefix=docmind/user_1/a.pdf",
     );
   });
 
   it("offers no console link when a custom endpoint makes the provider unknown", () => {
-    const driver = createS3Driver({ bucket: "docs", region: "auto", prefix: "docmind/", endpoint: "https://account.r2.cloudflarestorage.com", client });
-    expect(driver.describeLocation({ key: "user_1/a.pdf" }).url).toBeUndefined();
-    expect(driver.describeLocation({ key: "user_1/a.pdf" }).label).toBe("s3://docs/docmind/user_1/a.pdf");
+    const location = describeS3Location({
+      bucket: "docs", region: "auto", prefix: "docmind/", endpoint: "https://account.r2.cloudflarestorage.com", key: "user_1/a.pdf",
+    });
+    expect(location.url).toBeUndefined();
+    expect(location.label).toBe("s3://docs/docmind/user_1/a.pdf");
   });
 
   it("reports a healthy write even when the probe cleanup delete fails", async () => {
@@ -118,5 +127,25 @@ describe("s3 driver extras", () => {
     const chunks: Buffer[] = [];
     for await (const c of await driver.get({ key: "big.bin" })) chunks.push(Buffer.from(c));
     expect(Buffer.concat(chunks).length).toBe(big.length);
+  });
+});
+
+describe("s3 driver definition", () => {
+  it("describes a location from settings alone when the access credentials are missing entirely", async () => {
+    const { db } = await createTestDatabase();
+    const settings = createSettingsService({
+      db,
+      registry: createSettingsRegistry(s3DriverDefinition.settings),
+      config: { settingsEncryptionKey: "11".repeat(32), env: {} },
+    });
+    const userId = "user-1";
+    await settings.set(userId, { "storage.s3.bucket": "docs", "storage.s3.region": "us-east-1" });
+
+    // No access key id or secret access key: the state right after they are cleared, or
+    // before they were ever set. create() needs them and must refuse; describeLocation
+    // must not need a working driver at all.
+    await expectAppError(() => s3DriverDefinition.create({ settings, userId }), "storage.driver_not_configured");
+    const location = await s3DriverDefinition.describeLocation({ settings, userId, key: "user_1/a.pdf" });
+    expect(location.label).toBe("s3://docs/docmind/user_1/a.pdf");
   });
 });

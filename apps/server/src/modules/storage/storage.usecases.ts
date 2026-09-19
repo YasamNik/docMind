@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { createError } from "../../shared/errors/errors.js";
+import { createError, isAppError } from "../../shared/errors/errors.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
 import { storageDriverRegistry, type StorageDriverId } from "./storage.registry.js";
 import { buildOAuthRedirectUri, signOAuthState, verifyOAuthState } from "./storage.models.js";
@@ -70,6 +70,18 @@ export function createStorageService({
     },
     async getActiveDriver(userId: string) {
       return this.getDriver(userId, await this.getActiveDriverId(userId));
+    },
+
+    // Resolved from the definition, never the driver instance: a document must keep
+    // pointing at its original file even when the driver that holds it cannot currently
+    // be built, for example right after its credentials were cleared or its account
+    // disconnected.
+    async describeLocation(userId: string, driverId: string, key: string) {
+      const definition = storageDriverRegistry[driverId as StorageDriverId];
+      if (!definition) {
+        throw createError({ code: "storage.unknown_driver", message: `Unknown storage driver "${driverId}"`, status: 400 });
+      }
+      return definition.describeLocation({ settings: settingsService, userId, key });
     },
 
     // One call renders the whole picker: what exists, what is ready, what it holds, and
@@ -152,7 +164,21 @@ export function createStorageService({
       }
 
       const redirectUri = buildOAuthRedirectUri({ origin, driverId });
-      const { refreshToken, accountEmail } = await oauth.exchange({ code, clientId, clientSecret, redirectUri });
+      // A driver's exchange is expected to sanitize its own provider's errors, but this
+      // is the generic entry point every current and future oauth driver runs through,
+      // so nothing that is not already a clean AppError is allowed past it either.
+      let refreshToken: string;
+      let accountEmail: string;
+      try {
+        ({ refreshToken, accountEmail } = await oauth.exchange({ code, clientId, clientSecret, redirectUri }));
+      } catch (error) {
+        if (isAppError(error)) throw error;
+        throw createError({
+          code: "storage.oauth_exchange_failed",
+          message: `Could not complete the connection for "${driverId}"`,
+          status: 502,
+        });
+      }
       await settingsService.set(userId, {
         [oauth.keys.refreshToken]: refreshToken,
         [oauth.keys.accountEmail]: accountEmail,

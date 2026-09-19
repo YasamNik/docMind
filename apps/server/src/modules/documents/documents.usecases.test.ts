@@ -233,6 +233,22 @@ describe("documents service filters and enrichment", () => {
     expect(detail.storageLocation).toBeNull();
   });
 
+  it("get() still shows the storage location for a Google Drive document right after the account is disconnected", async () => {
+    const { document } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    // No googleDrive settings at all: clientId, clientSecret and refreshToken are all
+    // unset, exactly the state right after clicking Disconnect on the Storage tab.
+    // Building the driver would fail with storage.driver_not_configured, but the
+    // pointer to the original file must survive that regardless.
+    await db.run(sql`update documents set storage_driver = 'googleDrive', storage_key = '1a2b3c' where id = ${document.id}`);
+
+    const detail = await documents.get({ userId, documentId: document.id });
+
+    expect(detail.storageLocation).toEqual({
+      label: "Google Drive file 1a2b3c",
+      url: "https://drive.google.com/file/d/1a2b3c/view",
+    });
+  });
+
   it("filters by categoryId including descendants, and by tagId", async () => {
     const tags = createTagsService({ db });
     const finance = await tags.createCategory({ userId, name: "Finance" });

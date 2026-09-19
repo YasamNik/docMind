@@ -31,16 +31,16 @@ export function createDocumentsService({
   }
 
   // A document on the active storage has its bytes reachable right here, so there is
-  // nothing to point at. Building the driver just to describe where a file sits can
-  // itself fail, for example when a driver's settings were cleared after it held
-  // documents. That must never block reading the record: it just means the location
-  // cannot be shown.
+  // nothing to point at. Resolving the location never builds a driver: it needs no
+  // credentials and no client, so a document keeps pointing at its original file even
+  // right after the storage that holds it was disconnected. Any remaining failure, for
+  // example a setting the location itself depends on being missing entirely, must never
+  // block reading the record: it just means the location cannot be shown.
   async function describeStorageLocation(userId: string, document: Document) {
     const active = await storageService.getActiveDriverId(userId);
     if (document.storageDriver === active) return null;
     try {
-      const driver = await storageService.getDriver(userId, document.storageDriver);
-      return driver.describeLocation({ key: document.storageKey });
+      return await storageService.describeLocation(userId, document.storageDriver, document.storageKey);
     } catch {
       return null;
     }

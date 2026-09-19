@@ -1,7 +1,7 @@
 import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { expectAppError } from "../../../shared/test/errors.test-utils.js";
-import type { StorageDriver } from "../storage.types.js";
+import type { StorageDriver, StorageLocation } from "../storage.types.js";
 
 async function readAll(stream: Readable) {
   const chunks: Buffer[] = [];
@@ -9,10 +9,20 @@ async function readAll(stream: Readable) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-export function runDriverContractTests(name: string, makeDriver: () => Promise<StorageDriver>) {
+type DriverUnderTest = {
+  driver: StorageDriver;
+  // Definition level, not a method on the driver: production never has a driver
+  // instance in hand when it asks this question, since a document can be off the
+  // active storage entirely. Kept separate from makeDriver so a driver whose location
+  // is derived from different settings than its client (S3's bucket versus its access
+  // key, for example) is exercised the same way it runs in production.
+  describeLocation: (args: { key: string }) => StorageLocation | Promise<StorageLocation>;
+};
+
+export function runDriverContractTests(name: string, makeDriver: () => Promise<DriverUnderTest>) {
   describe(`${name} driver contract`, () => {
     it("puts, reports existence, gets, and deletes", async () => {
-      const driver = await makeDriver();
+      const { driver } = await makeDriver();
       const key = "user-1/doc-1/hello.txt";
       const { key: stored } = await driver.put({ key, body: Readable.from(["hello ", "world"]), mimeType: "text/plain" });
       expect(await driver.exists({ key: stored })).toBe(true);
@@ -22,18 +32,18 @@ export function runDriverContractTests(name: string, makeDriver: () => Promise<S
     });
 
     it("reports a missing key as not found", async () => {
-      const driver = await makeDriver();
+      const { driver } = await makeDriver();
       await expectAppError(() => driver.get({ key: "user-1/none/x.txt" }), "storage.not_found");
       expect(await driver.exists({ key: "user-1/none/x.txt" })).toBe(false);
     });
 
     it("passes its health check", async () => {
-      const driver = await makeDriver();
+      const { driver } = await makeDriver();
       expect(await driver.healthCheck()).toMatchObject({ ok: true });
     });
 
     it("streams large bodies without buffering", async () => {
-      const driver = await makeDriver();
+      const { driver } = await makeDriver();
       const chunk = Buffer.alloc(1024 * 1024, 1);
       let produced = 0;
       const body = new Readable({
@@ -50,12 +60,16 @@ export function runDriverContractTests(name: string, makeDriver: () => Promise<S
       await driver.delete({ key });
     });
 
-    it("describes a stored key without touching the network", async () => {
-      const driver = await makeDriver();
-      await driver.put({ key: "a/b/c.txt", body: Readable.from(["hello"]) });
-      const location = driver.describeLocation({ key: "a/b/c.txt" });
+    it("describes the key put() actually returned, without touching the network", async () => {
+      const { driver, describeLocation } = await makeDriver();
+      // Production calls describeLocation with document.storageKey, which is whatever
+      // put() handed back, not the key the caller asked for. For Google Drive those
+      // differ (put() returns a fresh file id), so asserting against the literal input
+      // key would pass without describeLocation ever seeing a real key.
+      const { key: stored } = await driver.put({ key: "a/b/c.txt", body: Readable.from(["hello"]) });
+      const location = await describeLocation({ key: stored });
       expect(location.label.length).toBeGreaterThan(0);
-      expect(location.label).toContain("c.txt");
+      expect(location.label).toContain(stored);
     });
   });
 }

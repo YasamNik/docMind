@@ -14,7 +14,6 @@ export type StorageDriver = {
   delete(args: { key: string }): Promise<void>;
   exists(args: { key: string }): Promise<boolean>;
   healthCheck(): Promise<{ ok: boolean; message: string }>;
-  describeLocation(args: { key: string }): StorageLocation;
 };
 
 export type SetupGuideStep = { text: string; link?: string; copyValue?: string };
@@ -42,4 +41,11 @@ export type StorageDriverDefinition = {
   guide: SetupGuide;
   oauth?: StorageOAuth;
   create(args: { settings: SettingsService; userId: string }): Promise<StorageDriver>;
+  // Lives on the definition rather than the driver instance because a driver instance
+  // can only be built by create(), which throws when credentials are missing. Answering
+  // where a file sits must work from settings alone: no client, no network call, and no
+  // requirement that the driver could currently be built at all. That is what lets a
+  // document keep pointing at its original after the account that stored it is
+  // disconnected.
+  describeLocation(args: { settings: SettingsService; userId: string; key: string }): Promise<StorageLocation>;
 };
