@@ -188,30 +188,48 @@ git commit -m "feat(server): link a document to the one it arrived in"
   `ensureFolder`, `close`. Task 4 uses all of them. The interface is narrow on purpose so a
   fake in tests is a few lines rather than an imapflow emulator.
 
-- [ ] **Step 1: Add the dependencies**
+- [x] **Step 1: Add the dependencies**
 
 ```bash
 pnpm --filter @docmind/server add imapflow mailparser
 pnpm --filter @docmind/server add -D @types/mailparser
 ```
 
-- [ ] **Step 2: Write the settings**
+- [x] **Step 2: Write the settings**
 
 The nine keys from the spec's table, `password` secret, `lastError` internal, registered
 beside the others.
 
-- [ ] **Step 3: Write the failing client tests**
+- [x] **Step 3: Write the failing client tests**
 
 Against a fake imapflow, never a server. Assert that a connection failure throws an error
 carrying the host and the reason but never the password, the same rule the Telegram client
 follows for its token.
 
-- [ ] **Step 4: Implement and commit**
+- [x] **Step 4: Implement and commit**
 
 ```bash
 git add apps/server
 git commit -m "feat(server): imap settings and a narrow client"
 ```
+
+**What actually happened.** `createImapClient` connects inside the factory (an async
+function, not a separate `connect()` step), because the narrow interface the plan lists
+has no connect call of its own: `listFolder`, `fetchMessage`, `moveMessage`,
+`ensureFolder` and `close` all assume a connection already exists. A connect failure
+throws before the factory resolves, in the shape `await createImapClient(config)`
+rejecting, which the loop in Task 4 handles the same way it handles any other failed
+cycle. The seam is a plain `ImapConnection` type (six methods: `connect`, `list`,
+`mailboxCreate`, `mailboxOpen`, `search`, `download`, `messageMove`, `logout`, `close`)
+rather than imapflow's own `ImapFlow` class, so a fake never has to implement the event
+emitter surface that class carries. Every error is rebuilt from the operation name, the
+host and a reason read off a small set of known-safe fields (`authenticationFailed`,
+`mailboxMissing`, `code`) and never from the library's own `.message`, `.response` or
+`.executedCommand`, which is what actually guarantees the password cannot leak, since
+those fields are exactly where an IMAP library echoes the failing command. A failed or
+timed out `connect()` also force-closes the connection before the factory's rejection
+reaches the caller, since nobody outside the function holds a reference to close it
+otherwise. 12 tests in `email.client.test.ts`, all against fakes, no network.
 
 ---
 
