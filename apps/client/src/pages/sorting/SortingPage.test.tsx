@@ -24,6 +24,11 @@ vi.mock("@/lib/tags-api", () => ({
   categoriesApi: { list: () => listCategories() },
 }));
 
+const listTypes = vi.fn(async () => [] as { id: string; name: string; description: string; autoApply: boolean }[]);
+vi.mock("@/lib/types-api", () => ({
+  typesApi: { list: () => listTypes() },
+}));
+
 vi.mock("@/lib/jobs-api", () => ({ jobsApi: { list: () => listJobsFn() } }));
 
 vi.mock("@/lib/documents-api", () => ({ documentsApi: { list: () => listDocumentsFn() } }));
@@ -51,6 +56,7 @@ describe("SortingPage", () => {
   beforeEach(() => {
     listJobsFn.mockReset().mockResolvedValue([]);
     listDocumentsFn.mockReset().mockResolvedValue([]);
+    listTypes.mockReset().mockResolvedValue([]);
   });
 
   it("lists automatic items and proposed changes", async () => {
@@ -138,6 +144,21 @@ describe("SortingPage", () => {
     await screen.findByText(/model call/);
     fireEvent.click(screen.getByRole("button", { name: "Extract fields" }));
     await waitFor(() => expect(backfillFn).toHaveBeenCalled());
+  });
+
+  it("includes automatic types in the automatic items list", async () => {
+    listTypes.mockResolvedValue([{ id: "dtype_1", name: "Invoice", description: "A request for payment.", autoApply: true }]);
+    renderPage();
+    expect(await screen.findByText("Invoice")).toBeInTheDocument();
+    expect(screen.getByText("type")).toBeInTheDocument();
+  });
+
+  it("names all three taxonomies in the empty state once none has an automatic description", async () => {
+    listForUser.mockResolvedValueOnce([]);
+    listCategories.mockResolvedValueOnce([]);
+    listTypes.mockResolvedValueOnce([]);
+    renderPage();
+    expect(await screen.findByText(/No tag, category, or type has both a description and automatic sorting turned on yet\./)).toBeInTheDocument();
   });
 
   it("accepts a selected proposal", async () => {

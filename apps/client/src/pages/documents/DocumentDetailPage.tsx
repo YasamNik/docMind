@@ -13,6 +13,7 @@ import { formatBytes, formatDate, formatDocumentDate } from "@/lib/format";
 import { jobsApi } from "@/lib/jobs-api";
 import { sortApi, type ProposalRow } from "@/lib/sort-api";
 import { categoriesApi, documentCategorizationApi, tagsApi } from "@/lib/tags-api";
+import { documentTypeApi, typesApi } from "@/lib/types-api";
 
 // documentDate stays out of this list: the page already shows it on its own line, next
 // to the added date, so listing it a second time under a different label would read as
@@ -76,20 +77,75 @@ function CategoryPicker({ document, id, queryClient }: { document: DocumentDetai
   });
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-col gap-1">
+      <span className="text-xs text-muted-foreground">Category</span>
+      <div className="flex items-center gap-2">
+        <select
+          className="rounded-full border border-input bg-secondary px-3 py-1.5 text-sm"
+          aria-label="Document category"
+          value={document.categoryId ?? ""}
+          onChange={(e) => setCategory.mutate(e.target.value || null)}
+        >
+          <option value="">No category</option>
+          {categories.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.path}
+            </option>
+          ))}
+        </select>
+        {document.categorySource === "auto" && <Badge variant="neutral">Auto</Badge>}
+      </div>
+    </div>
+  );
+}
+
+// A colour coded pill, never a second breadcrumb line, so a document with both a
+// category and a type never reads as if one taxonomy were repeating the other.
+function DocumentTypeBadge({ documentTypeId, documentTypeName }: { documentTypeId: string | null; documentTypeName: string | null }) {
+  const { data: types = [] } = useQuery({ queryKey: ["types"], queryFn: typesApi.list });
+  if (!documentTypeName) return null;
+  const color = types.find((t) => t.id === documentTypeId)?.color ?? null;
+  return (
+    <Badge variant="outline" className="gap-1.5">
+      {color && <span className="inline-block h-[7px] w-[7px] rounded-full" style={{ backgroundColor: color }} />}
+      {documentTypeName}
+    </Badge>
+  );
+}
+
+// The visible "Type" label and the flat name list (versus CategoryPicker's "Category"
+// label and hierarchical paths) are what actually keep this from reading as a second
+// category picker. The dashed border is a residual visual cue, not load bearing on its
+// own: it would be easy to miss and does nothing for a screen reader.
+function TypePicker({ document, id, queryClient }: { document: DocumentDetail; id: string; queryClient: ReturnType<typeof useQueryClient> }) {
+  const { data: types = [] } = useQuery({ queryKey: ["types"], queryFn: typesApi.list });
+  const setType = useMutation({
+    mutationFn: (documentTypeId: string | null) => documentTypeApi.setType(id, documentTypeId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["documents", id] });
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
+      queryClient.invalidateQueries({ queryKey: ["types"] });
+      toast.success("Type updated");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs text-muted-foreground">Type</span>
       <select
-        className="rounded-full border border-input bg-secondary px-3 py-1.5 text-sm"
-        value={document.categoryId ?? ""}
-        onChange={(e) => setCategory.mutate(e.target.value || null)}
+        className="rounded-full border border-dashed border-input bg-secondary/60 px-3 py-1.5 text-sm"
+        aria-label="Document type"
+        value={document.documentTypeId ?? ""}
+        onChange={(e) => setType.mutate(e.target.value || null)}
       >
-        <option value="">No category</option>
-        {categories.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.path}
+        <option value="">No type</option>
+        {types.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.name}
           </option>
         ))}
       </select>
-      {document.categorySource === "auto" && <Badge variant="neutral">Auto</Badge>}
     </div>
   );
 }
@@ -301,11 +357,16 @@ export function DocumentDetailPage() {
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          {document.categoryPath && (
-            <p className="text-[10px] uppercase tracking-widest text-primary font-semibold">
-              {document.categoryPath}
-              {document.categorySource === "auto" ? " · auto-filed" : ""}
-            </p>
+          {(document.categoryPath || document.documentTypeName) && (
+            <div className="flex flex-wrap items-center gap-2">
+              {document.categoryPath && (
+                <p className="text-[10px] uppercase tracking-widest text-primary font-semibold">
+                  {document.categoryPath}
+                  {document.categorySource === "auto" ? " · auto-filed" : ""}
+                </p>
+              )}
+              <DocumentTypeBadge documentTypeId={document.documentTypeId} documentTypeName={document.documentTypeName} />
+            </div>
           )}
           <h1 className="font-heading text-2xl break-all mt-1">{document.name}</h1>
           <p className="text-sm text-muted-foreground mt-1">
@@ -352,6 +413,7 @@ export function DocumentDetailPage() {
 
       <div className="flex flex-col gap-3">
         <CategoryPicker document={document} id={id} queryClient={queryClient} />
+        <TypePicker document={document} id={id} queryClient={queryClient} />
         <TagPicker document={document} id={id} queryClient={queryClient} />
         <ProposalsReview documentId={id} queryClient={queryClient} />
       </div>

@@ -1,7 +1,7 @@
 import { api } from "./api";
 
 export type DescriptionAssistantInput = {
-  targetType: "tag" | "category";
+  targetType: "tag" | "category" | "type";
   name: string;
   description: string;
 };

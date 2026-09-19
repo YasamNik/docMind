@@ -15,6 +15,7 @@ import { InboxPage } from "@/pages/inbox/InboxPage";
 import { SettingsPage } from "@/pages/settings/SettingsPage";
 import { SortingPage } from "@/pages/sorting/SortingPage";
 import { TagsPage } from "@/pages/tags/TagsPage";
+import { TypesPage } from "@/pages/types/TypesPage";
 import { ForgotPasswordPage } from "@/pages/auth/ForgotPasswordPage";
 import { ResetPasswordPage } from "@/pages/auth/ResetPasswordPage";
 
@@ -49,6 +50,7 @@ export default function App() {
             <Route path="/documents/:id" element={<DocumentDetailPage />} />
             <Route path="/categories" element={<CategoriesPage />} />
             <Route path="/tags" element={<TagsPage />} />
+            <Route path="/types" element={<TypesPage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/sorting" element={<SortingPage />} />
             <Route path="/chat" element={<ChatPage />} />

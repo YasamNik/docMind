@@ -10,7 +10,7 @@ export function DryRunPanel({
   description,
   threshold,
 }: {
-  targetType: "tag" | "category";
+  targetType: "tag" | "category" | "type";
   name: string;
   description: string;
   threshold: number;

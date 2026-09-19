@@ -10,8 +10,9 @@ import { jobsApi, type JobRow } from "@/lib/jobs-api";
 import { documentsApi, type DocumentRow } from "@/lib/documents-api";
 import { fieldsApi } from "@/lib/fields-api";
 import { sortApi, type ProposalRow, type RuleSuggestion, type SortScope } from "@/lib/sort-api";
+import { typesApi, type DocumentTypeRow } from "@/lib/types-api";
 
-type AutomaticItem = { targetType: "tag" | "category"; id: string; name: string; description: string };
+type AutomaticItem = { targetType: "tag" | "category" | "type"; id: string; name: string; description: string };
 
 // A batch is the set of rules jobs belonging to one sorting run. When the run was
 // started from this page we know its job ids exactly; otherwise we fall back to
@@ -39,13 +40,19 @@ type JobOutcome = "applied" | "proposed" | "no_match" | "failed";
 function classifyJob(job: JobRow, documents: DocumentRow[], proposals: ProposalRow[]): JobOutcome {
   if (job.status === "failed") return "failed";
   const documentId = job.payload.documentId;
-  const targetType = job.payload.targetType as "tag" | "category" | undefined;
+  const targetType = job.payload.targetType as "tag" | "category" | "type" | undefined;
   const targetId = job.payload.targetId as string | undefined;
   const hasProposal = proposals.some((p) => p.documentId === documentId && (!targetId || (p.targetType === targetType && p.targetId === targetId)));
   if (hasProposal) return "proposed";
   if (targetType && targetId && documentId) {
     const doc = documents.find((d) => d.id === documentId);
-    const applied = doc ? (targetType === "tag" ? doc.tags.some((t) => t.id === targetId) : doc.categoryId === targetId) : false;
+    const applied = doc
+      ? targetType === "tag"
+        ? doc.tags.some((t) => t.id === targetId)
+        : targetType === "type"
+          ? doc.documentTypeId === targetId
+          : doc.categoryId === targetId
+      : false;
     if (applied) return "applied";
   }
   return "no_match";
@@ -140,14 +147,17 @@ function SortingActivityCard({
   );
 }
 
-function automaticItemsFrom(tags: TagRow[], categories: CategoryRow[]): AutomaticItem[] {
+function automaticItemsFrom(tags: TagRow[], categories: CategoryRow[], types: DocumentTypeRow[]): AutomaticItem[] {
   const autoTags = tags
     .filter((t) => t.autoApply && t.description.trim() !== "")
     .map((t) => ({ targetType: "tag" as const, id: t.id, name: t.name, description: t.description }));
   const autoCategories = categories
     .filter((c) => c.autoApply && c.description.trim() !== "")
     .map((c) => ({ targetType: "category" as const, id: c.id, name: c.path, description: c.description }));
-  return [...autoTags, ...autoCategories];
+  const autoTypes = types
+    .filter((t) => t.autoApply && t.description.trim() !== "")
+    .map((t) => ({ targetType: "type" as const, id: t.id, name: t.name, description: t.description }));
+  return [...autoTags, ...autoCategories, ...autoTypes];
 }
 
 function RunDialog({ item, onClose, onQueued }: { item: AutomaticItem; onClose: () => void; onQueued: (jobIds: string[]) => void }) {
@@ -258,6 +268,7 @@ export function SortingPage() {
   const queryClient = useQueryClient();
   const { data: tags = [] } = useQuery({ queryKey: ["tags"], queryFn: tagsApi.list });
   const { data: categories = [] } = useQuery({ queryKey: ["categories"], queryFn: categoriesApi.list });
+  const { data: types = [] } = useQuery({ queryKey: ["types"], queryFn: typesApi.list });
   const { data: jobs = [] } = useQuery({
     queryKey: ["jobs"],
     queryFn: () => jobsApi.list(),
@@ -289,7 +300,7 @@ export function SortingPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const items = automaticItemsFrom(tags, categories);
+  const items = automaticItemsFrom(tags, categories, types);
   const proposals = proposalsResult?.proposals ?? [];
   const batch = pickBatch(rulesJobs, currentBatchIds);
 
@@ -300,6 +311,7 @@ export function SortingPage() {
       queryClient.invalidateQueries({ queryKey: ["documents"] });
       queryClient.invalidateQueries({ queryKey: ["categories"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
+      queryClient.invalidateQueries({ queryKey: ["types"] });
       setSelected(new Set());
       toast.success("Updated");
     },
@@ -351,7 +363,7 @@ export function SortingPage() {
             )}
           </div>
           <DialogFooter>
-            <p className="text-xs text-muted-foreground">Create these as tags or categories on the Tags page, then enable auto-sorting.</p>
+            <p className="text-xs text-muted-foreground">Create these as tags, categories, or types on the Tags page, then enable auto-sorting.</p>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -362,7 +374,7 @@ export function SortingPage() {
         </CardHeader>
         <CardContent className="space-y-2">
           {items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No tag or category has both a description and automatic sorting turned on yet.</p>
+            <p className="text-sm text-muted-foreground">No tag, category, or type has both a description and automatic sorting turned on yet.</p>
           ) : (
             <>
               {items.length > 20 && (

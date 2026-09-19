@@ -10,7 +10,7 @@ export function DescriptionAssistant({
   description,
   onUse,
 }: {
-  targetType: "tag" | "category";
+  targetType: "tag" | "category" | "type";
   name: string;
   description: string;
   onUse: (text: string) => void;

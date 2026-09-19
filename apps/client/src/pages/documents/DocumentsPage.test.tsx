@@ -23,6 +23,8 @@ const listMock = vi.fn(async (_filters?: unknown) => [
     extractionError: null,
     categoryId: "cat_1",
     categoryPath: "Finance / Tax",
+    documentTypeId: "dtype_1",
+    documentTypeName: "Invoice",
     tags: [
       { id: "tag_1", name: "Rent", color: null, auto: false, manual: true },
       { id: "tag_2", name: "Bills", color: null, auto: true, manual: false },
@@ -72,6 +74,8 @@ const listMock = vi.fn(async (_filters?: unknown) => [
     extractionError: null,
     categoryId: null,
     categoryPath: null,
+    documentTypeId: null,
+    documentTypeName: null,
     tags: [],
     fields: [
       {
@@ -128,6 +132,9 @@ vi.mock("@/lib/tags-api", () => ({
     ]),
   },
 }));
+vi.mock("@/lib/types-api", () => ({
+  typesApi: { list: vi.fn(async () => [{ id: "dtype_1", name: "Invoice", documentCount: 1 }]) },
+}));
 
 function renderAt(path: string) {
   return render(
@@ -152,6 +159,24 @@ describe("DocumentsPage", () => {
     const body = tableBody(container);
     expect(within(body).getByText("Finance / Tax")).toBeInTheDocument();
     expect(within(body).getByText("Rent")).toBeInTheDocument();
+  });
+
+  it("shows the document type name in the Type column and the file format in its own column", async () => {
+    const { container } = renderAt("/documents");
+    await screen.findByText("invoice.pdf");
+    const body = tableBody(container);
+    expect(within(body).getByText("Invoice")).toBeInTheDocument();
+    expect(within(body).getByText("PDF")).toBeInTheDocument();
+  });
+
+  it("filters by document type using the header dropdown and shows a clearable active filter", async () => {
+    renderAt("/documents");
+    await screen.findByText("invoice.pdf");
+    const typeSelect = screen.getByLabelText("Filter by type") as HTMLSelectElement;
+    fireEvent.change(typeSelect, { target: { value: "dtype_1" } });
+    await waitFor(() => expect(listMock).toHaveBeenLastCalledWith({ categoryId: undefined, tagId: undefined, documentTypeId: "dtype_1", view: "all" }));
+    expect(typeSelect.value).toBe("dtype_1");
+    expect(screen.getByRole("button", { name: "Clear type filter" })).toBeInTheDocument();
   });
 
   it("shows a summary snippet below the document name", async () => {

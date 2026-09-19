@@ -10,6 +10,7 @@ import { DATE_FILTER_OPTIONS, dateFilterBadgeLabel, matchesDateFilter, type Date
 import { documentsApi, type DocumentListFilters, type DocumentRow } from "@/lib/documents-api";
 import { formatBytes, formatDate, formatDocumentDate } from "@/lib/format";
 import { categoriesApi, tagsApi } from "@/lib/tags-api";
+import { typesApi } from "@/lib/types-api";
 
 const VIEW_LABELS: Record<string, string> = { needs_review: "Needs review", trash: "Trash" };
 
@@ -34,7 +35,7 @@ function friendlyMime(mime: string | null): string {
   return MIME_LABELS[mime] ?? mime.split("/").pop() ?? mime;
 }
 
-type SortKey = "name" | "category" | "tags" | "type" | "size" | "createdAt" | "documentDate" | "expiryDate";
+type SortKey = "name" | "category" | "tags" | "documentType" | "format" | "size" | "createdAt" | "documentDate" | "expiryDate";
 
 // The one extracted field the library shows directly. Everything a document knows about
 // expiry lives in the expiryDate smart field, so the column reads it from there.
@@ -59,7 +60,8 @@ function sortDocuments(docs: DocumentRow[], key: SortKey, dir: SortDir): Documen
       case "name": cmp = a.name.localeCompare(b.name); break;
       case "category": cmp = (a.categoryPath ?? "").localeCompare(b.categoryPath ?? ""); break;
       case "tags": cmp = (a.tags[0]?.name ?? "").localeCompare(b.tags[0]?.name ?? ""); break;
-      case "type": cmp = (a.mimeType ?? "").localeCompare(b.mimeType ?? ""); break;
+      case "documentType": cmp = (a.documentTypeName ?? "").localeCompare(b.documentTypeName ?? ""); break;
+      case "format": cmp = (a.mimeType ?? "").localeCompare(b.mimeType ?? ""); break;
       case "size": cmp = (a.sizeBytes ?? 0) - (b.sizeBytes ?? 0); break;
       case "createdAt": cmp = a.createdAt.localeCompare(b.createdAt); break;
       case "documentDate": cmp = (a.documentDate ?? "").localeCompare(b.documentDate ?? ""); break;
@@ -199,11 +201,13 @@ export function DocumentsPage() {
 
   const categoryParam = searchParams.get("categoryId") ?? "";
   const tagParam = searchParams.get("tagId") ?? "";
+  const documentTypeParam = searchParams.get("documentTypeId") ?? "";
   const isUncategorized = categoryParam === UNCATEGORIZED_VALUE;
 
   const filters: DocumentListFilters = {
     categoryId: categoryParam && !isUncategorized ? categoryParam : undefined,
     tagId: tagParam || undefined,
+    documentTypeId: documentTypeParam || undefined,
     view: (searchParams.get("view") as DocumentListFilters["view"]) ?? "all",
   };
   const { data: rawDocuments = [], isLoading } = useQuery({
@@ -234,6 +238,7 @@ export function DocumentsPage() {
 
   const { data: categories = [] } = useQuery({ queryKey: ["categories"], queryFn: categoriesApi.list });
   const { data: tags = [] } = useQuery({ queryKey: ["tags"], queryFn: tagsApi.list });
+  const { data: types = [] } = useQuery({ queryKey: ["types"], queryFn: typesApi.list });
 
   const selectedIds = [...selected];
   const invalidateAndClear = () => { queryClient.invalidateQueries({ queryKey: ["documents"] }); setSelected(new Set()); };
@@ -245,7 +250,7 @@ export function DocumentsPage() {
   function toggleSelect(id: string) { setSelected((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
   function toggleAll() { if (selected.size === documents.length) setSelected(new Set()); else setSelected(new Set(documents.map((d) => d.id))); }
 
-  function setFilterParam(key: "categoryId" | "tagId", value: string) {
+  function setFilterParam(key: "categoryId" | "tagId" | "documentTypeId", value: string) {
     const next = new URLSearchParams(searchParams);
     if (value) next.set(key, value);
     else next.delete(key);
@@ -265,11 +270,12 @@ export function DocumentsPage() {
 
   const categoryFilterLabel = isUncategorized ? "None" : (categories.find((c) => c.id === categoryParam)?.name ?? null);
   const tagFilterLabel = tags.find((t) => t.id === tagParam)?.name ?? null;
+  const typeFilterLabel = types.find((t) => t.id === documentTypeParam)?.name ?? null;
   const addedFilterLabel = dateFilterBadgeLabel(addedFilter);
   const docDateFilterLabel = dateFilterBadgeLabel(docDateFilter);
 
   const filterLabel = filters.view && filters.view !== "all" ? VIEW_LABELS[filters.view] : null;
-  const hasFilter = Boolean(filterLabel || categoryParam || tagParam || addedFilterLabel || docDateFilterLabel);
+  const hasFilter = Boolean(filterLabel || categoryParam || tagParam || documentTypeParam || addedFilterLabel || docDateFilterLabel);
 
   return (
     <div className="space-y-6">
@@ -361,7 +367,21 @@ export function DocumentsPage() {
                   <span className="cursor-pointer select-none" onClick={() => toggleSort("expiryDate")}>Exp. Date{sortIndicator("expiryDate")}</span>
                 </div>
               </TableHead>
-              <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("type")}>Type{sortIndicator("type")}</TableHead>
+              <TableHead>
+                <div className="flex flex-wrap items-center gap-1.5 normal-case tracking-normal">
+                  <span className="cursor-pointer select-none" onClick={() => toggleSort("documentType")}>Type{sortIndicator("documentType")}</span>
+                  <ColumnFilter
+                    label="Filter by type"
+                    value={documentTypeParam}
+                    onChange={(v) => setFilterParam("documentTypeId", v)}
+                    options={[{ value: "", label: "All types" }, ...types.map((t) => ({ value: t.id, label: t.name }))]}
+                  />
+                  {typeFilterLabel && (
+                    <ActiveFilterBadge label={typeFilterLabel} variant="accent" clearLabel="Clear type filter" onClear={() => setFilterParam("documentTypeId", "")} />
+                  )}
+                </div>
+              </TableHead>
+              <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("format")}>Format{sortIndicator("format")}</TableHead>
               <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("size")}>Size{sortIndicator("size")}</TableHead>
               <TableHead>
                 <div className="flex flex-wrap items-center gap-1.5 normal-case tracking-normal">
@@ -422,6 +442,7 @@ export function DocumentsPage() {
                   {formatDocumentDate(expiryOf(d))}
                   {isExpired(expiryOf(d)) && <span className="sr-only"> (expired)</span>}
                 </TableCell>
+                <TableCell className="text-muted-foreground">{d.documentTypeName ?? "None"}</TableCell>
                 <TableCell className="text-muted-foreground" title={d.mimeType ?? undefined}>{friendlyMime(d.mimeType)}</TableCell>
                 <TableCell>{d.sizeBytes == null ? "" : formatBytes(d.sizeBytes)}</TableCell>
                 <TableCell>{formatDate(d.createdAt)}</TableCell>

@@ -11,6 +11,7 @@ import { jobsApi } from "@/lib/jobs-api";
 import { savedSearchesApi } from "@/lib/saved-searches-api";
 import { useKeyboardShortcuts } from "@/lib/use-keyboard-shortcuts";
 import { categoriesApi, tagsApi, type CategoryRow, type TagRow } from "@/lib/tags-api";
+import { typesApi, type DocumentTypeRow } from "@/lib/types-api";
 
 // Two-level navigation: a thin icon rail selects a section, a context panel next to
 // it shows that section's links. Pattern similar to editors like VS Code that pair an
@@ -30,7 +31,7 @@ const railItems: { tab: RailTab; label: string; to: string; icon: LucideIcon }[]
 
 function tabForPath(pathname: string): RailTab {
   if (pathname.startsWith("/search")) return "search";
-  if (pathname.startsWith("/tags") || pathname.startsWith("/categories")) return "tags";
+  if (pathname.startsWith("/tags") || pathname.startsWith("/categories") || pathname.startsWith("/types")) return "tags";
   if (pathname.startsWith("/sorting")) return "sorting";
   if (pathname.startsWith("/chat")) return "chat";
   if (pathname.startsWith("/settings")) return "settings";
@@ -39,10 +40,11 @@ function tabForPath(pathname: string): RailTab {
   return "files";
 }
 
-function countAutomaticItems(tags: TagRow[], categories: CategoryRow[]): number {
+function countAutomaticItems(tags: TagRow[], categories: CategoryRow[], types: DocumentTypeRow[]): number {
   const autoTags = tags.filter((t) => t.autoApply && t.description.trim() !== "").length;
   const autoCategories = categories.filter((c) => c.autoApply && c.description.trim() !== "").length;
-  return autoTags + autoCategories;
+  const autoTypes = types.filter((t) => t.autoApply && t.description.trim() !== "").length;
+  return autoTags + autoCategories + autoTypes;
 }
 
 function navPillClass({ isActive }: { isActive: boolean }) {
@@ -153,6 +155,9 @@ function FilesPanel({ inboxCount, needsReviewCount, trashCount }: { inboxCount: 
         <NavLink to="/tags" className="text-xs text-muted-foreground underline-offset-2 hover:underline">
           Manage tags
         </NavLink>
+        <NavLink to="/types" className="text-xs text-muted-foreground underline-offset-2 hover:underline">
+          Manage types
+        </NavLink>
       </div>
     </>
   );
@@ -177,13 +182,14 @@ function SearchPanel() {
   );
 }
 
-function TagsPanel({ tags, categories }: { tags: TagRow[]; categories: CategoryRow[] }) {
+function TagsPanel({ tags, categories, types }: { tags: TagRow[]; categories: CategoryRow[]; types: DocumentTypeRow[] }) {
   return (
     <>
       <span className="font-heading text-lg">Tags</span>
       <nav className="flex flex-col gap-1">
         <CountRow to="/tags" label="Manage tags" count={tags.length} />
         <CountRow to="/categories" label="Manage categories" count={categories.length} />
+        <CountRow to="/types" label="Manage types" count={types.length} />
       </nav>
     </>
   );
@@ -255,6 +261,7 @@ export function AppShell() {
   const { data: jobCounts = { failed: 0 } } = useQuery({ queryKey: ["jobs", "counts"], queryFn: () => jobsApi.counts(), refetchInterval: 15000 });
   const { data: categories = [] } = useQuery({ queryKey: ["categories"], queryFn: categoriesApi.list });
   const { data: tags = [] } = useQuery({ queryKey: ["tags"], queryFn: tagsApi.list });
+  const { data: types = [] } = useQuery({ queryKey: ["types"], queryFn: typesApi.list });
 
   return (
     <div className="flex min-h-screen">
@@ -262,8 +269,8 @@ export function AppShell() {
       <aside className="flex w-[220px] shrink-0 flex-col gap-6 overflow-y-auto border-r border-border bg-card p-6">
         {activeTab === "files" && <FilesPanel inboxCount={counts.inbox} needsReviewCount={counts.needsReview} trashCount={counts.trash} />}
         {activeTab === "search" && <SearchPanel />}
-        {activeTab === "tags" && <TagsPanel tags={tags} categories={categories} />}
-        {activeTab === "sorting" && <SortingPanel automaticCount={countAutomaticItems(tags, categories)} />}
+        {activeTab === "tags" && <TagsPanel tags={tags} categories={categories} types={types} />}
+        {activeTab === "sorting" && <SortingPanel automaticCount={countAutomaticItems(tags, categories, types)} />}
         {activeTab === "chat" && <ChatPanel />}
         {activeTab === "settings" && <SettingsPanel />}
         {activeTab === "jobs" && <JobsPanel failedCount={jobCounts.failed} />}

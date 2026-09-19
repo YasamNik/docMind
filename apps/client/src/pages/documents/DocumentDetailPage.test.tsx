@@ -14,9 +14,11 @@ const documentDetail = {
   extractionStatus: "done" as const,
   extractionError: null,
   extractedText: "some text",
-  categoryId: null,
-  categoryPath: null,
-  categorySource: null,
+  categoryId: null as string | null,
+  categoryPath: null as string | null,
+  categorySource: null as "manual" | "auto" | null,
+  documentTypeId: null as string | null,
+  documentTypeName: null as string | null,
   tags: [{ id: "tag_1", name: "Rent", color: null, auto: false, manual: true }],
   fields: [] as {
     id: string;
@@ -81,6 +83,15 @@ vi.mock("@/lib/tags-api", () => ({
     setCategory: (id: string, categoryId: string | null) => setCategoryMock(id, categoryId),
     addTag: (id: string, tagId: string) => addTagMock(id, tagId),
     removeTag: (id: string, tagId: string) => removeTagMock(id, tagId),
+  },
+}));
+
+const setTypeMock = vi.fn(async (_id: string, documentTypeId: string | null) => ({ ...documentDetail, documentTypeId }));
+
+vi.mock("@/lib/types-api", () => ({
+  typesApi: { list: vi.fn(async () => [{ id: "dtype_1", name: "Invoice", color: "#4f46e5" }]) },
+  documentTypeApi: {
+    setType: (id: string, documentTypeId: string | null) => setTypeMock(id, documentTypeId),
   },
 }));
 
@@ -158,6 +169,49 @@ describe("DocumentDetailPage pickers", () => {
     await waitFor(() => expect(removeTagMock).toHaveBeenCalled());
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["categories"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["tags"] });
+  });
+});
+
+describe("DocumentDetailPage type and category", () => {
+  afterEach(() => {
+    getMock.mockImplementation(async () => documentDetail);
+  });
+
+  it("shows the category as plain breadcrumb text and the type as a distinct colored badge", async () => {
+    getMock.mockImplementationOnce(async () => ({ ...documentDetail, categoryPath: "Finance", documentTypeId: "dtype_1", documentTypeName: "Invoice" }));
+    renderPage();
+    const category = await screen.findByText("Finance");
+    const type = await screen.findByText("Invoice");
+    // The category label stays a plain breadcrumb string, never wrapped in a Badge.
+    expect(category.closest('[data-slot="badge"]')).toBeNull();
+    // The type reads as a chip, not a second breadcrumb, so the two never look alike.
+    expect(type.closest('[data-slot="badge"]')).not.toBeNull();
+  });
+
+  it("labels both pickers visibly and gives each an aria-label of its own", async () => {
+    renderPage();
+    // Visible labels above each select, so the distinction does not rely on the border
+    // style alone, which is easy to miss and invisible to a screen reader.
+    expect(await screen.findByText("Category")).toBeInTheDocument();
+    expect(screen.getByText("Type")).toBeInTheDocument();
+    expect(screen.getByLabelText("Document category")).toBeInTheDocument();
+    expect(screen.getByLabelText("Document type")).toBeInTheDocument();
+  });
+
+  it("lets the type be changed with its own picker", async () => {
+    renderPage();
+    const select = await screen.findByDisplayValue("No type");
+    // Wait for the types list to finish loading so the option actually exists before
+    // the change event fires, otherwise jsdom silently drops the requested value.
+    await screen.findByText("Invoice");
+    fireEvent.change(select, { target: { value: "dtype_1" } });
+    await waitFor(() => expect(setTypeMock).toHaveBeenCalledWith("doc_1", "dtype_1"));
+  });
+
+  it("shows nothing for type when the document has none", async () => {
+    renderPage();
+    await screen.findByText("Rent");
+    expect(screen.queryByText("Invoice")).not.toBeInTheDocument();
   });
 });
 

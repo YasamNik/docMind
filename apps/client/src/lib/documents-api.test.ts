@@ -45,6 +45,12 @@ describe("documentsApi", () => {
     expect(fetchSpy).toHaveBeenCalledWith("/api/documents?categoryId=cat_1&tagId=tag_1&view=inbox", expect.anything());
   });
 
+  it("includes documentTypeId in the query string when set", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ documents: [] }), { status: 200 }));
+    await documentsApi.list({ documentTypeId: "dtype_1" });
+    expect(fetchSpy).toHaveBeenCalledWith("/api/documents?documentTypeId=dtype_1", expect.anything());
+  });
+
   it('omits view from the query string when it is "all" or absent', async () => {
     // A fresh Response per call: mockResolvedValue would hand back the same instance for
     // both calls below, and a Response body can only be read once.
