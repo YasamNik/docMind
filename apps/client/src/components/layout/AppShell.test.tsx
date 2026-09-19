@@ -97,10 +97,25 @@ describe("AppShell on a phone", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
+  it("shows the DocMind brand once, from the drawer's own header, not again from the Files panel inside it", async () => {
+    renderShell();
+    fireEvent.click(await screen.findByRole("button", { name: "Open navigation menu" }));
+    const drawer = within(await screen.findByRole("dialog", { name: "Navigation" }));
+    expect(drawer.getAllByText("DocMind")).toHaveLength(1);
+  });
+
   it("shows the failed job count in the top bar without opening the menu", async () => {
     vi.mocked(jobsApi.counts).mockResolvedValueOnce({ failed: 4 });
     renderShell();
     expect(await screen.findByLabelText("Failed jobs")).toHaveTextContent("4");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("spends less padding on the page content than the desktop layout does", async () => {
+    const { container } = renderShell();
+    await screen.findByRole("button", { name: "Open navigation menu" });
+    const main = container.querySelector("main");
+    expect(main?.className).toContain("p-4");
+    expect(main?.className).toContain("md:p-8");
   });
 });

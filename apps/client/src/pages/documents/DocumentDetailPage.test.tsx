@@ -488,6 +488,20 @@ describe("DocumentDetailPage extracted fields", () => {
   });
 });
 
+describe("DocumentDetailPage delete", () => {
+  afterEach(() => {
+    getMock.mockImplementation(async () => documentDetail);
+  });
+
+  it("tells the user the document moves to Trash along with anything attached to it, not that it is gone for good", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByText("Delete"));
+    expect(
+      await screen.findByText("It moves to Trash, along with anything attached to it. You can restore it from there."),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("DocumentDetailPage layout stacking", () => {
   afterEach(() => {
     getMock.mockImplementation(async () => documentDetail);

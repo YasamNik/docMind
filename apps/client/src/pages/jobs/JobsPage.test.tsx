@@ -71,4 +71,21 @@ describe("JobsPage on a phone", () => {
     fireEvent.click(buttons[0]!);
     await waitFor(() => expect(retry).toHaveBeenCalledWith("job_1"));
   });
+
+  it("sizes the retry button as a 44px touch target on a phone", async () => {
+    mockMobileViewport();
+    renderPage();
+    await screen.findByText(/No extractor for application\/zip/);
+    const button = screen.getByRole("button", { name: /retry/i });
+    expect(button.className).toContain("min-h-11");
+  });
+});
+
+describe("JobsPage on desktop", () => {
+  it("does not change the size of the table's retry button", async () => {
+    renderPage();
+    await screen.findByText(/No extractor for application\/zip/);
+    const button = screen.getByRole("button", { name: /retry/i });
+    expect(button.className).not.toContain("min-h-11");
+  });
 });

@@ -45,7 +45,7 @@ function JobCard({ job, onRetry, retryPending }: { job: JobRow; onRetry: () => v
         </p>
         {job.error && <p className="whitespace-pre-wrap break-words text-sm text-muted-foreground">{job.error}</p>}
         {job.status === "failed" && (
-          <Button size="sm" variant="outline" onClick={onRetry} disabled={retryPending}>
+          <Button size="sm" variant="outline" className="min-h-11" onClick={onRetry} disabled={retryPending}>
             Retry
           </Button>
         )}

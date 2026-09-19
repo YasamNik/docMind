@@ -141,12 +141,24 @@ function IconRail({ activeTab, failedJobCount }: { activeTab: RailTab; failedJob
   );
 }
 
-function FilesPanel({ inboxCount, needsReviewCount, trashCount }: { inboxCount: number; needsReviewCount: number; trashCount: number }) {
+function FilesPanel({
+  inboxCount,
+  needsReviewCount,
+  trashCount,
+  showHeading = true,
+}: {
+  inboxCount: number;
+  needsReviewCount: number;
+  trashCount: number;
+  showHeading?: boolean;
+}) {
   return (
     <>
-      <div className="flex items-center gap-2">
-        <span className="font-heading text-lg">DocMind</span>
-      </div>
+      {showHeading && (
+        <div className="flex items-center gap-2">
+          <span className="font-heading text-lg">DocMind</span>
+        </div>
+      )}
 
       <nav className="flex flex-col gap-1">
         <CountRow to="/inbox" label="Inbox" count={inboxCount} />
@@ -254,7 +266,9 @@ function JobsPanel({ failedCount }: { failedCount: number }) {
 }
 
 // The context panel's content depends only on the active section, so both the desktop
-// aside and the mobile drawer render it from this one place.
+// aside and the mobile drawer render it from this one place. The drawer already has its
+// own "DocMind" header above this content, so it passes inDrawer to drop the Files
+// panel's own copy of the same brand name instead of showing it twice.
 function ContextPanelContent({
   activeTab,
   inboxCount,
@@ -263,6 +277,7 @@ function ContextPanelContent({
   tags,
   categories,
   failedJobCount,
+  inDrawer = false,
 }: {
   activeTab: RailTab;
   inboxCount: number;
@@ -271,8 +286,12 @@ function ContextPanelContent({
   tags: TagRow[];
   categories: CategoryRow[];
   failedJobCount: number;
+  inDrawer?: boolean;
 }) {
-  if (activeTab === "files") return <FilesPanel inboxCount={inboxCount} needsReviewCount={needsReviewCount} trashCount={trashCount} />;
+  if (activeTab === "files")
+    return (
+      <FilesPanel inboxCount={inboxCount} needsReviewCount={needsReviewCount} trashCount={trashCount} showHeading={!inDrawer} />
+    );
   if (activeTab === "search") return <SearchPanel />;
   if (activeTab === "tags") return <TagsPanel tags={tags} categories={categories} />;
   if (activeTab === "sorting") return <SortingPanel automaticCount={countAutomaticItems(tags, categories)} />;
@@ -404,6 +423,10 @@ export function AppShell() {
   const location = useLocation();
   const [activeTab, setActiveTab] = useState<RailTab>(() => tabForPath(location.pathname));
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  // Two full trees below, one per breakpoint, same fork ChatPage used to have. Left
+  // as is: unlike the chat composer, nothing here is a live text input a mid-flip
+  // remount could corrupt, so the coincidental type match React relies on here is
+  // lower risk. Revisit if a form field ever lands directly in this shell.
   const isMobileLayout = useIsMobile();
 
   useEffect(() => {
@@ -429,6 +452,7 @@ export function AppShell() {
       tags={tags}
       categories={categories}
       failedJobCount={failedJobCount}
+      inDrawer={isMobileLayout}
     />
   );
 
@@ -437,7 +461,7 @@ export function AppShell() {
       <div className="flex min-h-screen flex-col">
         <MobileTopBar label={activeLabel} failedJobCount={failedJobCount} unreadCount={unreadCount} onOpenMenu={() => setIsMenuOpen(true)} />
         <NavDrawer open={isMenuOpen} onOpenChange={setIsMenuOpen} activeTab={activeTab} failedJobCount={failedJobCount} panel={panel} />
-        <main className="flex-1 p-8">
+        <main className="flex-1 p-4 md:p-8">
           <Outlet />
         </main>
       </div>

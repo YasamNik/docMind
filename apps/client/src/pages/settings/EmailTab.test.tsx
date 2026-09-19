@@ -35,6 +35,7 @@ const unconfiguredSettings: ResolvedSetting[] = [
   { key: "email.imap.doneFolder", value: "DocMind/Done", source: "default", secret: false, doc: "Where a handled message is moved so it is never taken in twice." },
   { key: "email.imap.failedFolder", value: "DocMind/Failed", source: "default", secret: false, doc: "Where a message is moved after it fails to be taken in a bounded number of times." },
   { key: "email.imap.pollSeconds", value: 60, source: "default", secret: false, doc: "How often the watched folder is checked." },
+  { key: "email.imap.maxMessageSizeMb", value: 25, source: "default", secret: false, doc: "Messages larger than this are moved to Failed without being downloaded." },
 ];
 
 function configuredSettings(overrides: Partial<Record<string, unknown>> = {}): ResolvedSetting[] {
@@ -85,6 +86,21 @@ describe("EmailTab", () => {
 
     await waitFor(() =>
       expect(updateSettings).toHaveBeenCalledWith({ "email.imap.host": "imap.gmail.com" }),
+    );
+  });
+
+  it("shows the max message size setting and saves it as a number", async () => {
+    renderEmailTab();
+    await screen.findByText(/messages larger than this are moved to failed/i);
+
+    const sizeField = screen.getByText(/messages larger than this are moved to failed/i).closest("div") as HTMLElement;
+    fireEvent.click(within(sizeField).getByRole("button", { name: "Edit" }));
+    const input = within(sizeField).getByRole("spinbutton");
+    fireEvent.change(input, { target: { value: "10" } });
+    fireEvent.click(within(sizeField).getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({ "email.imap.maxMessageSizeMb": 10 }),
     );
   });
 

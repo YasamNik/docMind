@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessage, ChatSession } from "@/lib/chat-api";
@@ -60,6 +60,27 @@ function mockMobileViewport() {
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   })) as unknown as typeof window.matchMedia;
+}
+
+// Unlike mockMobileViewport above, this keeps the listener a real change event would
+// call, so a test can flip the breakpoint mid-interaction the way a phone rotation does.
+function installFlippableMatchMedia(initialMobile: boolean) {
+  let mobile = initialMobile;
+  const listeners = new Set<() => void>();
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    get matches() {
+      return query === "(max-width: 767px)" ? mobile : false;
+    },
+    media: query,
+    addEventListener: (_type: string, listener: () => void) => listeners.add(listener),
+    removeEventListener: (_type: string, listener: () => void) => listeners.delete(listener),
+  })) as unknown as typeof window.matchMedia;
+  return {
+    setMobile(next: boolean) {
+      mobile = next;
+      listeners.forEach((listener) => listener());
+    },
+  };
 }
 
 function renderPage() {
@@ -313,5 +334,29 @@ describe("ChatPage on a phone", () => {
     renderPage();
     await screen.findByText("Lease question");
     expect(screen.queryByText("Chats")).not.toBeInTheDocument();
+  });
+
+  it("keeps the same composer input element and its typed text across a live breakpoint flip", async () => {
+    const media = installFlippableMatchMedia(false);
+    listSessionsMock.mockResolvedValueOnce([
+      { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+    ]);
+    getSessionMock.mockResolvedValueOnce({
+      session: { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+      messages: [],
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByText("Lease question"));
+    const input = await screen.findByPlaceholderText("Ask about your documents...");
+    fireEvent.change(input, { target: { value: "What licence" } });
+
+    // A phone rotation crosses the md breakpoint in one step, not two, so the mobile
+    // layout is what the user sees right after the flip.
+    act(() => media.setMobile(true));
+
+    const afterFlip = screen.getByPlaceholderText("Ask about your documents...");
+    expect(afterFlip).toBe(input);
+    expect((afterFlip as HTMLInputElement).value).toBe("What licence");
   });
 });

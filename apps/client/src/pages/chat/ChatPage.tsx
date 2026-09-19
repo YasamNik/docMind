@@ -449,12 +449,22 @@ export function ChatPage() {
     setSessionsOpen(false);
   }
 
-  // Below md the sessions list moves off the main screen entirely: the conversation
-  // gets the full width, the composer sits above the safe area, and the session list
-  // opens from a header button instead of sharing the screen as a second column.
-  if (isMobile) {
-    return (
-      <div className="flex h-[calc(100dvh-9rem)] w-full min-w-0 flex-col gap-3">
+  // One return statement, not two. A phone rotation flips isMobile mid-session, and
+  // an earlier version of this page returned a whole separate tree per breakpoint:
+  // React does not reconcile an element across two structurally different returns at
+  // the same position reliably, so the composer's own input could be torn down and
+  // rebuilt right as someone was typing into it. Here the conversation column (the
+  // message list, the composer, the empty state) is one shared subtree; only the
+  // chrome around it, the header row versus the sessions aside, and whether the
+  // sessions sheet exists at all, changes with isMobile.
+  const rootClass = isMobile ? "flex h-[calc(100dvh-9rem)] w-full min-w-0 flex-col gap-3" : "flex h-[calc(100vh-9rem)] gap-6";
+  const conversationWrapperClass = isMobile
+    ? "flex min-h-0 flex-1 flex-col overflow-hidden rounded-[2rem] bg-card"
+    : "flex flex-1 flex-col overflow-hidden rounded-[2rem] bg-card";
+
+  return (
+    <div className={rootClass}>
+      {isMobile ? (
         <div className="flex items-center justify-between gap-2">
           <Button type="button" variant="outline" size="sm" className="min-h-11 gap-1.5" onClick={() => setSessionsOpen(true)}>
             <MessagesSquare className="h-4 w-4" />
@@ -464,29 +474,61 @@ export function ChatPage() {
             New chat
           </Button>
         </div>
+      ) : (
+        <aside className="flex w-72 shrink-0 flex-col gap-3 overflow-y-auto">
+          <Button type="button" onClick={() => createSession.mutate()} disabled={createSession.isPending}>
+            New chat
+          </Button>
+          <div className="flex flex-col gap-2">
+            {sortedSessions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No chats yet.</p>
+            ) : (
+              sortedSessions.map((session) => (
+                <SessionListItem
+                  key={session.id}
+                  session={session}
+                  active={session.id === selectedId}
+                  onSelect={() => setSelectedId(session.id)}
+                  onDelete={() => setDeleting(session)}
+                />
+              ))
+            )}
+          </div>
+        </aside>
+      )}
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[2rem] bg-card">
-          {selectedId === null ? (
-            <ConversationEmptyState className="px-6" />
-          ) : (
-            <>
-              <MessageThread messages={messages} otherStorageLabel={otherStorageLabel} className="flex-1 space-y-4 overflow-y-auto p-4" />
-              <Composer
-                input={input}
-                onInputChange={setInput}
-                sending={sending}
-                onSubmit={() => void sendMessage()}
-                formClassName="flex items-center gap-2 border-t border-border p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
-                inputClassName="h-11 flex-1"
-                sendButtonClassName="h-11 min-w-16"
-              />
-            </>
-          )}
-        </div>
+      <div className={conversationWrapperClass}>
+        {selectedId === null ? (
+          <ConversationEmptyState className={isMobile ? "px-6" : ""} />
+        ) : (
+          <>
+            <MessageThread
+              messages={messages}
+              otherStorageLabel={otherStorageLabel}
+              className={`flex-1 space-y-4 overflow-y-auto ${isMobile ? "p-4" : "p-6"}`}
+            />
+            <Composer
+              input={input}
+              onInputChange={setInput}
+              sending={sending}
+              onSubmit={() => void sendMessage()}
+              formClassName={
+                isMobile
+                  ? "flex items-center gap-2 border-t border-border p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+                  : "flex items-center gap-2 border-t border-border p-4"
+              }
+              inputClassName={isMobile ? "h-11 flex-1" : "flex-1"}
+              sendButtonClassName={isMobile ? "h-11 min-w-16" : ""}
+            />
+          </>
+        )}
+      </div>
 
-        {/* DialogContent is already a full screen sheet with its own scroll and a sticky
-            header below md, and the app's usual centered card at md and up, so the
-            sessions list needs no positioning of its own here. */}
+      {/* DialogContent is already a full screen sheet with its own scroll and a sticky
+          header below md, and the app's usual centered card at md and up, so the
+          sessions list needs no positioning of its own here. Only exists below md:
+          from md up the sessions aside above already shows the list. */}
+      {isMobile && (
         <Dialog open={sessionsOpen} onOpenChange={setSessionsOpen}>
           <DialogContent>
             <DialogHeader>
@@ -520,56 +562,7 @@ export function ChatPage() {
             )}
           </DialogContent>
         </Dialog>
-
-        <DeleteSessionDialog
-          deleting={deleting}
-          onCancel={() => setDeleting(null)}
-          onConfirm={() => deleting && deleteSession.mutate(deleting.id)}
-          pending={deleteSession.isPending}
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex h-[calc(100vh-9rem)] gap-6">
-      <aside className="flex w-72 shrink-0 flex-col gap-3 overflow-y-auto">
-        <Button type="button" onClick={() => createSession.mutate()} disabled={createSession.isPending}>
-          New chat
-        </Button>
-        <div className="flex flex-col gap-2">
-          {sortedSessions.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No chats yet.</p>
-          ) : (
-            sortedSessions.map((session) => (
-              <SessionListItem
-                key={session.id}
-                session={session}
-                active={session.id === selectedId}
-                onSelect={() => setSelectedId(session.id)}
-                onDelete={() => setDeleting(session)}
-              />
-            ))
-          )}
-        </div>
-      </aside>
-
-      <div className="flex flex-1 flex-col overflow-hidden rounded-[2rem] bg-card">
-        {selectedId === null ? (
-          <ConversationEmptyState />
-        ) : (
-          <>
-            <MessageThread messages={messages} otherStorageLabel={otherStorageLabel} className="flex-1 space-y-4 overflow-y-auto p-6" />
-            <Composer
-              input={input}
-              onInputChange={setInput}
-              sending={sending}
-              onSubmit={() => void sendMessage()}
-              formClassName="flex items-center gap-2 border-t border-border p-4"
-            />
-          </>
-        )}
-      </div>
+      )}
 
       <DeleteSessionDialog
         deleting={deleting}
