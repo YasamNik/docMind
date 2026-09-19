@@ -125,6 +125,14 @@ describe("documents service", () => {
     const filesInRoot = await readdir(root, { recursive: true });
     expect(filesInRoot.some((entry) => entry.includes("big.txt"))).toBe(false);
   });
+
+  it("records where a document came from, defaulting to an upload", async () => {
+    const { document: browser } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    const { document: bot } = await documents.upload({ userId, name: "b.txt", mimeType: "text/plain", body: Readable.from(["b"]), source: "telegram" });
+
+    expect((await documents.get({ userId, documentId: browser.id })).source).toBe("upload");
+    expect((await documents.get({ userId, documentId: bot.id })).source).toBe("telegram");
+  });
 });
 
 describe("documents service filters and enrichment", () => {

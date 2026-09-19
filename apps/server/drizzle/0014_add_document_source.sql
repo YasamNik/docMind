@@ -1,0 +1,1 @@
+ALTER TABLE `documents` ADD `source` text DEFAULT 'upload' NOT NULL;

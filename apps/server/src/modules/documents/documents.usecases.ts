@@ -75,12 +75,14 @@ export function createDocumentsService({
       mimeType,
       body,
       maxUploadBytes = DEFAULT_MAX_UPLOAD_BYTES,
+      source = "upload",
     }: {
       userId: string;
       name: string;
       mimeType?: string;
       body: Readable;
       maxUploadBytes?: number;
+      source?: "upload" | "telegram" | "email";
     }) {
       const documentId = newDocumentId();
       const safeName = sanitizeFilename(name);
@@ -118,6 +120,7 @@ export function createDocumentsService({
         contentHash: sha256,
         storageDriver: driverId,
         storageKey: stored.key,
+        source,
         extractedText: null,
         extractionStatus: "pending",
         extractionError: null,

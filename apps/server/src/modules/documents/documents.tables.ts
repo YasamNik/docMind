@@ -11,6 +11,9 @@ export const documentsTable = sqliteTable(
     contentHash: text("content_hash"),
     storageDriver: text("storage_driver").notNull(),
     storageKey: text("storage_key").notNull(),
+    // Where the document entered DocMind. Every row that predates Telegram intake is an
+    // upload, which is what the default records.
+    source: text("source").notNull().default("upload"),
     extractedText: text("extracted_text"),
     extractionStatus: text("extraction_status").notNull().default("pending"),
     extractionError: text("extraction_error"),

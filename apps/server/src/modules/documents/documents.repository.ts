@@ -20,6 +20,7 @@ const listColumns = {
   contentHash: documentsTable.contentHash,
   storageDriver: documentsTable.storageDriver,
   storageKey: documentsTable.storageKey,
+  source: documentsTable.source,
   extractionStatus: documentsTable.extractionStatus,
   extractionError: documentsTable.extractionError,
   ruleStatus: documentsTable.ruleStatus,
