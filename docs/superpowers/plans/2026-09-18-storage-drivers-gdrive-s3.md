@@ -53,12 +53,12 @@ Two repository facts that will bite an implementer who does not know them:
 | `apps/server/src/modules/storage/storage.usecases.ts` | injectable registry, `listDriverStatus`, `testDriver`, `assertStorageUpdatesValid`, `lastAuthError` | 4 |
 | `apps/server/src/modules/storage/storage.schemas.ts` | NEW, driver id picklist and callback query | 4 |
 | `apps/server/src/modules/storage/storage.routes.ts` | NEW, status, test, disconnect | 4 |
-| `apps/server/src/server.ts` | storage branch in `beforeSet`, register routes | 4, 9 |
+| `apps/server/src/server.ts` | storage branch in `beforeSet`, register routes | 4, 10 |
 | `DOCMIND-DESIGN.md` | credential clearing rule | 4 |
 | `apps/server/src/modules/storage/drivers/s3/s3.models.ts` | NEW, pure keys, client config, error mapping | 5 |
 | `apps/server/src/modules/storage/drivers/s3/s3.guide.ts` | NEW | 5 |
 | `apps/server/src/modules/storage/drivers/s3/s3.driver.ts` | NEW | 5 |
-| `apps/server/src/modules/storage/storage.registry.ts` | register `s3`, then `gdrive` | 5, 8 |
+| `apps/server/src/modules/storage/storage.registry.ts` | register `s3`, then `gdrive` | 5, 9 |
 | `apps/client/src/pages/settings/SetupGuide.tsx` | NEW, extracted from `ProviderCard` | 6 |
 | `apps/client/src/pages/settings/ProviderCard.tsx` | use `SetupGuide` | 6 |
 | `apps/client/src/lib/storage-api.ts` | NEW | 6 |
@@ -68,22 +68,22 @@ Two repository facts that will bite an implementer who does not know them:
 | `apps/server/src/modules/storage/drivers/gdrive/gdrive.fetch.test-utils.ts` | NEW, the in-memory Drive fake | 7 |
 | `apps/server/src/modules/storage/drivers/gdrive/gdrive.tokens.ts` | NEW, module scoped access token cache | 8 |
 | `apps/server/src/modules/storage/drivers/gdrive/gdrive.api.ts` | NEW, fetch wrappers | 8 |
-| `apps/server/src/modules/storage/drivers/gdrive/gdrive.driver.ts` | NEW | 8 |
-| `apps/server/src/modules/storage/drivers/gdrive/gdrive.guide.ts` | NEW | 8 |
-| `apps/server/src/modules/storage/storage.oauth.models.ts` | NEW, state sign and verify, authorize URL | 9 |
-| `apps/server/src/modules/storage/storage.oauth.usecases.ts` | NEW, code exchange, connect, disconnect | 9 |
-| `apps/server/src/modules/storage/storage.oauth.routes.ts` | NEW, start and callback | 9 |
-| `apps/server/.env.example` | S3 and GDRIVE seeds | 10 |
-| `docs/FEATURES.md` | item 9 progress | 10 |
-| `DOCMIND-DESIGN.md` | `storage.oauth.redirectBaseUrl` setting | 10 |
+| `apps/server/src/modules/storage/drivers/gdrive/gdrive.driver.ts` | NEW | 9 |
+| `apps/server/src/modules/storage/drivers/gdrive/gdrive.guide.ts` | NEW | 9 |
+| `apps/server/src/modules/storage/storage.oauth.models.ts` | NEW, state sign and verify, authorize URL | 10 |
+| `apps/server/src/modules/storage/storage.oauth.usecases.ts` | NEW, code exchange, connect, disconnect | 10 |
+| `apps/server/src/modules/storage/storage.oauth.routes.ts` | NEW, start and callback | 10 |
+| `apps/server/.env.example` | S3 and GDRIVE seeds | 11 |
+| `docs/FEATURES.md` | item 9 progress | 11 |
+| `DOCMIND-DESIGN.md` | `storage.oauth.redirectBaseUrl` setting | 11 |
 
-Ten tasks. Each one leaves the tree compiling, the suites green, and the app usable.
+Eleven tasks. Each one leaves the tree compiling, the suites green, and the app usable.
 
 ---
 
 ### Task 1: setInternal must encrypt a secret internal setting
 
-A bug fix in shipped code, not a feature step, so it follows the bug fix workflow in `CLAUDE.md`: check history, write the regression test, watch it fail, fix, run the suite, propose the record. It is first because task 9 stores a Google refresh token through `setInternal`, and until this lands that token is written to the database in plaintext and then fails to read back.
+A bug fix in shipped code, not a feature step, so it follows the bug fix workflow in `CLAUDE.md`: check history, write the regression test, watch it fail, fix, run the suite, propose the record. It is first because task 10 stores a Google refresh token through `setInternal`, and until this lands that token is written to the database in plaintext and then fails to read back.
 
 Read the spec section "Bug found in shipped code: setInternal stores a secret setting in plaintext" before starting.
 
@@ -231,7 +231,7 @@ Run the `bug-fix-record` agent with the root cause, the regression test and the 
 
 ### Task 2: Storage contract groundwork, the error vocabulary and a wider contract suite
 
-Pure groundwork. No new driver, no route, no user-visible change. It lands the vocabulary and the tests that tasks 5 and 8 must satisfy.
+Pure groundwork. No new driver, no route, no user-visible change. It lands the vocabulary and the tests that tasks 5 and 9 must satisfy.
 
 Read spec decisions 2, 3, 4 and 8b.
 
@@ -611,18 +611,18 @@ Expected: `listDriverStatus is not a function`, and the routes test failing to r
 Keep `buildStorageKey` and the three existing methods exactly as they are. Add the injectable registry and the count callback to `createStorageService`, then:
 
 - A module level `const lastAuthError = new Map<string, { at: string; message: string }>()` with `recordAuthError` and `clearAuthError`. Comment it as spec decision 15 states: in memory on purpose, reset on restart, never a settings write on an auth failure, and a refresh token is never deleted automatically.
-- `listDriverStatus(userId)` returning the shape in spec section 6 under "Companion route": `activeDriverId` plus one entry per driver with `id`, `label`, `guide`, `configured`, `missingSettings`, `documentCount`, `requiresOauth`, optional `redirectUri` and optional `connection`. Until task 9 lands, `connection` can be omitted and `requiresOauth` is false for every driver.
+- `listDriverStatus(userId)` returning the shape in spec section 6 under "Companion route": `activeDriverId` plus one entry per driver with `id`, `label`, `guide`, `configured`, `missingSettings`, `documentCount`, `requiresOauth`, optional `redirectUri` and optional `connection`. Until task 10 lands, `connection` can be omitted and `requiresOauth` is false for every driver.
 - `missingSettings` holds human labels, not keys. Derive each from the last dot segment of the setting key, splitting camelCase into words, so `storage.s3.secretAccessKey` becomes `secret access key`. Put that conversion in a small exported pure function in `storage.usecases.ts` or, better, in a new `storage.models.ts` if it grows past a few lines, since pure logic belongs in models.
 - `testDriver(userId, driverId)` returning `{ ok, latencyMs, message }`, measured around the whole check, catching every throw into `{ ok: false, message }` rather than letting it escape. On a caught `storage.auth_expired` it calls `recordAuthError`; on success it calls `clearAuthError`. The shape is identical to the AI module TestResult on purpose (`ai.usecases.ts:293-300`), so the client can share one component.
 - `assertStorageUpdatesValid` exported as a standalone function, so `server.ts` stays thin and the rules are testable outside the server wiring. Implement the three rules in spec decision 12, and consult `updates` before the stored value exactly as the AI branch already does at `server.ts:96-102`, carrying the same comment about a single PUT setting the key and the slot together.
 
 - [ ] **Step 5: Write storage.schemas.ts and storage.routes.ts**
 
-`storage.schemas.ts` exports `storageDriverIdSchema = v.picklist(storageDriverIds)` and, ready for task 9, `oauthCallbackQuerySchema`. Routes parse the id param with `parseOrValidationError(storageDriverIdSchema, c.req.param("id"))`, mirroring `ai.routes.ts:81`.
+`storage.schemas.ts` exports `storageDriverIdSchema = v.picklist(storageDriverIds)` and, ready for task 10, `oauthCallbackQuerySchema`. Routes parse the id param with `parseOrValidationError(storageDriverIdSchema, c.req.param("id"))`, mirroring `ai.routes.ts:81`.
 
 `storage.routes.ts` exports `registerStorageRoutes({ app, storageService, getUserId })` and registers the three routes. The test route returns `c.json(result)` with a 200 even when `ok` is false, so the client renders the message inline rather than as a toast. It throws only for an unknown id or a missing session. Routes never touch Drizzle.
 
-The disconnect route exists separately from `PUT /api/settings` because the refresh token is internal and cannot be cleared through the settings API by design. At this point no driver has an `oauth` block, so it returns `storage.unknown_driver` for every id. Write the route now and let task 9 fill in the body.
+The disconnect route exists separately from `PUT /api/settings` because the refresh token is internal and cannot be cleared through the settings API by design. At this point no driver has an `oauth` block, so it returns `storage.unknown_driver` for every id. Write the route now and let task 10 fill in the body.
 
 - [ ] **Step 6: Wire server.ts**
 
@@ -651,7 +651,7 @@ Register the routes after the session middleware, beside the other feature route
 
 - [ ] **Step 7: Amend DOCMIND-DESIGN.md, because this is the commit where the rule changes**
 
-This is a required step of this task and not a documentation footnote swept into task 10. From this commit onwards the server enforces something the design document contradicts, and a contradiction between the spec and the code is exactly what gets re-implemented wrongly six months later.
+This is a required step of this task and not a documentation footnote swept into task 11. From this commit onwards the server enforces something the design document contradicts, and a contradiction between the spec and the code is exactly what gets re-implemented wrongly six months later.
 
 In `DOCMIND-DESIGN.md`, the paragraph headed `**Switching drivers.**` at lines 335 to 338 currently ends with:
 
@@ -889,6 +889,8 @@ The API client is the only place that knows URLs. Types mirror the status payloa
 
 Per driver card: label, `Holds N documents` whenever N is above zero, the settings fields for that driver rendered from the settings registry rather than hand written per driver, the `SetupGuide` beside them, a Test button sharing the result line component with the AI tab, and a Clear credentials action behind the confirm dialog.
 
+**What replaces the old `String(setting.value)` loop.** The renderer stays generic, per the client rule that settings forms are generated from the registry, but it dispatches on the kind of the setting instead of stringifying everything. A boolean schema gets a checkbox, so `storage.s3.forcePathStyle` stops rendering as the text `false`. A secret gets the masked control, set and ends in 1234, with a Replace action and no prefill. Anything else gets a text input. The server already sends what that needs: `ResolvedSetting.secret` carries the secret flag and the resolved value carries its own type, so nothing new has to cross the wire for this. Do not write a form component per driver; avoiding exactly that is what the registry is for.
+
 Tab level: the active driver control is a list of radio options, one per driver. An option whose `configured` is false is disabled with a line under it reading `Needs: bucket, secret access key` built from `missingSettings`, plus a link that scrolls to that driver card. The server side guard from task 4 is the real enforcement; the disabled option is a convenience, because a required env var can vanish between page load and click.
 
 When the active driver is unconfigured, a red banner at the top of the tab: `Uploads are failing. The active driver, Google Drive, is not connected.` An unconfigured active driver is silently fatal today, which is why the banner is not optional polish.
@@ -920,7 +922,7 @@ Claude-Session: https://claude.ai/code/session_01HpHSkxKKsL95NvKSzoKZgT
 
 ### Task 7: Google Drive pure models and the in-memory Drive fake
 
-The Drive work is split across two tasks because the chunked resumable upload is the riskiest code in this item, and every byte-range decision inside it is pure. Landing the pure functions and the fake first means the driver in task 8 is written against helpers that already have tests, rather than debugged through a driver and a fake at the same time.
+The Drive work is split across three tasks because the chunked resumable upload is the riskiest code in this item, and every byte-range decision inside it is pure. This task writes the pure helpers and the fake, task 8 writes the token cache and the network wrappers, and task 9 writes the driver on top of both. Splitting it this way means the loop in task 9 is written against helpers that already have tests, rather than debugged through a driver and a fake at the same time, and it puts the fake and the loop in different commits and ideally in different hands.
 
 This task adds no driver, no registry entry, no route. It is all testable groundwork.
 
@@ -963,7 +965,7 @@ Pure functions only. No fetch, no settings service, no imports from anything exc
 
 `gdrive.fetch.test-utils.ts` exports `createDriveFetchFake(options?)` returning `{ fetchImpl, files, requests }`. It implements, in memory: the token endpoint (refresh and code exchange), `files.create` with `uploadType=resumable` returning a session URL in the `Location` header, chunk PUTs to that session URL with range bookkeeping returning 308 until the final chunk, `files.create` with `uploadType=multipart`, `files.get` with `alt=media`, `files.get` metadata, `files.list`, `files.delete`, and `about.get`.
 
-It also needs scripted failures, because two of the tests in task 8 depend on them: `failOnce({ chunkIndex, status })` for the mid-transfer 5xx, and a switch to make the token endpoint return `invalid_grant`.
+It also needs scripted failures, because tests in tasks 8 and 9 depend on them: `failOnce({ chunkIndex, status })` for the mid-transfer 5xx, and a switch to make the token endpoint return `invalid_grant`.
 
 `requests` records every call so a test can assert how many PUTs happened. That is how the small chunk run proves it took more than one PUT rather than merely asserting the bytes came back.
 
@@ -987,8 +989,8 @@ Lands the byte-range, upload-mode, token-expiry, error-mapping and authorize-URL
 helpers for the Drive driver as pure functions with unit tests, plus a fetch
 fake that implements the Drive endpoints the driver needs, including resumable
 session bookkeeping and scripted failures. No driver and no registry entry yet:
-the chunking loop is the riskiest code in this item and it is written next,
-against helpers that already have tests.
+the chunking loop is the riskiest code in this item and it is written in
+task 9, against helpers and wrappers that already have tests.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01HpHSkxKKsL95NvKSzoKZgT
@@ -996,16 +998,110 @@ Claude-Session: https://claude.ai/code/session_01HpHSkxKKsL95NvKSzoKZgT
 
 ---
 
-### Task 8: The Google Drive driver
+### Task 8: Google Drive token cache and API wrappers
 
-The largest task. Read spec section 2 in full, and decisions 5, 6, 8, 8b and 16.
+The Drive work is split across three tasks, not two, because the resumable upload is the riskiest code in this item and because a single agent writing the fake, the wrappers and the chunking loop in one sitting produces three artefacts that agree with each other and possibly with nothing else. Task 7 wrote the pure helpers and the fake. This task writes every network call and its retry, timeout and error behaviour, exercised against that fake. Task 9 writes the streaming loop and the driver surface on top, and nothing else.
+
+Read spec decisions 5 and 8, and the spec subsection "Token storage and refresh".
 
 **Files:**
-- Create: `apps/server/src/modules/storage/drivers/gdrive/gdrive.tokens.ts`, `gdrive.api.ts`, `gdrive.driver.ts`, `gdrive.guide.ts`, `gdrive.driver.test.ts`
+- Create: `apps/server/src/modules/storage/drivers/gdrive/gdrive.tokens.ts`, `gdrive.api.ts`, `gdrive.tokens.test.ts`, `gdrive.api.test.ts`
+
+**Interfaces:**
+- Consumed: `gdrive.models.ts` and `createDriveFetchFake` from task 7, `storage.errors.ts` from task 2, `settingsService.get` for the refresh token.
+- Produced: `getAccessToken({ settings, userId, fetchImpl })` from `gdrive.tokens.ts`.
+- Produced from `gdrive.api.ts`, every function taking the injected `fetchImpl` and an access token: `refreshAccessToken`, `createResumableSession`, `putChunk`, `queryCommittedRange`, `uploadSimple`, `getFileMedia`, `getFileMetadata`, `listFiles`, `deleteFile`, `getAbout`, `resolveOrCreateFolder`.
+
+`resolveOrCreateFolder` lives here rather than in the driver because it is two plain metadata calls, files.get then files.create, and putting it here means the folder recreation fallback gets its own test against the fake instead of riding along inside the upload path.
+
+- [ ] **Step 1: Write the failing tests**
+
+`gdrive.tokens.test.ts`:
+
+```ts
+  it("exchanges the refresh token once and caches the access token", ...);
+  it("refreshes the access token once for two concurrent calls", ...);   // one in-flight promise
+  it("refreshes when within 60 seconds of expiry and not before", ...);
+  it("discards the cached token when the refresh token changes", ...);   // fingerprint
+  it("never writes the access token to the settings table", ...);        // assert debugRows
+  it("maps invalid_grant to storage.auth_expired", ...);
+```
+
+The last two are the ones worth having. The access token is in process memory only by decision 5, and the cheapest proof is that no row appears.
+
+`gdrive.api.test.ts`, all against `createDriveFetchFake`:
+
+```ts
+  it("opens a resumable session and returns the session URL from the Location header", ...);
+  it("returns continue with the committed byte for a 308 and done for a 200", ...);
+  it("queries the session for the committed range after a 5xx", ...);
+  it("uploads a small body in one multipart request", ...);
+  it("streams file media back", ...);
+  it("retries a 429 three times with backoff and then throws storage.rate_limited", ...);
+  it("retries a 403 rateLimitExceeded the same way", ...);
+  it("maps storageQuotaExceeded to storage.quota", ...);
+  it("surfaces a 404 from deleteFile rather than swallowing it", ...);   // the driver swallows, not this layer
+  it("creates the folder when files.get reports it missing or trashed", ...);
+  it("creates the folder when files.get reports it trashed", ...);
+```
+
+The delete test pins a layering decision: `gdrive.api.ts` reports what Drive said, and the driver is the layer that turns a 404 into the idempotent delete the contract requires. Putting the swallow down here would hide a genuine 404 from `exists` too.
+
+Inject a fake clock or a zero backoff into the retry helper so the rate limit tests do not actually sleep for seven seconds.
+
+- [ ] **Step 2: Run them and watch them fail**
+
+Run: `pnpm --filter @docmind/server test -- gdrive.tokens gdrive.api`
+Expected: cannot resolve `./gdrive.tokens.js` and `./gdrive.api.js`.
+
+- [ ] **Step 3: Write gdrive.tokens.ts**
+
+A module scoped cache keyed by user id holding `{ accessToken, expiresAt, refreshTokenFingerprint }`. This is not an optimisation, it is required: `storageService.getDriver` calls `definition.create` on **every** request (`storage.usecases.ts:31`), so a cache held on the driver instance would mean a token exchange per download. The fingerprint is a short hash of the refresh token, so reconnecting with a different account invalidates the cache immediately. Refresh when within 60 seconds of expiry, using `accessTokenExpired` from task 7, and share one in-flight promise across concurrent refreshes. The access token is never persisted.
+
+- [ ] **Step 4: Write gdrive.api.ts**
+
+Thin wrappers, one per Drive call, no business logic. Every call takes the injected `fetchImpl`. Metadata calls use `AbortSignal.timeout(30_000)`; each upload chunk request gets its own 120 second timeout, which bounds a stalled transfer without killing a slow but live one. A 403 with `rateLimitExceeded` or `userRateLimitExceeded`, or a 429, retries up to 3 times with exponential backoff and jitter starting at 1 second before giving up as `storage.rate_limited`. Every non-retryable failure goes through `mapDriveError` from task 7, so the error vocabulary is decided in one place.
+
+No `googleapis` dependency. Decision 8 is explicit about this and names the fallback if the implementer hits real trouble: `@googleapis/drive` is a legitimate reversal, not a failure. Raise it rather than fighting it for a day.
+
+- [ ] **Step 5: Run and commit**
+
+```bash
+pnpm --filter @docmind/server test -- gdrive
+pnpm typecheck
+```
+
+```
+feat(server): Google Drive token cache and REST API wrappers
+
+Adds the module scoped access token cache, keyed by user and fingerprinted
+against the refresh token so a reconnect with a different account invalidates
+it, sharing one in flight promise across concurrent refreshes and never
+persisting the token. Adds one thin wrapper per Drive v3 call, with the 30
+second metadata timeout, the 120 second chunk timeout, the rate limit retry
+with backoff, and the folder resolve or create fallback, all exercised against
+the fetch fake. No driver yet.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HpHSkxKKsL95NvKSzoKZgT
+```
+
+---
+
+### Task 9: The Google Drive driver and the resumable upload loop
+
+Everything below sits on top of task 7 and task 8, both of which are already tested. What is new here is the streaming loop, the driver surface and the registry entry.
+
+**For whoever reviews this task.** Do not check the byte-range arithmetic by reading `gdrive.driver.ts` and `gdrive.fetch.test-utils.ts` side by side and confirming they agree. They will agree, and that proves nothing: the fake and the loop encode the same reading of the protocol, so a wrong reading passes. Re-derive the expected `Content-Range` sequence independently from the Google resumable upload documentation, then check it against the asserted header strings in `gdrive.models.test.ts` from task 7. Those assertions are the artefact under review, not the driver.
+
+Read spec section 2 in full, and decisions 6, 8, 8b and 16.
+
+**Files:**
+- Create: `apps/server/src/modules/storage/drivers/gdrive/gdrive.driver.ts`, `gdrive.guide.ts`, `gdrive.driver.test.ts`
 - Modify: `apps/server/src/modules/storage/storage.registry.ts`, `apps/server/src/modules/storage/storage.settings.ts`
 
 **Interfaces:**
-- Consumed: everything from task 7, `storage.errors.ts`, `settingsService.get` and `setInternal` as fixed in task 1.
+- Consumed: everything from tasks 7 and 8, `storage.errors.ts`, `settingsService.get` and `setInternal` as fixed in task 1.
 - Produced: `createGdriveDriver({ settings, userId, fetchImpl = globalThis.fetch, chunkBytes = 8 * 1024 * 1024 })` and `gdriveDriverDefinition` carrying its `oauth` block.
 
 **Settings**, exactly as the table in spec section 4 lists them. Three are internal: `storage.gdrive.refreshToken` (also secret), `storage.gdrive.folderId`, `storage.gdrive.connectedEmail`. The refresh token has no env seed on purpose: offering one invites pasting a token from somewhere else into a file on disk. `storage.oauth.redirectBaseUrl` is not a driver setting, so add it to the `storageSettingDefinitions` array in `storage.settings.ts` beside `activeDriverSetting` rather than to the driver. Giving it the `SERVER_BASE_URL` env name makes it track the server base URL automatically while staying overridable from the UI, which is what decision 6 needs.
@@ -1021,19 +1117,13 @@ runDriverContractTests("gdrive small chunks", () => makeDriver({ chunkBytes: 256
 
 The second run is the whole point of decision 8b. The existing contract body is 8 MiB and the default chunk size is 8 MiB, so the default run is **one chunk** and exercises none of the resumable logic. At a 256 KiB chunk size, the protocol minimum, with a 1 MiB body, the upload takes four PUTs, which guarantees at least three 308 responses and a final chunk carrying the real total.
 
-Plus three tests beyond the contract suite, all at the small chunk size:
+Plus four tests beyond the contract suite, all at the small chunk size:
 
 ```ts
   it("takes more than one PUT at a small chunk size", ...);        // assert on fake.requests
   it("resends from the committed byte after a 5xx on the second chunk", ...);
-  it("sends the real total on a final partial chunk", ...);         // body not a multiple of the chunk size
-```
-
-And two on the token cache:
-
-```ts
-  it("refreshes the access token once for two concurrent calls", ...);
-  it("discards the cached token when the refresh token changes", ...);  // fingerprint
+  it("sends the real total on a final partial chunk", ...);        // body not a multiple of the chunk size
+  it("deletes the file id when the source stream errors mid transfer", ...);
 ```
 
 - [ ] **Step 2: Run them and watch them fail**
@@ -1041,35 +1131,26 @@ And two on the token cache:
 Run: `pnpm --filter @docmind/server test -- gdrive.driver`
 Expected: cannot resolve `./gdrive.driver.js`.
 
-- [ ] **Step 3: Write gdrive.tokens.ts**
+- [ ] **Step 3: Write gdrive.driver.ts**
 
-A module scoped cache keyed by user id holding `{ accessToken, expiresAt, refreshTokenFingerprint }`. This is not an optimisation, it is required: `storageService.getDriver` calls `definition.create` on **every** request (`storage.usecases.ts:31`), so a cache held on the driver instance would mean a token exchange per download. The fingerprint is a short hash of the refresh token, so reconnecting with a different account invalidates the cache immediately. Refresh when within 60 seconds of expiry, and share one in-flight promise across concurrent refreshes. The access token is never persisted.
+- `put`: read up to 5 MiB of the stream into memory first, because the size is unknown up front. If the stream ends inside that, do the simple upload in one request, which is what most documents will take. Otherwise open a resumable session and send what is already buffered as the first chunks. Chunks are `chunkBytes` each, every chunk except the last must be a multiple of 256 KiB, memory stays bounded at one chunk. 308 means continue, 200 or 201 means done, a 5xx means re-query the session for the committed byte range and resend from there. On a stream error, delete the file id if the session already produced one. Return the Drive file id as the key.
+- Every range decision comes from the task 7 helpers, `contentRangeHeader`, `parseCommittedRange` and `chooseUploadMode`. Do not recompute an offset inline. If a case turns up that the helpers do not cover, add it to `gdrive.models.ts` with a unit test rather than inlining arithmetic that nothing tests.
+- `get`: `getFileMedia`, returning the response body as a `Readable`.
+- `delete`: `deleteFile`, **swallowing a 404**. Drive returns 404 for an unknown file id while the contract requires delete to be idempotent, and the upload path calls delete on both the duplicate branch and the oversize branch. This swallow lives here and not in `gdrive.api.ts`, so that `exists` still sees a real 404.
+- `exists`: `getFileMetadata`, false on 404.
+- `healthCheck`: read only. Refresh the token, `getAbout`, then `resolveOrCreateFolder`. No probe upload: under the drive.file scope anything the app created is writable by the app by construction, so a probe tests nothing the refresh has not, and it would leave a file in the Drive trash on every button press.
 
-- [ ] **Step 4: Write gdrive.api.ts**
+Files go into the folder named by `storage.gdrive.folderName`, flat, with `appProperties` recording `docmindKey` and `docmindDocumentId`. When `resolveOrCreateFolder` had to recreate the folder, persist the new id through `setInternal` and log a warning: failing every upload forever because the user deleted a folder by hand would be hostile.
 
-Thin fetch wrappers for the calls the driver needs: token refresh, files.create resumable, chunk PUT, files.create multipart, files.get with alt=media, files.get metadata, files.list, files.delete, about.get. Every call takes the injected `fetchImpl`. Metadata calls use `AbortSignal.timeout(30_000)`; each upload chunk request gets its own 120 second timeout, which bounds a stalled transfer without killing a slow but live one. A 403 with `rateLimitExceeded` or `userRateLimitExceeded`, or a 429, retries up to 3 times with exponential backoff and jitter starting at 1 second before giving up as `storage.rate_limited`.
-
-No `googleapis` dependency. Decision 8 is explicit about this and gives the fallback if the implementer hits real trouble: `@googleapis/drive` is a legitimate reversal, not a failure. Raise it rather than fighting it for a day.
-
-- [ ] **Step 5: Write gdrive.driver.ts**
-
-- `put`: read up to 5 MiB of the stream into memory first, because the size is unknown up front. If the stream ends inside that, do the simple multipart upload in one request, which is what most documents will take. Otherwise open a resumable session and send what is already buffered as the first chunks. Chunks are `chunkBytes` each, every chunk except the last must be a multiple of 256 KiB, memory stays bounded at one chunk. 308 means continue, 200 or 201 means done, a 5xx means re-query the session for the committed byte range and resend from there. On a stream error, delete the file id if the session already produced one. Return the Drive file id as the key.
-- `get`: files.get with `alt=media`, returning the response body as a `Readable`.
-- `delete`: files.delete, **swallowing a 404**. Drive returns 404 for an unknown file id while the contract requires delete to be idempotent, and the upload path calls delete on both the duplicate branch and the oversize branch.
-- `exists`: files.get metadata, false on 404.
-- `healthCheck`: read only, the three steps in spec section 6. Refresh the token, `about.get`, then check the folder. No probe upload: under the drive.file scope anything the app created is writable by the app by construction, so a probe tests nothing the refresh has not, and it would leave a file in the Drive trash on every button press.
-
-Files go into the folder named by `storage.gdrive.folderName`, flat, with `appProperties` recording `docmindKey` and `docmindDocumentId`. If the folder id no longer resolves or is trashed, recreate the folder, update the setting, and log a warning: failing every upload forever because the user deleted a folder by hand would be hostile.
-
-- [ ] **Step 6: Write gdrive.guide.ts**
+- [ ] **Step 4: Write gdrive.guide.ts**
 
 The eight steps from spec section 2, "What the user does in the Google Cloud console", verbatim, including the exact links and copy values. Step 5, publishing the app, is the one users skip and then wonder why they reconnect every week, so keep its explanation. Both guide notes are specified in the spec; use them as written.
 
-- [ ] **Step 7: Register the driver**
+- [ ] **Step 5: Register the driver**
 
-Add `gdrive: gdriveDriverDefinition` to `storageDriverRegistry`. Until task 9 lands the OAuth routes there is no way to obtain a refresh token, so `requiredSettings` keeps the driver unselectable and `assertStorageUpdatesValid` from task 4 returns a 409 naming `connection` as missing. That is correct behaviour for this commit, not a gap: the driver is present, honest about not being connected, and cannot be activated.
+Add `gdrive: gdriveDriverDefinition` to `storageDriverRegistry`. Until task 10 lands the OAuth routes there is no way to obtain a refresh token, so `requiredSettings` keeps the driver unselectable and `assertStorageUpdatesValid` from task 4 returns a 409 naming `connection` as missing. That is correct behaviour for this commit, not a gap: the driver is present, honest about not being connected, and cannot be activated.
 
-- [ ] **Step 8: Run everything**
+- [ ] **Step 6: Run everything**
 
 ```bash
 pnpm --filter @docmind/server test
@@ -1078,28 +1159,28 @@ pnpm typecheck
 
 Confirm from the test output that the small chunk contract run really did take more than one PUT. If the assertion on `fake.requests` passes but the count is 1, the wiring of `chunkBytes` or `largeBodyBytes` is wrong and the riskiest code in this item is still untested.
 
-- [ ] **Step 9: Manual check 4, which this task owns**
+- [ ] **Step 7: Manual check 4, which this task owns**
 
 This task is **not done** until this has been run against a real Google account and the result written into the worklog.
 
-Upload one file over 5 MiB and one near 100 MB to a real connected Drive, then download both and compare hashes. This needs task 9 to be merged for the connect flow, so run it after task 9 and before the item is called complete, and record the result against this task.
+Upload one file over 5 MiB and one near 100 MB to a real connected Drive, then download both and compare hashes. This needs task 10 to be merged for the connect flow, so run it after task 10 and before the item is called complete, and record the result against this task.
 
-**State plainly what the green CI tick does not prove.** The fake and the driver share an author and a mental model. If the reading of the Drive resumable protocol is wrong, the wrong assumption goes into both and the suite passes anyway. CI proves the driver is internally consistent and that the chunk arithmetic is right. It does not prove Google agrees. Only this manual check does.
+**State plainly what the green CI tick does not prove.** The fake and the loop share a reading of the Drive resumable protocol. If that reading is wrong, the wrong assumption sits in both and the suite passes anyway. CI proves the driver is internally consistent and that the chunk arithmetic matches the asserted header strings. It does not prove Google agrees. Only this manual check does, which is why the review instruction at the top of this task asks for an independent re-derivation rather than a side by side read.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 8: Commit**
 
 ```
 feat(server): Google Drive storage driver
 
-Adds the Drive driver over plain fetch against the Drive v3 REST API, with an
-injectable fetchImpl and an injectable chunk size, a module scoped access token
-cache keyed by user and fingerprinted against the refresh token, a simple
-upload under 5 MiB and a hand written chunked resumable upload above it. The
-shared contract suite runs twice, once at the default 8 MiB chunk size and once
-at the 256 KiB protocol minimum with a 1 MiB body, so CI actually executes the
-308 continue path, a multi PUT Content-Range and a resend after a mid transfer
-5xx. Delete swallows a 404 because the contract requires idempotence and Drive
-does not give it.
+Adds the Drive driver on top of the tested helpers and API wrappers, with an
+injectable fetchImpl and an injectable chunk size, a simple upload under 5 MiB
+and a chunked resumable upload above it that takes every range decision from
+the pure helpers rather than computing offsets inline. The shared contract
+suite runs twice, once at the default 8 MiB chunk size and once at the 256 KiB
+protocol minimum with a 1 MiB body, so CI actually executes the 308 continue
+path, a multi PUT Content-Range and a resend after a mid transfer 5xx. Delete
+swallows a 404 in the driver, not in the API layer, because the contract
+requires idempotence while exists still needs to see a real 404.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01HpHSkxKKsL95NvKSzoKZgT
@@ -1107,7 +1188,7 @@ Claude-Session: https://claude.ai/code/session_01HpHSkxKKsL95NvKSzoKZgT
 
 ---
 
-### Task 9: The OAuth connect flow, server routes and client
+### Task 10: The OAuth connect flow, server routes and client
 
 **Files:**
 - Create: `apps/server/src/modules/storage/storage.oauth.models.ts`, `storage.oauth.usecases.ts`, `storage.oauth.routes.ts`, and their tests
@@ -1186,7 +1267,7 @@ Claude-Session: https://claude.ai/code/session_01HpHSkxKKsL95NvKSzoKZgT
 
 ---
 
-### Task 10: Documentation
+### Task 11: Documentation
 
 The credential clearing amendment to `DOCMIND-DESIGN.md` is **not** here. It is step 7 of task 4, where the behaviour actually changes. Start this task by confirming that edit is already in the tree:
 
@@ -1252,7 +1333,7 @@ The seven manual checks in spec section 8, "What must be manual", run and record
 - [ ] 1. The real Google consent screen, first connect, and the redirect URI matching.
 - [ ] 2. Access token refresh after the first hour: upload, wait, download.
 - [ ] 3. Revoke DocMind from the Google third-party access page, confirm the Reconnect state appears, reconnect, confirm service resumes.
-- [ ] 4. **Owned by task 8.** A real upload over 5 MiB and one near 100 MB to Drive. This is the only check that can catch a protocol assumption baked into both the driver and the fake.
+- [ ] 4. **Owned by task 9.** A real upload over 5 MiB and one near 100 MB to Drive. This is the only check that can catch a protocol assumption baked into both the driver and the fake.
 - [ ] 5. One real bucket on each of Cloudflare R2, Backblaze B2 and AWS S3: create, test connection, upload, download, delete. This is where decision 10 on checksums and decision 11 on addressing are actually validated.
 - [ ] 6. Switch the active driver with documents already in the library, then download an older document from the previous driver.
 - [ ] 7. Clear the credentials of a non-active driver that still holds documents, confirm the library, search and chat still work, and that download shows the right message.
