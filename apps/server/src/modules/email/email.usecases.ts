@@ -1,5 +1,6 @@
 import { Readable } from "node:stream";
 import { simpleParser } from "mailparser";
+import { isAppError } from "../../shared/errors/errors.js";
 import { createLogger, type Logger } from "../../shared/logger/logger.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
@@ -17,13 +18,49 @@ const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_MESSAGE_RETRY_ATTEMPTS = 3;
 const DEFAULT_IDLE_INTERVAL_MS = 60_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000;
+// The connection test cares about the true count waiting in the folder, not a
+// processing-sized slice of it, so it asks listFolder for everything rather than the
+// batchSize the loop itself uses.
+const TEST_FOLDER_LIMIT = Number.MAX_SAFE_INTEGER;
 
 export type EmailClientFactory = (config: { host: string; port: number; user: string; password: string }) => Promise<ImapClient>;
+export type EmailTestResult = { ok: boolean; message: string };
 
 type ConnectionConfig = { host: string; port: number; user: string; password: string; folder: string; doneFolder: string; failedFolder: string };
 
 function backoffDelayMs(attempt: number): number {
   return Math.min(1000 * 2 ** Math.max(0, attempt - 1), 60000);
+}
+
+function joinWithAnd(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+// The reason a connect or a folder open failed, read only off email.client.ts's own
+// rebuilt error, never off anything else. That client already guarantees its message
+// carries no password; this only picks one of its short, fixed reasons back out so the
+// test result can read differently for each cause, the way a person actually needs.
+function imapFailureReason(error: unknown): string | undefined {
+  if (!isAppError(error) || error.code !== "email.imap_error") return undefined;
+  return error.message.split(": ").pop();
+}
+
+function testFailureMessage({ error, host, port, folder }: { error: unknown; host: string; port: number; folder: string }): string {
+  switch (imapFailureReason(error)) {
+    case "authentication failed":
+      return "Sign-in failed. Check the mailbox address and password. Gmail and most providers need an app password, not your account password.";
+    case "the folder does not exist":
+      return `The folder "${folder}" does not exist. Create it in your mailbox first.`;
+    case "could not resolve the host":
+      return `Could not find a mail server at "${host}". Check the hostname.`;
+    case "the connection was refused":
+      return `"${host}:${port}" refused the connection. Check the host and port.`;
+    case "timed out":
+      return `Connecting to "${host}" timed out. Check the host, the port, and your network.`;
+    default:
+      return "Could not connect to the mailbox. Check the settings and try again.";
+  }
 }
 
 export function createEmailService({
@@ -210,6 +247,39 @@ export function createEmailService({
     loop = runLoop();
   }
 
+  // What the settings page's Test button calls. Unlike runOnce, this speaks for a
+  // signed-in request rather than the loop's own resolved user, so the caller supplies
+  // userId directly instead of going through getUserId. It never moves a message and
+  // never uploads anything: it only proves the credentials sign in and the watched
+  // folder opens, and says how many messages are sitting there.
+  async function testConnection({ userId }: { userId: string }): Promise<EmailTestResult> {
+    const host = await settingsService.get<string>(userId, "email.imap.host");
+    const user = await settingsService.get<string>(userId, "email.imap.user");
+    const password = await settingsService.get<string>(userId, "email.imap.password");
+    const port = (await settingsService.get<number>(userId, "email.imap.port")) ?? 993;
+    const folder = (await settingsService.get<string>(userId, "email.imap.folder")) ?? "DocMind";
+
+    if (!host || !user || !password) {
+      const missing: string[] = [];
+      if (!host) missing.push("host");
+      if (!user) missing.push("mailbox address");
+      if (!password) missing.push("app password");
+      return { ok: false, message: `Set ${joinWithAnd(missing)} before testing the connection.` };
+    }
+
+    let client: ImapClient | undefined;
+    try {
+      client = await clientFactory({ host, port, user, password });
+      const messages = await client.listFolder({ folder, limit: TEST_FOLDER_LIMIT });
+      const count = messages.length;
+      return { ok: true, message: `Connected. ${count} message${count === 1 ? "" : "s"} waiting.` };
+    } catch (error) {
+      return { ok: false, message: testFailureMessage({ error, host, port, folder }) };
+    } finally {
+      if (client) await client.close();
+    }
+  }
+
   async function stop() {
     running = false;
     const timedOut = Symbol("email-shutdown-timeout");
@@ -223,7 +293,7 @@ export function createEmailService({
     loop = null;
   }
 
-  return { runOnce, start, stop };
+  return { runOnce, start, stop, testConnection };
 }
 
 export type EmailService = ReturnType<typeof createEmailService>;

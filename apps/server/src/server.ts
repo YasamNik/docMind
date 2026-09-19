@@ -54,6 +54,7 @@ import { createSummaryService } from "./modules/summary/summary.usecases.js";
 import { registerTelegramRoutes } from "./modules/telegram/telegram.routes.js";
 import { createTelegramService } from "./modules/telegram/telegram.usecases.js";
 import { createEmailService } from "./modules/email/email.usecases.js";
+import { registerEmailRoutes } from "./modules/email/email.routes.js";
 import { registerTagsRoutes } from "./modules/tags/tags.routes.js";
 import { createTagsService } from "./modules/tags/tags.usecases.js";
 import { registerExportRoutes } from "./modules/export/export.routes.js";
@@ -223,6 +224,7 @@ export function createServer({
   registerChatRoutes({ app, chatService, getUserId });
   registerStorageRoutes({ app, storageService, getUserId, settingsEncryptionKey: config.settingsEncryptionKey });
   registerTelegramRoutes({ app, settingsService, getUserId });
+  registerEmailRoutes({ app, emailService, getUserId });
 
   const exportService = createExportService({ db, storageService });
   registerExportRoutes({ app, exportService, getUserId });
