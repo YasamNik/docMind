@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TelegramUpdate } from "./telegram.schemas.js";
 import {
+  assistantComingSoonReply,
   compressedPhotoNotice,
   duplicateReply,
   fileDocumentName,
@@ -9,7 +10,9 @@ import {
   intentOf,
   linkDocumentBody,
   linkDocumentName,
+  missingNoteTextReply,
   newPairingCode,
+  notesMovedNotice,
   pairingSucceededReply,
   receivedReply,
   textDocumentName,
@@ -88,18 +91,18 @@ describe("telegram models", () => {
       text: partiallyLinked,
       entities: [{ type: "url", offset: partiallyLinked.length - url.length, length: url.length }],
     });
-    expect(intentOf(notWholeMessage, { paired: true })).toEqual({ kind: "text", text: partiallyLinked });
+    expect(intentOf(notWholeMessage, { paired: true })).toEqual({ kind: "chat", text: partiallyLinked });
   });
 
-  it("reads any other text as a note", () => {
+  it("reads plain text as something to answer, not something to file", () => {
     const update = baseUpdate({
       message_id: 15,
       from: { id: 111, first_name: "Alex" },
       chat: { id: 111 },
-      text: "Remember to renew the lease by Friday.",
+      text: "where is my driver licence?",
     });
 
-    expect(intentOf(update, { paired: true })).toEqual({ kind: "text", text: "Remember to renew the lease by Friday." });
+    expect(intentOf(update, { paired: true })).toEqual({ kind: "chat", text: "where is my driver licence?" });
   });
 
   it("reads text as a pairing code only while unpaired", () => {
@@ -111,7 +114,90 @@ describe("telegram models", () => {
     });
 
     expect(intentOf(update, { paired: false })).toEqual({ kind: "pairing", code: "VWX234" });
-    expect(intentOf(update, { paired: true })).toEqual({ kind: "text", text: "vwx234" });
+    expect(intentOf(update, { paired: true })).toEqual({ kind: "chat", text: "vwx234" });
+  });
+
+  it("reads /note as a note, and keeps the text after the command", () => {
+    const update = baseUpdate({
+      message_id: 19,
+      from: { id: 111, first_name: "Alex" },
+      chat: { id: 111 },
+      text: "/note buy milk",
+      entities: [{ type: "bot_command", offset: 0, length: 5 }],
+    });
+
+    expect(intentOf(update, { paired: true })).toEqual({ kind: "note", text: "buy milk" });
+  });
+
+  it("accepts a command sent through Telegram's menu, with the bot username on it", () => {
+    const update = baseUpdate({
+      message_id: 20,
+      from: { id: 111, first_name: "Alex" },
+      chat: { id: 111 },
+      text: "/note@docmind_bot buy milk",
+      entities: [{ type: "bot_command", offset: 0, length: "/note@docmind_bot".length }],
+    });
+
+    expect(intentOf(update, { paired: true })).toEqual({ kind: "note", text: "buy milk" });
+  });
+
+  it("does not treat a slash inside a sentence as a command", () => {
+    const update = baseUpdate({
+      message_id: 21,
+      from: { id: 111, first_name: "Alex" },
+      chat: { id: 111 },
+      text: "the ratio is 3/4 note that",
+    });
+
+    expect(intentOf(update, { paired: true })).toEqual({ kind: "chat", text: "the ratio is 3/4 note that" });
+  });
+
+  it("asks for the note when /note arrives with nothing after it", () => {
+    const update = baseUpdate({
+      message_id: 22,
+      from: { id: 111, first_name: "Alex" },
+      chat: { id: 111 },
+      text: "/note",
+      entities: [{ type: "bot_command", offset: 0, length: 5 }],
+    });
+
+    expect(intentOf(update, { paired: true })).toEqual({ kind: "note", text: "" });
+  });
+
+  it("reads /new as starting a fresh conversation", () => {
+    const update = baseUpdate({
+      message_id: 23,
+      from: { id: 111, first_name: "Alex" },
+      chat: { id: 111 },
+      text: "/new",
+      entities: [{ type: "bot_command", offset: 0, length: 4 }],
+    });
+
+    expect(intentOf(update, { paired: true })).toEqual({ kind: "newThread" });
+  });
+
+  it("reads /web as a question, keeping the text after the command", () => {
+    const update = baseUpdate({
+      message_id: 24,
+      from: { id: 111, first_name: "Alex" },
+      chat: { id: 111 },
+      text: "/web who won the game last night",
+      entities: [{ type: "bot_command", offset: 0, length: 4 }],
+    });
+
+    expect(intentOf(update, { paired: true })).toEqual({ kind: "web", text: "who won the game last night" });
+  });
+
+  it("treats a command Telegram did not mark at offset zero as plain text", () => {
+    const update = baseUpdate({
+      message_id: 25,
+      from: { id: 111, first_name: "Alex" },
+      chat: { id: 111 },
+      text: "he said /note it down",
+      entities: [{ type: "bot_command", offset: 8, length: 5 }],
+    });
+
+    expect(intentOf(update, { paired: true })).toEqual({ kind: "chat", text: "he said /note it down" });
   });
 
   it("ignores stickers, locations and edits", () => {
@@ -138,6 +224,18 @@ describe("telegram models", () => {
     expect(duplicateReply("receipt.pdf")).toMatch(/already/i);
     expect(fileTooLargeReply()).toMatch(/20 ?mb/i);
     expect(compressedPhotoNotice()).toMatch(/compress/i);
+  });
+
+  it("asks what to note when /note has no text, without naming a document", () => {
+    expect(missingNoteTextReply()).toMatch(/\/note/);
+  });
+
+  it("says plainly that talking is not wired up yet", () => {
+    expect(assistantComingSoonReply()).toMatch(/\/note/);
+  });
+
+  it("tells someone once that notes now need /note", () => {
+    expect(notesMovedNotice()).toMatch(/\/note/);
   });
 
   it("names a file document from telegram's own filename first", () => {

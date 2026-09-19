@@ -20,14 +20,19 @@ at sending files. A personal bot turns it into a second front door.
 
 ## Everything becomes a document
 
+**Superseded 2026-09-19.** This section originally said any text message became a note
+document. The assistant spec (`2026-09-19-telegram-assistant-design.md`) reverses that:
+plain text is now a conversation turn, and a note is saved explicitly with `/note <text>`.
+The table below reflects the current behavior.
+
 Notes with sections (#16) and the software tools collection (#14) do not exist yet. Rather
-than build either as a side effect of this feature, all three inputs become documents and
-run the pipeline that already exists.
+than build either as a side effect of this feature, files, notes and links all become
+documents and run the pipeline that already exists.
 
 | Input | Becomes |
 |-------|---------|
 | File or photo | A document with that file, exactly as a browser upload would produce |
-| Text message | A `text/plain` document holding the message, titled by the summary model |
+| `/note <text>` | A `text/plain` document holding the note text, titled by the summary model |
 | Link | A document holding the fetched page's readable text, with the source URL kept |
 
 Verified against the code: `documentsService.upload` takes a plain `Readable`, a name and a
@@ -93,17 +98,22 @@ id are ignored silently. Settings offers Unpair, which clears the id and issues 
 
 ### 3. Turning an update into an intent
 
-A pure function in `telegram.models.ts` maps a validated update to one of four intents:
-pairing code, file, text, or link. The raw update JSON is parsed with valibot in
-`telegram.schemas.ts` first, because it is an external boundary like any other.
+A pure function in `telegram.models.ts` maps a validated update to one of several intents:
+pairing code, file, note, link, or a conversation turn. The raw update JSON is parsed with
+valibot in `telegram.schemas.ts` first, because it is an external boundary like any other.
+
+**Superseded 2026-09-19.** The bullet below originally read "any other non-empty text is a
+text note." The assistant spec reverses that: plain text is a conversation turn, and `/note
+<text>` is what saves a note now, recognized from Telegram's own `bot_command` entity, not
+a string prefix.
 
 - A message carrying `document`, `photo`, `video` or `audio` is a file. A photo arrives in
   several sizes; the largest is taken.
 - A message is a **link** when Telegram's own `entities` array marks the whole message as a
   single `url` or `text_link`. Telegram already parses URLs, so using `entities` rather
   than a regex avoids disagreeing with what the user saw highlighted in their client.
-- Any other non-empty text is a text note, unless no pairing exists and it matches the
-  pairing code.
+- `/note <text>` is a note. Any other non-empty text, once paired, is a conversation turn,
+  unless no pairing exists yet and it matches the pairing code.
 - A media group arrives as several updates and produces several documents. No grouping.
 
 Anything else (stickers, locations, edits, channel posts) is ignored.
@@ -128,11 +138,15 @@ returns the existing document without enqueueing any jobs, so a re-sent file wou
 otherwise get "processing" and then nothing forever. The bot detects the duplicate from the
 upload result and replies that it already has this one, with a link to it.
 
-### 5. Text
+### 5. Notes
 
-The message becomes a `text/plain` document whose content is the message itself. The
-summary model titles it like any other document; until then it is named from its first
-line, truncated.
+**Superseded 2026-09-19.** This originally fired on any plain text message. It now fires
+on `/note <text>` only; plain text is a conversation turn, per the assistant spec.
+
+`/note <text>` becomes a `text/plain` document whose content is the text after the
+command. The summary model titles it like any other document; until then it is named
+from its first line, truncated. `/note` with nothing after it asks for the note instead
+of filing an empty document.
 
 ### 6. Links
 

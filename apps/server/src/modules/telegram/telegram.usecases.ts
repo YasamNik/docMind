@@ -10,6 +10,7 @@ import type { SettingsService } from "../settings/settings.usecases.js";
 import { fetchReadablePage } from "./link-fetch.js";
 import { createTelegramClient, type TelegramClient } from "./telegram.client.js";
 import {
+  assistantComingSoonReply,
   compressedPhotoNotice,
   duplicateReply,
   fileDocumentName,
@@ -18,6 +19,8 @@ import {
   intentOf,
   linkDocumentBody,
   linkDocumentName,
+  missingNoteTextReply,
+  notesMovedNotice,
   pairingSucceededReply,
   receivedReply,
   textDocumentName,
@@ -215,15 +218,38 @@ export function createTelegramService({
     await client.sendMessage({ chatId, text: duplicateOf ? duplicateReply(document.name) : receivedReply(document.name) });
   }
 
-  async function handleText({ userId, client, chatId, text }: { userId: string; client: TelegramClient; chatId: number; text: string }) {
+  // /note does exactly what plain text used to do: the code moved, the behavior did
+  // not. Empty text (the whole point of /note typed with nothing after it) asks for
+  // the note rather than filing a blank document.
+  async function handleNote({ userId, client, chatId, text }: { userId: string; client: TelegramClient; chatId: number; text: string }) {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      await client.sendMessage({ chatId, text: missingNoteTextReply() });
+      return;
+    }
     const { document, duplicateOf } = await documentsService.upload({
       userId,
-      name: textDocumentName(text),
+      name: textDocumentName(trimmed),
       mimeType: "text/plain",
-      body: Readable.from([text]),
+      body: Readable.from([trimmed]),
       source: "telegram",
     });
     await client.sendMessage({ chatId, text: duplicateOf ? duplicateReply(document.name) : receivedReply(document.name) });
+  }
+
+  // Said once, ever, the first time plain text arrives after notes moved behind /note.
+  async function noteMigrationNoticeIfDue({ userId, client, chatId }: { userId: string; client: TelegramClient; chatId: number }) {
+    const alreadySent = await settingsService.get<boolean>(userId, "telegram.noteMigrationNoticeSent");
+    if (alreadySent) return;
+    await client.sendMessage({ chatId, text: notesMovedNotice() });
+    await settingsService.setInternal(userId, "telegram.noteMigrationNoticeSent", true);
+  }
+
+  // Placeholder until the assistant conversation is wired up: plain text and /web both
+  // land here for now, so the bot answers something rather than going quiet on a
+  // message it used to file as a note.
+  async function handleConversationPlaceholder({ client, chatId }: { client: TelegramClient; chatId: number }) {
+    await client.sendMessage({ chatId, text: assistantComingSoonReply() });
   }
 
   async function handleUpdate({ userId, client, update }: { userId: string; client: TelegramClient; update: TelegramUpdate }) {
@@ -252,12 +278,24 @@ export function createTelegramService({
       await handleFile({ userId, client, chatId, message, intent });
       return;
     }
-    if (intent.kind === "text") {
-      await handleText({ userId, client, chatId, text: intent.text });
+    if (intent.kind === "note") {
+      await handleNote({ userId, client, chatId, text: intent.text });
       return;
     }
     if (intent.kind === "link") {
       await handleLink({ userId, client, chatId, url: intent.url });
+      return;
+    }
+    if (intent.kind === "newThread" || intent.kind === "web") {
+      // Answered for real once the assistant conversation lands.
+      await handleConversationPlaceholder({ client, chatId });
+      return;
+    }
+    if (intent.kind === "chat") {
+      // Answered for real once the assistant conversation lands. Plain text used to
+      // become a note, so the first time this fires the bot also says where notes went.
+      await handleConversationPlaceholder({ client, chatId });
+      await noteMigrationNoticeIfDue({ userId, client, chatId });
       return;
     }
     // "pairing" while already paired, or "ignore": nothing to do.

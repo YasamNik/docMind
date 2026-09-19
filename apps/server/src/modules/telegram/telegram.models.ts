@@ -10,7 +10,10 @@ type TelegramPhotoSize = NonNullable<TelegramMessage["photo"]>[number];
 export type TelegramIntent =
   | { kind: "pairing"; code: string }
   | { kind: "file"; fileId: string; fileName: string | undefined; mimeType: string | undefined; compressedPhoto: boolean }
-  | { kind: "text"; text: string }
+  | { kind: "note"; text: string }
+  | { kind: "chat"; text: string }
+  | { kind: "web"; text: string }
+  | { kind: "newThread" }
   | { kind: "link"; url: string }
   | { kind: "ignore" };
 
@@ -62,6 +65,22 @@ function wholeMessageLinkUrl(text: string, entities: TelegramMessageEntity[] | u
   return urlFromEntity(text, entity);
 }
 
+type ParsedCommand = { name: string; argument: string };
+
+// Telegram marks a command with its own bot_command entity, always at the offset
+// where the command itself starts, rather than DocMind matching a leading slash in
+// the text. That is what keeps "/note@docmind_bot" from the command menu and
+// "the ratio is 3/4 note that" typed as an ordinary sentence both coming out right:
+// only an entity sitting at offset zero counts, never a string prefix.
+function commandOf(text: string, entities: TelegramMessageEntity[] | undefined): ParsedCommand | null {
+  const entity = entities?.find((e) => e.type === "bot_command" && e.offset === 0);
+  if (!entity) return null;
+  const raw = text.slice(entity.offset, entity.offset + entity.length);
+  const name = raw.slice(1).split("@")[0]!.toLowerCase();
+  const argument = text.slice(entity.offset + entity.length).trim();
+  return { name, argument };
+}
+
 export function intentOf(update: TelegramUpdate, { paired }: { paired: boolean }): TelegramIntent {
   const message = update.message;
   if (!message) return { kind: "ignore" };
@@ -79,7 +98,16 @@ export function intentOf(update: TelegramUpdate, { paired }: { paired: boolean }
 
   if (!paired) return { kind: "pairing", code: text.trim().toUpperCase() };
 
-  return { kind: "text", text: text.trim() };
+  const command = commandOf(text, message.entities);
+  if (command) {
+    if (command.name === "note") return { kind: "note", text: command.argument };
+    if (command.name === "new") return { kind: "newThread" };
+    if (command.name === "web") return { kind: "web", text: command.argument };
+    // An unrecognized command, such as Telegram's own /start, still gets an answer
+    // rather than going quiet: the whole line, slash included, becomes the question.
+  }
+
+  return { kind: "chat", text: text.trim() };
 }
 
 // Excludes characters that are easy to misread or mistype: I, O, 0 and 1.
@@ -110,6 +138,24 @@ export function fileTooLargeReply(): string {
 
 export function compressedPhotoNotice(): string {
   return "Heads up, Telegram compresses photos, which can hurt text recognition. Send it as a file instead of a photo to keep the original quality.";
+}
+
+// /note with nothing after it should not silently file an empty document.
+export function missingNoteTextReply(): string {
+  return "What do you want me to note? Send /note followed by the text, like /note buy milk.";
+}
+
+// Placeholder for a plain message before the assistant conversation exists. Replaced
+// once the chat integration lands, but until then the bot still answers something
+// rather than going quiet on a message it used to file.
+export function assistantComingSoonReply(): string {
+  return "I can't talk yet, that's coming very soon. Want to save this as a note instead? Send /note followed by the text.";
+}
+
+// Said once, ever, the first time plain text arrives after notes moved behind /note.
+// Same once-only shape as compressedPhotoNotice: a settings flag remembers it fired.
+export function notesMovedNotice(): string {
+  return "Quick heads up: texting me now starts a conversation instead of saving a note. To save a note, send /note followed by the text, like /note buy milk.";
 }
 
 // A refusal from the link guard already reads like a sentence a person can act on,

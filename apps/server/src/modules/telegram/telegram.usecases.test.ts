@@ -55,6 +55,30 @@ function updateWithText({ updateId, fromId, text }: { updateId: number; fromId: 
   return { update_id: updateId, message: { message_id: updateId, from: { id: fromId, first_name: "Alex" }, chat: { id: fromId }, text } };
 }
 
+function updateWithCommand({
+  updateId,
+  fromId,
+  command,
+  argument,
+}: {
+  updateId: number;
+  fromId: number;
+  command: string;
+  argument?: string;
+}) {
+  const text = argument ? `${command} ${argument}` : command;
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      from: { id: fromId, first_name: "Alex" },
+      chat: { id: fromId },
+      text,
+      entities: [{ type: "bot_command", offset: 0, length: command.length }],
+    },
+  };
+}
+
 function updateWithDocument({
   updateId,
   fromId,
@@ -366,11 +390,66 @@ describe("telegram service", () => {
     expect(sent).toHaveLength(0);
   });
 
+  it("no longer files plain text as a note", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    await settingsService.setInternal(userId, "telegram.noteMigrationNoticeSent", true);
+    const { client, sent } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "buy milk" })]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(await documentsService.list({ userId })).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("files /note as a document, the same way plain text used to", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    const { client, sent } = fakeTelegram({
+      batches: [[updateWithCommand({ updateId: 1, fromId: PAIRED_ID, command: "/note", argument: "buy milk" })]],
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    const documents = await documentsService.list({ userId });
+    expect(documents.map((d) => d.name)).toContain("buy milk.txt");
+    expect(sent[0]?.text).toMatch(/got it/i);
+  });
+
+  it("asks for the note text when /note arrives with nothing after it", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    const { client, sent } = fakeTelegram({ batches: [[updateWithCommand({ updateId: 1, fromId: PAIRED_ID, command: "/note" })]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(await documentsService.list({ userId })).toHaveLength(0);
+    expect(sent[0]?.text).toMatch(/note/i);
+  });
+
+  it("mentions once that plain text now starts a conversation, and not the second time", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    const { client, sent } = fakeTelegram({
+      batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "hey" })], [updateWithText({ updateId: 2, fromId: PAIRED_ID, text: "hey again" })]],
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(3);
+    expect(sent[1]?.text).toMatch(/note/i);
+  });
+
   it("does not reprocess an update it already handled", async () => {
     await settingsService.set(userId, { "telegram.botToken": "111:token" });
     await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
     const { client, getUpdatesOffsets } = fakeTelegram({
-      batches: [[updateWithText({ updateId: 7, fromId: PAIRED_ID, text: "a note" })], []],
+      batches: [[updateWithCommand({ updateId: 7, fromId: PAIRED_ID, command: "/note", argument: "a note" })], []],
     });
     const telegram = buildService(client);
 
@@ -400,7 +479,7 @@ describe("telegram service", () => {
       batches: [
         [
           updateWithDocument({ updateId: 1, fromId: PAIRED_ID, fileId: "missing-file", fileName: "ghost.pdf" }),
-          updateWithText({ updateId: 2, fromId: PAIRED_ID, text: "a note that should still land" }),
+          updateWithCommand({ updateId: 2, fromId: PAIRED_ID, command: "/note", argument: "a note that should still land" }),
         ],
       ],
       // No fixture for "missing-file": getFile throws a plain Error every attempt.
@@ -419,7 +498,7 @@ describe("telegram service", () => {
     const { client, getUpdatesOffsets } = fakeTelegram({
       batches: [
         [updateWithDocument({ updateId: 5, fromId: PAIRED_ID, fileId: "missing-file", fileName: "ghost.pdf" })],
-        [updateWithText({ updateId: 6, fromId: PAIRED_ID, text: "still alive" })],
+        [updateWithCommand({ updateId: 6, fromId: PAIRED_ID, command: "/note", argument: "still alive" })],
       ],
     });
     const telegram = buildService(client);

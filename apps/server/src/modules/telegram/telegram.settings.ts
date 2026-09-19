@@ -65,4 +65,13 @@ export const telegramSettingDefinitions: SettingDefinition[] = [
     default: false,
     doc: "Whether the bot has already warned once that Telegram compresses photos sent as photos.",
   }),
+  // Same once-only shape as compressedPhotoNoticeSent above: plain text used to file a
+  // note, and someone mid-habit of texting notes should be told once, not every time.
+  defineSetting({
+    key: "telegram.noteMigrationNoticeSent",
+    schema: v.boolean(),
+    internal: true,
+    default: false,
+    doc: "Whether the bot has already said once that notes moved behind /note.",
+  }),
 ];
