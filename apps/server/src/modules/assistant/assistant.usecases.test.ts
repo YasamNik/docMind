@@ -323,7 +323,9 @@ describe("assistant service, runTurn", () => {
     });
 
     expect(result.reply).toMatch(/openrouter/i);
-    expect(result.toolUsed).toBe("searchWeb");
+    // Not "searchWeb": the search never ran, and a surface that reads toolUsed would
+    // otherwise append "Searched the web for this." to the message saying it could not.
+    expect(result.toolUsed).toBeNull();
   });
 
   it("answers with the trouble reply when a handler throws something unexpected, and still saves the turn", async () => {

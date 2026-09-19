@@ -216,7 +216,10 @@ export function createAssistantService({
       // which never touches the AI layer, validates on its own path below instead.
       const result = await runHandler({ name: chosenCall.name, args: chosenCall.arguments, ctx });
       await chatService.appendAssistantMessage({ userId, sessionId, content: result.reply, citations: result.citations });
-      return { reply: result.reply, citations: result.citations, toolUsed: chosenCall.name };
+      // A handler that answered from its own failure path did not do the job the tool
+      // names, so it is not reported as used. Otherwise a surface reading toolUsed
+      // appends a success footer to a message explaining the tool could not run.
+      return { reply: result.reply, citations: result.citations, toolUsed: result.failed ? null : chosenCall.name };
     } catch (error) {
       // Anything that escapes the paths above, such as the model call itself failing
       // outright, still gets a saved assistant turn: a user turn left unanswered would
