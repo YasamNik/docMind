@@ -3,7 +3,85 @@
 Newest entry first. The `end-session` skill appends one entry per session. Each entry has
 four parts: Done, Decisions, Comments (the user's words, not a paraphrase), Open / Next.
 
-Active branch: `feat/design-pass`
+Active branch: `feat/email-intake`
+
+## 2026-09-19: storage merged, telegram and email intake, mobile pass
+
+### Done
+- Pulled 18 commits made on the office machine (smart fields, colour picker, AI description
+  assistant, provider picker) and verified the home clone against them: 455 server tests,
+  180 client tests, migration 0013 already applied by the running watcher.
+- Fixed search and chat finding nothing: a fixed 0.55 cosine cutoff discarded the right
+  document at 0.6049 while unrelated ones sat at 0.79, and FTS5 ANDed every token so a
+  question had to be repeated word for word. Relevance is now judged relatively, keyword
+  tokens are OR-ed with question words dropped, and weak bm25 hits are pruned before
+  fusion so one bill's question does not drag in every other bill (6ae6448).
+- Storage drivers merged to `main`: S3 compatible and Google Drive with OAuth, the active
+  storage scoping the library while search and chat still see everything and name where a
+  document lives, setup guides and a Test button, and describeLocation moved off the
+  driver so a disconnected Drive still says where a file is.
+- Telegram intake merged to `main`: polling bot, pairing by code, files, photos, notes,
+  links with a guarded fetcher, and two replies. Then rebuilt as an assistant: plain text
+  is a conversation over the documents, `/note` files a note, `/web` searches through
+  OpenRouter (dc42934, 774a18d, 192da06).
+- Email intake built on `feat/email-intake`: watched IMAP folder, mail and attachments as
+  linked documents through a new `parentDocumentId`, Done and Failed folders, settings page
+  with a connection test that tells a bad host from a bad password from a missing folder.
+- Mobile layout pass, four parallel tasks: navigation drawer, document lists as cards,
+  chat as a messaging layout, dialogs full screen and settings tabs scrollable.
+- Tool calling in the AI layer (819e39e), the foundation for the assistant's triage.
+
+### Decisions
+- Search relevance is relative, not absolute: absolute cosine distance is a property of
+  the embedding model, so a fixed cutoff throws away correct answers on one model and
+  admits noise on another.
+- The active storage scopes the library but never knowledge. The user ruled that search
+  and chat see every document and name the storage holding it, which also avoided
+  rebuilding the bug fixed that morning.
+- One `source` column on documents rather than a Telegram-specific flag, because email
+  intake needed the same thing a day later.
+- Plain text to the bot is a conversation, reversing what intake shipped that morning.
+  A thing in your chat list that answers when you talk to it is an assistant; one that
+  silently files your sentences is a filing cabinet.
+- Triage will be tool choice in one model call, not a classify pass, and tools live in a
+  registry so reminders and calendar are records rather than router changes.
+- Every write confirms, chosen by the user over the looser default. Delete is guarded in
+  the capability record, not in the prompt, because an instruction file is a prompt.
+- The drizzle-kit migration for `parentDocumentId` was hand-edited: it generates a one
+  line ALTER, which is the safest shape for a live database, but silently drops the
+  ON DELETE CASCADE the schema declares.
+
+### Comments
+- "I worked today in my office windows pc and pushed to main, can you check a nd pull from git and make sure it still comaptible to continue here."
+- "why it cannot find the license, which I just uplodaded and catgorized fe wminutes ago"
+- "Do as much as ypu can autonomously"
+- "the instruction for google drive is cvery bad and confusing, and complex and a lot. what i do here ?"
+- "Telegram should be a fridnd, secretsry, assistant that knows your docs, znd can talk with them, it can schedule calendar (need to setup in settings as well), it can hold regular conversation as friend, secretary. Access to web as well"
+- "But it behaves just crazy, whatever i tell him it convert to text note."
+- "The app is completely not compatible with mobile, fix it"
+- "This is very bad layout, see the chat section"
+- "Work with multiple agents that one can deal with telegram issue and other woth mobile ui"
+- "id like to talk about chat capabilities and settings and rules and instructions... that will make the chat adaptable to the user as a real secretary. If not sure how to triage the message just ask user."
+- "stop asking obvious questions"
+
+### Open / Next
+- Review and merge `feat/email-intake` into `main`. It is 39 commits and holds four
+  features: email intake, the assistant, the mobile pass, and the trash cascade fix. That
+  review is the first thing to do with a fresh context budget.
+- Three bug records to propose: the stale dev server serving code from 30 minutes earlier,
+  the trash cascade that destroyed unrelated documents, and the link fetcher that closed
+  its connection before reading the response.
+- Assistant plans 2 to 5: the capability registry and triage, confirmations (the approved
+  `chat_sessions.pending_tool_call` column, the new stream event, Telegram callback_query),
+  the instructions document with its 8000 character cap, and prompt unification.
+- Tool calling was never validated against the live model: the agent's sandbox refused to
+  read `.env`. Worth one real call before building plan 2 on it.
+- Email intake has never run against a real mailbox. Needs an IMAP host and an app
+  password from the user.
+- The chat input reversed typing on the phone once, at 13:30Z. Not reproduced, a guard
+  test is in place, cause unknown.
+- `DOCMIND-DESIGN.md` still says nothing about the assistant layer.
+
 
 ## 2026-09-17: C3 merged, design pass, Phase 2 built, vision fallback
 
