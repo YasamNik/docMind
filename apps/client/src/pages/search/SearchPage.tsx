@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { searchApi, type SearchResult } from "@/lib/search-api";
+import { storageApi } from "@/lib/storage-api";
 
 const SOURCE_LABELS: Record<SearchResult["source"], string> = {
   vector: "vector",
@@ -53,7 +54,7 @@ function extractSnippet(text: string, query: string, maxLen = 200): string {
   return snippet;
 }
 
-function ResultCard({ result, query }: { result: SearchResult; query: string }) {
+function ResultCard({ result, query, otherStorageLabel }: { result: SearchResult; query: string; otherStorageLabel: string | null }) {
   const snippet = extractSnippet(result.chunkText, query);
   return (
     <Card>
@@ -62,7 +63,10 @@ function ResultCard({ result, query }: { result: SearchResult; query: string }) 
           <Link to={`/documents/${result.documentId}`} className="font-heading text-base underline-offset-2 hover:underline">
             {result.documentName}
           </Link>
-          <Badge variant={SOURCE_VARIANTS[result.source]}>{SOURCE_LABELS[result.source]}</Badge>
+          <div className="flex items-center gap-2">
+            {otherStorageLabel && <Badge variant="neutral">{otherStorageLabel}</Badge>}
+            <Badge variant={SOURCE_VARIANTS[result.source]}>{SOURCE_LABELS[result.source]}</Badge>
+          </div>
         </div>
         <p className="line-clamp-2 break-all text-sm text-muted-foreground">{highlightMatches(snippet, query)}</p>
       </CardContent>
@@ -97,6 +101,15 @@ export function SearchPage() {
   });
 
   const results = data?.results ?? [];
+
+  const { data: storageDrivers = [] } = useQuery({ queryKey: ["storage-drivers"], queryFn: () => storageApi.list() });
+  const activeStorageId = storageDrivers.find((d) => d.active)?.id ?? null;
+  // Search sees every storage, so a result held elsewhere still shows up here. The badge
+  // is what tells the user why they cannot open it without switching storage first.
+  function otherStorageLabel(storageDriver: string): string | null {
+    if (storageDrivers.length === 0 || storageDriver === activeStorageId) return null;
+    return storageDrivers.find((d) => d.id === storageDriver)?.label ?? storageDriver;
+  }
 
   const reembed = useMutation({
     mutationFn: () => searchApi.reembedAll(),
@@ -145,7 +158,12 @@ export function SearchPage() {
       ) : (
         <div className="space-y-3">
           {results.map((result) => (
-            <ResultCard key={`${result.documentId}-${result.chunkIndex}`} result={result} query={trimmedQuery} />
+            <ResultCard
+              key={`${result.documentId}-${result.chunkIndex}`}
+              result={result}
+              query={trimmedQuery}
+              otherStorageLabel={otherStorageLabel(result.storageDriver)}
+            />
           ))}
         </div>
       )}

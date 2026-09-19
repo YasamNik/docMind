@@ -3,12 +3,14 @@ import { MessageCircle, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { chatApi, type ChatMessage, type ChatSession, type Citation } from "@/lib/chat-api";
 import { formatDate } from "@/lib/format";
+import { storageApi } from "@/lib/storage-api";
 
 type UiMessage = ChatMessage & { streaming?: boolean };
 
@@ -30,8 +32,18 @@ function sortByRecent(sessions: ChatSession[]) {
   return [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-function CitationBadges({ citations, messageId }: { citations: Citation[]; messageId: string }) {
+function CitationBadges({
+  citations,
+  messageId,
+  otherStorageLabel,
+}: {
+  citations: Citation[];
+  messageId: string;
+  otherStorageLabel: (storageDriver: string) => string | null;
+}) {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const open = openIndex !== null ? citations[openIndex] : null;
+  const openLabel = open ? otherStorageLabel(open.storageDriver) : null;
 
   return (
     <div className="mt-2 space-y-2">
@@ -49,22 +61,28 @@ function CitationBadges({ citations, messageId }: { citations: Citation[]; messa
           </button>
         ))}
       </div>
-      {openIndex !== null && citations[openIndex] && (
+      {open && (
         <div className="max-w-md rounded-[1.25rem] bg-secondary p-3 text-xs">
-          <p className="text-muted-foreground">{citations[openIndex].chunkText}</p>
-          <Link
-            to={`/documents/${citations[openIndex].documentId}`}
-            className="mt-1 inline-block font-medium underline-offset-2 hover:underline"
-          >
-            {citations[openIndex].documentName}
-          </Link>
+          <p className="text-muted-foreground">{open.chunkText}</p>
+          <div className="mt-1 flex items-center gap-2">
+            <Link to={`/documents/${open.documentId}`} className="font-medium underline-offset-2 hover:underline">
+              {open.documentName}
+            </Link>
+            {openLabel && <Badge variant="neutral">{openLabel}</Badge>}
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-function MessageBubble({ message }: { message: UiMessage }) {
+function MessageBubble({
+  message,
+  otherStorageLabel,
+}: {
+  message: UiMessage;
+  otherStorageLabel: (storageDriver: string) => string | null;
+}) {
   const isUser = message.role === "user";
   const isEmpty = message.streaming && message.content.length === 0;
 
@@ -82,7 +100,7 @@ function MessageBubble({ message }: { message: UiMessage }) {
         )}
         {message.error && <p className="mt-2 text-xs text-destructive">{message.error}</p>}
         {message.citations && message.citations.length > 0 && (
-          <CitationBadges citations={message.citations} messageId={message.id} />
+          <CitationBadges citations={message.citations} messageId={message.id} otherStorageLabel={otherStorageLabel} />
         )}
       </div>
     </div>
@@ -141,6 +159,14 @@ export function ChatPage() {
   const [deleting, setDeleting] = useState<ChatSession | null>(null);
 
   const { data: sessions = [] } = useQuery({ queryKey: ["chat", "sessions"], queryFn: chatApi.listSessions });
+  const { data: storageDrivers = [] } = useQuery({ queryKey: ["storage-drivers"], queryFn: () => storageApi.list() });
+  const activeStorageId = storageDrivers.find((d) => d.active)?.id ?? null;
+  // Chat sees every storage too, so a citation for a document held elsewhere still shows
+  // up. The badge is what tells the user why they cannot open it from here.
+  function otherStorageLabel(storageDriver: string): string | null {
+    if (storageDrivers.length === 0 || storageDriver === activeStorageId) return null;
+    return storageDrivers.find((d) => d.id === storageDriver)?.label ?? storageDriver;
+  }
 
   const { data: sessionData } = useQuery({
     queryKey: ["chat", "session", selectedId],
@@ -301,7 +327,9 @@ export function ChatPage() {
               {messages.length === 0 ? (
                 <p className="text-sm text-muted-foreground">Ask a question about your documents.</p>
               ) : (
-                messages.map((message) => <MessageBubble key={message.id} message={message} />)
+                messages.map((message) => (
+                  <MessageBubble key={message.id} message={message} otherStorageLabel={otherStorageLabel} />
+                ))
               )}
             </div>
             <form

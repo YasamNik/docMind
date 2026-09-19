@@ -13,6 +13,7 @@ const searchMock = vi.fn(async (_query: string, _limit?: number) => ({
       chunkIndex: 0,
       score: 0.87,
       source: "hybrid" as const,
+      storageDriver: "local",
     },
   ],
   query: "rent",
@@ -22,6 +23,14 @@ vi.mock("@/lib/search-api", () => ({
   searchApi: {
     search: (query: string, limit?: number) => searchMock(query, limit),
   },
+}));
+
+const storageDriversMock = vi.fn(async () => [
+  { id: "local", label: "Local filesystem", guide: { title: "", intro: "", steps: [], notes: [] }, configured: true, documentCount: 1, active: true },
+  { id: "s3", label: "Amazon S3", guide: { title: "", intro: "", steps: [], notes: [] }, configured: true, documentCount: 1, active: false },
+]);
+vi.mock("@/lib/storage-api", () => ({
+  storageApi: { list: () => storageDriversMock() },
 }));
 
 afterEach(() => {
@@ -60,5 +69,33 @@ describe("SearchPage", () => {
     fireEvent.change(screen.getByPlaceholderText("Search your documents..."), { target: { value: "rent" } });
     const link = await screen.findByRole("link", { name: "Lease agreement.pdf" });
     expect(link).toHaveAttribute("href", "/documents/doc_1");
+  });
+
+  it("does not badge a result held on the active storage", async () => {
+    renderPage();
+    fireEvent.change(screen.getByPlaceholderText("Search your documents..."), { target: { value: "rent" } });
+    await screen.findByText("Lease agreement.pdf");
+    expect(screen.queryByText("Local filesystem")).not.toBeInTheDocument();
+  });
+
+  it("badges a result held on a storage that is not active", async () => {
+    searchMock.mockResolvedValueOnce({
+      results: [
+        {
+          documentId: "doc_2",
+          documentName: "Old lease.pdf",
+          chunkText: "The old lease is stored elsewhere.",
+          chunkIndex: 0,
+          score: 0.7,
+          source: "keyword" as const,
+          storageDriver: "s3",
+        },
+      ],
+      query: "rent",
+    });
+    renderPage();
+    fireEvent.change(screen.getByPlaceholderText("Search your documents..."), { target: { value: "rent" } });
+    await screen.findByText("Old lease.pdf");
+    expect(screen.getByText("Amazon S3")).toBeInTheDocument();
   });
 });

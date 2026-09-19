@@ -34,6 +34,14 @@ vi.mock("@/lib/chat-api", () => ({
   },
 }));
 
+const storageDriversMock = vi.fn(async () => [
+  { id: "local", label: "Local filesystem", guide: { title: "", intro: "", steps: [], notes: [] }, configured: true, documentCount: 1, active: true },
+  { id: "s3", label: "Amazon S3", guide: { title: "", intro: "", steps: [], notes: [] }, configured: true, documentCount: 1, active: false },
+]);
+vi.mock("@/lib/storage-api", () => ({
+  storageApi: { list: () => storageDriversMock() },
+}));
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -85,7 +93,7 @@ describe("ChatPage", () => {
           sessionId: "sess_1",
           role: "assistant",
           content: "Rent is due on the first [1].",
-          citations: [{ documentId: "doc_1", documentName: "Lease.pdf", chunkText: "The rent is due on the first of the month.", chunkIndex: 0 }],
+          citations: [{ documentId: "doc_1", documentName: "Lease.pdf", chunkText: "The rent is due on the first of the month.", chunkIndex: 0, storageDriver: "local" }],
           error: null,
           createdAt: "2026-01-01T00:01:00.000Z",
         },
@@ -102,6 +110,34 @@ describe("ChatPage", () => {
     fireEvent.click(badge);
     expect(await screen.findByText("The rent is due on the first of the month.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Lease.pdf" })).toHaveAttribute("href", "/documents/doc_1");
+    expect(screen.queryByText("Local filesystem")).not.toBeInTheDocument();
+  });
+
+  it("badges a citation for a document held on a storage that is not active", async () => {
+    listSessionsMock.mockResolvedValueOnce([
+      { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+    ]);
+    getSessionMock.mockResolvedValueOnce({
+      session: { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+      messages: [
+        {
+          id: "msg_1",
+          sessionId: "sess_1",
+          role: "assistant",
+          content: "Your old lease is on file [1].",
+          citations: [{ documentId: "doc_2", documentName: "Old lease.pdf", chunkText: "Archived lease text.", chunkIndex: 0, storageDriver: "s3" }],
+          error: null,
+          createdAt: "2026-01-01T00:01:00.000Z",
+        },
+      ],
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByText("Lease question"));
+    fireEvent.click(await screen.findByRole("button", { name: "1" }));
+
+    expect(await screen.findByText("Archived lease text.")).toBeInTheDocument();
+    expect(screen.getByText("Amazon S3")).toBeInTheDocument();
   });
 
   it("deletes a session after confirming", async () => {
@@ -127,7 +163,7 @@ describe("ChatPage", () => {
     const sseBody =
       "event: token\ndata: Rent\n\n" +
       "event: token\ndata:  is due on the first [1].\n\n" +
-      'event: done\ndata: {"citations":[{"documentId":"doc_1","documentName":"Lease.pdf","chunkText":"Rent due on the first.","chunkIndex":0}]}\n\n';
+      'event: done\ndata: {"citations":[{"documentId":"doc_1","documentName":"Lease.pdf","chunkText":"Rent due on the first.","chunkIndex":0,"storageDriver":"local"}]}\n\n';
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
