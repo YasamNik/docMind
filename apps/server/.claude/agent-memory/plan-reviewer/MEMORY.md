@@ -1,0 +1,3 @@
+- [Assistant instructions plan review](assistant-instructions-plan-review.md) - 2026-09-19 review of plan 4 (instructions doc); facts on prompt ordering and settings cache to reuse for plan 5
+- [Guard tests must flip the flag](guard-tests-must-flip-the-flag.md) - a "prompt cannot change guard X" test is often vacuous if X is already false-by-default in the test's own setup
+- [Settings cache reloads the whole row set](settings-cache-full-row-reload.md) - DocMind's settings cache is per user, not per key; any write drops and reloads every key for that user
