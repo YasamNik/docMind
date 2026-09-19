@@ -14,15 +14,12 @@ import {
   isCheapMessage,
   linkDocumentBody,
   linkDocumentName,
-  missingNoteTextReply,
   newPairingCode,
-  newThreadReply,
   notesMovedNotice,
   pairingSucceededReply,
   receivedReply,
   splitForTelegram,
   stripCitationMarkers,
-  textDocumentName,
 } from "./telegram.models.js";
 
 function baseUpdate(message: NonNullable<TelegramUpdate["message"]>): TelegramUpdate {
@@ -233,10 +230,6 @@ describe("telegram models", () => {
     expect(compressedPhotoNotice()).toMatch(/compress/i);
   });
 
-  it("asks what to note when /note has no text, without naming a document", () => {
-    expect(missingNoteTextReply()).toMatch(/\/note/);
-  });
-
   it("apologizes in the module's own voice when a turn fails outright", () => {
     expect(assistantTroubleReply().length).toBeGreaterThan(0);
     expect(assistantTroubleReply()).not.toMatch(/error|exception/i);
@@ -317,10 +310,6 @@ describe("telegram models", () => {
     expect(acknowledgementReply().length).toBeGreaterThan(0);
   });
 
-  it("says starting fresh when /new resets the conversation", () => {
-    expect(newThreadReply()).toMatch(/fresh|new/i);
-  });
-
   it("names a file document from telegram's own filename first", () => {
     const intent = { kind: "file", fileId: "f1", fileName: "receipt.pdf", mimeType: "application/pdf", compressedPhoto: false } as const;
     expect(fileDocumentName({ intent, caption: "hydro march", messageId: 1, now: new Date("2026-09-18T00:00:00Z") })).toBe("receipt.pdf");
@@ -334,12 +323,6 @@ describe("telegram models", () => {
   it("falls back to the date and message id when there is no filename and no caption", () => {
     const intent = { kind: "file", fileId: "f3", fileName: undefined, mimeType: "image/jpeg", compressedPhoto: true } as const;
     expect(fileDocumentName({ intent, caption: undefined, messageId: 42, now: new Date("2026-09-18T00:00:00Z") })).toBe("telegram-20260918-42.jpg");
-  });
-
-  it("titles a text note from its first line, truncated", () => {
-    expect(textDocumentName("Remember to renew the lease by Friday.")).toBe("Remember to renew the lease by Friday..txt");
-    const long = "x".repeat(80);
-    expect(textDocumentName(`${long}\nsecond line`)).toBe(`${long.slice(0, 60)}....txt`);
   });
 
   it("names a saved link from the page title", () => {

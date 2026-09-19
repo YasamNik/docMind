@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import * as v from "valibot";
 import { isAppError } from "../../shared/errors/errors.js";
 import { createLogger, type Logger } from "../../shared/logger/logger.js";
+import { missingNoteTextReply, newThreadReply, textDocumentName } from "../assistant/assistant.models.js";
 import { TELEGRAM_ASSISTANT_SYSTEM_PROMPT } from "../chat/chat.models.js";
 import type { ChatService, ChatStreamEvent } from "../chat/chat.usecases.js";
 import type { Database } from "../database/database.js";
@@ -25,14 +26,11 @@ import {
   isCheapMessage,
   linkDocumentBody,
   linkDocumentName,
-  missingNoteTextReply,
-  newThreadReply,
   notesMovedNotice,
   pairingSucceededReply,
   receivedReply,
   splitForTelegram,
   stripCitationMarkers,
-  textDocumentName,
   type TelegramIntent,
 } from "./telegram.models.js";
 import { telegramUpdateSchema, type TelegramMessage, type TelegramUpdate } from "./telegram.schemas.js";

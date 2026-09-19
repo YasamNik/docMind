@@ -3,6 +3,11 @@ import type { TelegramMessage, TelegramMessageEntity, TelegramUpdate } from "./t
 
 // Pure mapping from a validated Telegram update to what the loop should do about it.
 // No IO here: pairing comparisons, uploads and replies all happen in telegram.usecases.ts.
+//
+// textDocumentName, missingNoteTextReply and newThreadReply moved to
+// assistant.models.ts: /note and the saveNote tool share the first two, /new and the
+// startNewThread tool share the third, so telegram.usecases.ts now imports them from
+// there instead.
 
 type TelegramAttachment = NonNullable<TelegramMessage["document"]>;
 type TelegramPhotoSize = NonNullable<TelegramMessage["photo"]>[number];
@@ -140,11 +145,6 @@ export function compressedPhotoNotice(): string {
   return "Heads up, Telegram compresses photos, which can hurt text recognition. Send it as a file instead of a photo to keep the original quality.";
 }
 
-// /note with nothing after it should not silently file an empty document.
-export function missingNoteTextReply(): string {
-  return "What do you want me to note? Send /note followed by the text, like /note buy milk.";
-}
-
 // Said once, ever, the first time plain text arrives after notes moved behind /note.
 // Same once-only shape as compressedPhotoNotice: a settings flag remembers it fired.
 export function notesMovedNotice(): string {
@@ -224,10 +224,6 @@ export function isAnsweringAQuestion(lastAssistantMessage: string | undefined): 
 // to try again.
 export function assistantTroubleReply(): string {
   return "Something went wrong on my end there. Try sending that again.";
-}
-
-export function newThreadReply(): string {
-  return "Starting fresh. What's up?";
 }
 
 // A refusal from the link guard already reads like a sentence a person can act on,
@@ -331,12 +327,4 @@ export function fileDocumentName({
   if (trimmedCaption) return withGuessedExtension(trimmedCaption, intent.mimeType);
   const stamp = now.toISOString().slice(0, 10).replace(/-/g, "");
   return `telegram-${stamp}-${messageId}${guessedExtension(intent.mimeType)}`;
-}
-
-// A text note has no filename at all, so it is titled from its own first line until
-// the summary model retitles it, the same gap a nameless browser upload would have.
-export function textDocumentName(text: string): string {
-  const firstLine = text.split(/\r?\n/)[0]!.trim();
-  const short = firstLine.length > 60 ? `${firstLine.slice(0, 60).trimEnd()}...` : firstLine;
-  return `${short || "Note"}.txt`;
 }
