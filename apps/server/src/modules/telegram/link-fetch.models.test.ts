@@ -25,6 +25,30 @@ describe("isPublicAddress", () => {
       expect(isPublicAddress(ip)).toBe(true);
     }
   });
+
+  it("refuses the IPv6 unspecified address, not just loopback", () => {
+    expect(isPublicAddress("::")).toBe(false);
+  });
+
+  it("refuses the deprecated IPv4-compatible form with no ffff marker", () => {
+    // "::127.0.0.1" carries the same four bytes as "::ffff:127.0.0.1" but without the
+    // marker group that the mapped form uses, and must be refused the same way.
+    expect(isPublicAddress("::127.0.0.1")).toBe(false);
+    expect(isPublicAddress("::10.0.0.5")).toBe(false);
+    expect(isPublicAddress("::169.254.169.254")).toBe(false);
+  });
+
+  it("refuses IPv4 multicast, reserved and broadcast ranges", () => {
+    for (const ip of ["224.0.0.1", "239.255.255.255", "240.0.0.1", "255.255.255.254", "255.255.255.255"]) {
+      expect(isPublicAddress(ip)).toBe(false);
+    }
+  });
+
+  it("refuses IPv6 multicast", () => {
+    for (const ip of ["ff00::1", "ff02::1"]) {
+      expect(isPublicAddress(ip)).toBe(false);
+    }
+  });
 });
 
 describe("assertFetchableUrl", () => {

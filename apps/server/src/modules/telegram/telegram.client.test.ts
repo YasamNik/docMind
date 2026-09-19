@@ -1,5 +1,5 @@
 import { Readable } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
 import { createTelegramClient, type TelegramFetch } from "./telegram.client.js";
 
@@ -71,6 +71,44 @@ describe("createTelegramClient", () => {
     expect(file.fileName).toBe("receipt.pdf");
     expect(file.sizeBytes).toBe(13);
     await expect(readAllChunks(file.stream)).resolves.toEqual(Buffer.from("hello receipt"));
+  });
+
+  it("gives getUpdates a local deadline comfortably longer than the long poll wait it asks Telegram for", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchImpl: TelegramFetch = async () => new Response(JSON.stringify({ ok: true, result: [] }), { status: 200 });
+    const client = createTelegramClient({ token: TOKEN, fetchImpl });
+
+    await client.getUpdates({ offset: 0, timeoutSeconds: 25 });
+
+    // pollTimeoutSeconds only tells Telegram how long to hold the connection open; it
+    // bounds nothing on this end, so the local deadline must sit comfortably above it
+    // or ordinary network latency on a healthy long poll would trip it first.
+    expect(timeoutSpy).toHaveBeenCalledTimes(1);
+    expect(timeoutSpy.mock.calls[0]![0]).toBeGreaterThan(25_000);
+    timeoutSpy.mockRestore();
+  });
+
+  it("attaches a local abort signal to every call, so none of them can hang forever", async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    const fetchImpl: TelegramFetch = async (url, init) => {
+      signals.push(init.signal);
+      if (url.includes("/file/bot")) return new Response("bytes", { status: 200 });
+      return new Response(
+        JSON.stringify({ ok: true, result: { file_id: "f", file_size: 5, file_path: "documents/note.txt" } }),
+        { status: 200 },
+      );
+    };
+    const client = createTelegramClient({ token: TOKEN, fetchImpl });
+
+    await client.getFile({ fileId: "f" });
+    await client.sendMessage({ chatId: 1, text: "hi" });
+
+    // One call for getFile's info request, one for the file download, one for sendMessage.
+    expect(signals).toHaveLength(3);
+    for (const signal of signals) {
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal!.aborted).toBe(false);
+    }
   });
 
   it("sends a message to a chat", async () => {

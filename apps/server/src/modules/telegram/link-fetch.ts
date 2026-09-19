@@ -35,12 +35,31 @@ const defaultLookup: LinkFetchLookup = (hostname, options, callback) => {
   dns.lookup(hostname, options, callback);
 };
 
-function resolveAddress(hostname: string, lookup: LinkFetchLookup): Promise<ResolvedAddress> {
+// Bounded by the same deadline as the fetch itself: a lookup is ordinary IO against a
+// server DocMind does not control, and a nameserver that never answers, or answers
+// too slowly, must not be able to hang the whole update poll loop that runs this.
+function resolveAddress(hostname: string, lookup: LinkFetchLookup, deadline: AbortSignal): Promise<ResolvedAddress> {
   const literalFamily = net.isIP(hostname);
   if (literalFamily) return Promise.resolve({ address: hostname, family: literalFamily });
 
+  if (deadline.aborted) return Promise.reject(linkRefused(`timed out resolving "${hostname}"`));
+
   return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const onDeadline = () => {
+      if (settled) return;
+      settled = true;
+      reject(linkRefused(`timed out resolving "${hostname}"`));
+    };
+    deadline.addEventListener("abort", onDeadline, { once: true });
+
+    // The lookup itself is not cancellable: a plain callback has no way to tell the
+    // resolver to stop. A late answer after the deadline has fired is simply ignored.
     lookup(hostname, { all: true }, (err, addresses) => {
+      if (settled) return;
+      settled = true;
+      deadline.removeEventListener("abort", onDeadline);
       if (err) {
         reject(linkRefused(`could not resolve "${hostname}"`));
         return;
@@ -98,6 +117,19 @@ function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
 
+// Cancels whatever body a response carries but this function has no intention of
+// reading, such as a redirect or an error page. Without this, an unread body keeps
+// the underlying request "in flight" from the dispatcher's point of view, and closing
+// a self-built dispatcher afterwards would wait on it instead of returning right away.
+async function discardBody(response: UndiciResponse): Promise<void> {
+  if (!response.body || response.bodyUsed) return;
+  try {
+    await response.body.cancel();
+  } catch {
+    // The connection is going away either way; a failed cancel changes nothing.
+  }
+}
+
 // Readability is built for articles. A bank statement or a plain listing page has no
 // "article" by its heuristics but still has text worth keeping, so a blank result
 // falls back to the page's own text content rather than an empty document.
@@ -117,60 +149,70 @@ export async function fetchReadablePage({
   url,
   dispatcher,
   lookup = defaultLookup,
+  timeoutMs = TIMEOUT_MS,
 }: {
   url: string;
   dispatcher?: Dispatcher;
   lookup?: LinkFetchLookup;
+  // Overridable only so a test can bound a lookup that never calls back without
+  // waiting out the real deadline. Production code always takes the default.
+  timeoutMs?: number;
 }): Promise<{ title: string; text: string; finalUrl: string }> {
-  const deadline = AbortSignal.timeout(TIMEOUT_MS);
+  const deadline = AbortSignal.timeout(timeoutMs);
   let currentUrl = assertFetchableUrl(url);
   let redirects = 0;
 
   while (true) {
-    const resolved = await resolveAddress(currentUrl.hostname, lookup);
+    const resolved = await resolveAddress(currentUrl.hostname, lookup, deadline);
     if (!isPublicAddress(resolved.address)) {
       throw linkRefused(`"${currentUrl.hostname}" resolves to an address that is not public`);
     }
 
+    // Built fresh every hop, since a redirect can point at a different address that
+    // needs its own pin. Closed in the finally below, only once this hop's body has
+    // been fully read, cancelled, or otherwise disposed of: closing any earlier than
+    // that makes undici wait for a transfer that this function will never read.
     const ownDispatcher = dispatcher ? undefined : buildPinnedDispatcher(resolved);
     const hopDispatcher = dispatcher ?? ownDispatcher!;
-    let response: UndiciResponse;
     try {
-      response = await undiciFetch(currentUrl.toString(), {
+      const response = await undiciFetch(currentUrl.toString(), {
         dispatcher: hopDispatcher,
         redirect: "manual",
         signal: deadline,
       });
+
+      if (isRedirectStatus(response.status)) {
+        redirects += 1;
+        await discardBody(response);
+        if (redirects > MAX_REDIRECTS) throw linkRefused(`too many redirects fetching ${url}`);
+        const location = response.headers.get("location");
+        if (!location) throw linkRefused(`redirect from ${currentUrl.toString()} carried no location`);
+        currentUrl = assertFetchableUrl(new URL(location, currentUrl).toString());
+        continue;
+      }
+
+      if (!response.ok) {
+        await discardBody(response);
+        throw linkRefused(`${currentUrl.toString()} answered with status ${response.status}`);
+      }
+
+      const contentType = contentTypeOf(response);
+      if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
+        await discardBody(response);
+        throw linkRefused(`"${contentType || "unknown"}" content is not something DocMind can read as a page`);
+      }
+
+      const body = response.body ? Readable.fromWeb(response.body as unknown as WebReadableStream) : Readable.from([]);
+      const buffer = await readCappedBody(body, MAX_BODY_BYTES);
+      const text = buffer.toString("utf-8");
+
+      if (contentType === "text/plain") {
+        return { title: "", text, finalUrl: currentUrl.toString() };
+      }
+      const { title, text: readableText } = extractReadableText(text);
+      return { title, text: readableText, finalUrl: currentUrl.toString() };
     } finally {
       if (ownDispatcher) await ownDispatcher.close();
     }
-
-    if (isRedirectStatus(response.status)) {
-      redirects += 1;
-      if (redirects > MAX_REDIRECTS) throw linkRefused(`too many redirects fetching ${url}`);
-      const location = response.headers.get("location");
-      if (!location) throw linkRefused(`redirect from ${currentUrl.toString()} carried no location`);
-      currentUrl = assertFetchableUrl(new URL(location, currentUrl).toString());
-      continue;
-    }
-
-    if (!response.ok) {
-      throw linkRefused(`${currentUrl.toString()} answered with status ${response.status}`);
-    }
-
-    const contentType = contentTypeOf(response);
-    if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
-      throw linkRefused(`"${contentType || "unknown"}" content is not something DocMind can read as a page`);
-    }
-
-    const body = response.body ? Readable.fromWeb(response.body as unknown as WebReadableStream) : Readable.from([]);
-    const buffer = await readCappedBody(body, MAX_BODY_BYTES);
-    const text = buffer.toString("utf-8");
-
-    if (contentType === "text/plain") {
-      return { title: "", text, finalUrl: currentUrl.toString() };
-    }
-    const { title, text: readableText } = extractReadableText(text);
-    return { title, text: readableText, finalUrl: currentUrl.toString() };
   }
 }

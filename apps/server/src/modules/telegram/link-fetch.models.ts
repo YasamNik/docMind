@@ -56,7 +56,8 @@ function ipv4InRange(ipInt: number, range: Ipv4Range): boolean {
 
 // Every non-globally-routable IPv4 block worth refusing, including 169.254.0.0/16,
 // which carries the cloud metadata address every provider uses, and the carrier grade
-// NAT range 100.64.0.0/10, which some providers use for the same purpose.
+// NAT range 100.64.0.0/10, which some providers use for the same purpose. 240.0.0.0/4
+// also covers the broadcast address 255.255.255.255, so that needs no range of its own.
 const BLOCKED_IPV4_RANGES: Ipv4Range[] = [
   ipv4Range("0.0.0.0", 8),
   ipv4Range("10.0.0.0", 8),
@@ -65,6 +66,8 @@ const BLOCKED_IPV4_RANGES: Ipv4Range[] = [
   ipv4Range("169.254.0.0", 16),
   ipv4Range("172.16.0.0", 12),
   ipv4Range("192.168.0.0", 16),
+  ipv4Range("224.0.0.0", 4),
+  ipv4Range("240.0.0.0", 4),
 ];
 
 function isPublicIpv4(ip: string): boolean {
@@ -117,22 +120,30 @@ function parseIpv6Groups(ip: string): number[] | null {
   return [...left, ...Array<number>(missing).fill(0), ...right];
 }
 
-function ipv4MappedAddress(groups: number[]): string | null {
-  const isMapped = groups.slice(0, 5).every((group) => group === 0) && groups[5] === 0xffff;
-  if (!isMapped) return null;
+// Unwraps an IPv4 address carried inside an IPv6 literal, in either shape: the current
+// "mapped" form with an ffff marker, ::ffff:127.0.0.1, or the deprecated "compatible"
+// form with no marker at all, ::127.0.0.1. Both put the same four bytes in the same
+// place, so both need to be checked as the IPv4 address they actually are, including
+// the all-zero cases this also catches: the unspecified address "::" and loopback
+// "::1" unwrap to 0.0.0.0 and 0.0.0.1, both already blocked as part of 0.0.0.0/8.
+function embeddedIpv4Address(groups: number[]): string | null {
+  const topZero = groups.slice(0, 5).every((group) => group === 0);
+  if (!topZero) return null;
+  const marker = groups[5]!;
+  if (marker !== 0 && marker !== 0xffff) return null;
   const high = groups[6]!;
   const low = groups[7]!;
   return [(high >>> 8) & 0xff, high & 0xff, (low >>> 8) & 0xff, low & 0xff].join(".");
 }
 
 function isPublicIpv6(groups: number[]): boolean {
-  const isLoopback = groups.slice(0, 7).every((group) => group === 0) && groups[7] === 1;
-  if (isLoopback) return false;
   const first = groups[0]!;
   const isUniqueLocal = (first & 0xfe00) === 0xfc00;
   if (isUniqueLocal) return false;
   const isLinkLocal = (first & 0xffc0) === 0xfe80;
   if (isLinkLocal) return false;
+  const isMulticast = (first & 0xff00) === 0xff00;
+  if (isMulticast) return false;
   return true;
 }
 
@@ -142,8 +153,8 @@ export function isPublicAddress(ip: string): boolean {
   const groups = parseIpv6Groups(ip);
   if (!groups) return false;
 
-  const mapped = ipv4MappedAddress(groups);
-  if (mapped) return isPublicIpv4(mapped);
+  const embeddedIpv4 = embeddedIpv4Address(groups);
+  if (embeddedIpv4) return isPublicIpv4(embeddedIpv4);
 
   return isPublicIpv6(groups);
 }

@@ -1,3 +1,5 @@
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
 import { MockAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -69,6 +71,17 @@ describe("fetchReadablePage", () => {
     // real, pinned undici Agent. The address check must reject before that happens,
     // so this never attempts a real connection.
     await expect(fetchReadablePage({ url: "https://metadata.internal/", lookup })).rejects.toThrow(/refus/i);
+  });
+
+  it("gives up on a lookup that never calls back, instead of hanging forever", async () => {
+    const lookup: LinkFetchLookup = () => {
+      // A hostile or merely slow nameserver: the callback this is handed is simply
+      // never invoked. resolveAddress must bound this itself rather than wait on it.
+    };
+
+    await expect(
+      fetchReadablePage({ url: "https://stalls-forever.test/", lookup, dispatcher: mockAgent, timeoutMs: 50 }),
+    ).rejects.toThrow(/refus/i);
   });
 
   it("calls the lookup exactly once for a plain fetch with no redirects", async () => {
@@ -192,5 +205,55 @@ describe("pinnedLookup", () => {
       expect(err).toBeNull();
       expect(addresses).toEqual([{ address: "93.184.216.34", family: 4 }]);
     });
+  });
+});
+
+// fetchReadablePage builds and later closes a real, pinned undici Agent whenever no
+// dispatcher is injected, and every other test in this file injects a MockAgent, so
+// that branch runs nowhere else. It cannot be driven end to end without a stand-in for
+// isPublicAddress: the real guard refuses loopback before any dispatcher gets built,
+// and loopback is what a local test server binds to. isPublicAddress has its own test
+// suite (link-fetch.models.test.ts); stubbing it here only stands in for "some public
+// address", it does not weaken what that suite already covers.
+//
+// A local server, started and torn down inside the test, is not a network call. It
+// serves a body bigger than a stream's usual internal buffer and never delayed, so an
+// unread body genuinely backpressures the socket instead of finishing on its own: this
+// is what a dispatcher closed before its body was read used to stall on, all the way to
+// fetchReadablePage's own twenty second deadline, confirmed against the pre-fix code
+// with a five second race in place of that deadline.
+describe("fetchReadablePage with no dispatcher injected", () => {
+  const bodyBytes = 5 * 1024 * 1024;
+
+  it("closes the real dispatcher it builds only after reading a large body in full", async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end(Buffer.alloc(bodyBytes, "a"));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const { port } = server.address() as AddressInfo;
+
+    vi.resetModules();
+    vi.doMock("./link-fetch.models.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./link-fetch.models.js")>();
+      return { ...actual, isPublicAddress: () => true };
+    });
+
+    try {
+      const { fetchReadablePage: fetchWithOwnDispatcher } = await import("./link-fetch.js");
+      const startedAt = Date.now();
+
+      const result = await fetchWithOwnDispatcher({
+        url: `http://127.0.0.1:${port}/`,
+        lookup: (_hostname, _options, callback) => callback(null, [{ address: "127.0.0.1", family: 4 }]),
+      });
+
+      expect(result.text).toHaveLength(bodyBytes);
+      expect(Date.now() - startedAt).toBeLessThan(5000);
+    } finally {
+      vi.doUnmock("./link-fetch.models.js");
+      vi.resetModules();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });
