@@ -5,6 +5,7 @@ import {
   duplicateReply,
   fileDocumentName,
   fileTooLargeReply,
+  finishedDocumentReply,
   intentOf,
   linkDocumentBody,
   linkDocumentName,
@@ -183,5 +184,57 @@ describe("telegram models", () => {
     expect(linkDocumentBody({ url: "https://example.com/kettles", text: "Kettles boil fast." })).toBe(
       "https://example.com/kettles\n\nKettles boil fast.",
     );
+  });
+
+  it("names the category and tags in the finished reply", () => {
+    const reply = finishedDocumentReply({
+      name: "Kettle receipt.pdf",
+      categoryPath: "Finance / Receipts",
+      tagNames: ["appliance", "warranty"],
+      documentUrl: "https://app.example.com/documents/doc_1",
+      ruleFailed: false,
+      summaryFailed: false,
+    });
+    expect(reply).toContain('"Kettle receipt.pdf"');
+    expect(reply).toContain("Finance / Receipts");
+    expect(reply).toContain("appliance, warranty");
+    expect(reply).toContain("https://app.example.com/documents/doc_1");
+  });
+
+  it("still names the document when it has no category or tags", () => {
+    const reply = finishedDocumentReply({
+      name: "note.txt",
+      categoryPath: null,
+      tagNames: [],
+      documentUrl: "https://app.example.com/documents/doc_2",
+      ruleFailed: false,
+      summaryFailed: false,
+    });
+    expect(reply).toBe('Filed "note.txt". https://app.example.com/documents/doc_2');
+  });
+
+  it("says sorting failed by name when the rules stage did not finish", () => {
+    const reply = finishedDocumentReply({
+      name: "unsortable.txt",
+      categoryPath: null,
+      tagNames: [],
+      documentUrl: "https://app.example.com/documents/doc_3",
+      ruleFailed: true,
+      summaryFailed: false,
+    });
+    expect(reply).toMatch(/sorting failed/i);
+    expect(reply).toContain("unsortable.txt");
+  });
+
+  it("says both stages failed when neither finished cleanly", () => {
+    const reply = finishedDocumentReply({
+      name: "broken.txt",
+      categoryPath: null,
+      tagNames: [],
+      documentUrl: "https://app.example.com/documents/doc_4",
+      ruleFailed: true,
+      summaryFailed: true,
+    });
+    expect(reply).toMatch(/summarizing and sorting both failed/i);
   });
 });

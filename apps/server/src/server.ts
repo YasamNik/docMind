@@ -182,12 +182,14 @@ export function createServer({
   // resolves the sole signed-up user itself, fresh every cycle, the same way it
   // re-reads the bot token every cycle.
   const telegramService = createTelegramService({
+    db,
     settingsService,
     documentsService,
     getUserId: async () => {
       const [row] = await db.select({ id: authUserTable.id }).from(authUserTable).limit(1);
       return row?.id;
     },
+    appBaseUrl: config.clientBaseUrl,
   });
 
   app.get("/api/health", (c) => c.json({ status: "ok" }));

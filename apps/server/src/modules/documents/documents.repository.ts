@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { Database } from "../database/database.js";
 import { buildCategoryPaths, collectDescendantIds } from "../tags/tags.models.js";
 import { sortEvaluationsTable } from "../rules/rules.tables.js";
@@ -209,6 +209,49 @@ export function createDocumentsRepository({ db }: { db: Database }) {
         .from(documentsTable)
         .where(and(eq(documentsTable.userId, userId), eq(documentsTable.contentHash, contentHash)));
       return row ?? null;
+    },
+
+    // For the telegram watcher: which documents from a given source have finished the
+    // two independent jobs a reply could say something about. embeddingStatus is left
+    // out on purpose, it changes what search can find, not what a reply would say.
+    // Oldest first and capped, so one poll cycle never tries to send an unbounded
+    // burst of messages after, say, a long outage.
+    async listFinishedSince({
+      userId,
+      source,
+      since,
+      limit = 20,
+    }: {
+      userId: string;
+      source: string;
+      since: string;
+      limit?: number;
+    }): Promise<DocumentListRow[]> {
+      const rows = await db
+        .select(listColumns)
+        .from(documentsTable)
+        .where(
+          and(
+            eq(documentsTable.userId, userId),
+            eq(documentsTable.source, source),
+            isNull(documentsTable.deletedAt),
+            inArray(documentsTable.summaryStatus, ["done", "failed"]),
+            inArray(documentsTable.ruleStatus, ["done", "failed"]),
+            gt(documentsTable.createdAt, since),
+          ),
+        )
+        .orderBy(asc(documentsTable.createdAt), asc(documentsTable.id))
+        .limit(limit);
+
+      const pathMap = await loadCategoryPathMap(userId);
+      const documentIds = rows.map((r) => r.id);
+      const tagsMap = await loadTagsByDocument(documentIds);
+      return rows.map((row) => ({
+        ...row,
+        categoryPath: row.categoryId ? (pathMap.get(row.categoryId) ?? null) : null,
+        tags: tagsMap.get(row.id) ?? [],
+        fields: [],
+      }));
     },
 
     async update({

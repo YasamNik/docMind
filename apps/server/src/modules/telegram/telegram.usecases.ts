@@ -3,6 +3,8 @@ import { Readable } from "node:stream";
 import * as v from "valibot";
 import { isAppError } from "../../shared/errors/errors.js";
 import { createLogger, type Logger } from "../../shared/logger/logger.js";
+import type { Database } from "../database/database.js";
+import { createDocumentsRepository } from "../documents/documents.repository.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
 import { fetchReadablePage } from "./link-fetch.js";
@@ -12,6 +14,7 @@ import {
   duplicateReply,
   fileDocumentName,
   fileTooLargeReply,
+  finishedDocumentReply,
   intentOf,
   linkDocumentBody,
   linkDocumentName,
@@ -52,6 +55,7 @@ function backoffDelayMs(attempt: number): number {
 export type FetchLinkPage = (args: { url: string }) => Promise<{ title: string; text: string; finalUrl: string }>;
 
 export function createTelegramService({
+  db,
   settingsService,
   documentsService,
   getUserId,
@@ -60,7 +64,9 @@ export function createTelegramService({
   logger = createLogger("telegram"),
   pollTimeoutSeconds = 25,
   idleIntervalMs = 1000,
+  appBaseUrl = "http://localhost:5173",
 }: {
+  db: Database;
   settingsService: SettingsService;
   documentsService: DocumentsService;
   // There is exactly one Telegram-paired account, and this loop runs with no HTTP
@@ -74,7 +80,14 @@ export function createTelegramService({
   logger?: Logger;
   pollTimeoutSeconds?: number;
   idleIntervalMs?: number;
+  // Where the app is reachable from a phone, so the second reply can link straight to
+  // the document rather than just naming it.
+  appBaseUrl?: string;
 }) {
+  // Read directly rather than through documentsService: the second reply asks a
+  // question ("which of my documents just finished") no route or upload flow needs,
+  // so it has no home in the usecases layer documentsService already covers.
+  const documentsRepository = createDocumentsRepository({ db });
   let running = false;
   let loop: Promise<void> | null = null;
 
@@ -215,6 +228,40 @@ export function createTelegramService({
     // "pairing" while already paired, or "ignore": nothing to do.
   }
 
+  // Extraction fans jobs out rather than chaining them, and the runner has no
+  // completion hook, so there is no end of a chain to notify from. This asks, once a
+  // cycle, which of the bot's own documents have both finished, and reports each one
+  // it has not reported yet. embeddingStatus is left out of listFinishedSince on
+  // purpose: it changes what search can find, never what this message would say.
+  async function reportFinishedDocuments({ userId, client }: { userId: string; client: TelegramClient }) {
+    const pairedUserId = await settingsService.get<number>(userId, "telegram.pairedUserId");
+    if (pairedUserId === undefined) return;
+
+    const stored = await settingsService.get<string>(userId, "telegram.lastReportedAt");
+    const isFirstRun = !stored;
+    // A brand new watcher must not announce the whole existing library the moment
+    // someone pairs, so it starts its watermark at now and only reports what finishes
+    // after that, the same way a new subscriber does not get every past post at once.
+    const since = isFirstRun ? new Date().toISOString() : stored;
+    if (isFirstRun) await settingsService.setInternal(userId, "telegram.lastReportedAt", since);
+
+    const finished = await documentsRepository.listFinishedSince({ userId, source: "telegram", since });
+    for (const document of finished) {
+      const text = finishedDocumentReply({
+        name: document.name,
+        categoryPath: document.categoryPath,
+        tagNames: document.tags.map((tag) => tag.name),
+        documentUrl: `${appBaseUrl}/documents/${document.id}`,
+        ruleFailed: document.ruleStatus === "failed",
+        summaryFailed: document.summaryStatus === "failed",
+      });
+      await client.sendMessage({ chatId: pairedUserId, text });
+    }
+
+    const last = finished.at(-1);
+    if (last) await settingsService.setInternal(userId, "telegram.lastReportedAt", last.createdAt);
+  }
+
   async function runOnce(): Promise<void> {
     const userId = await getUserId();
     if (!userId) return;
@@ -237,6 +284,8 @@ export function createTelegramService({
       const updateId = readUpdateId(raw);
       if (updateId !== undefined) await settingsService.setInternal(userId, "telegram.lastUpdateId", updateId);
     }
+
+    await reportFinishedDocuments({ userId, client });
   }
 
   async function start() {

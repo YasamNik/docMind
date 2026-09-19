@@ -5,11 +5,13 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createError } from "../../shared/errors/errors.js";
 import { createTestDatabase } from "../../shared/test/database.test-utils.js";
+import { createDocumentsRepository } from "../documents/documents.repository.js";
 import { createDocumentsService } from "../documents/documents.usecases.js";
 import { createSettingsRegistry } from "../settings/settings.registry.js";
 import { createSettingsService } from "../settings/settings.usecases.js";
 import { storageSettingDefinitions } from "../storage/storage.settings.js";
 import { createStorageService } from "../storage/storage.usecases.js";
+import { createTagsService } from "../tags/tags.usecases.js";
 import type { TelegramClient } from "./telegram.client.js";
 import { telegramSettingDefinitions } from "./telegram.settings.js";
 import { createTelegramService, type FetchLinkPage } from "./telegram.usecases.js";
@@ -133,12 +135,28 @@ const fetchLinkPageNotConfigured: FetchLinkPage = () => {
 
 function buildService(client: TelegramClient, fetchLinkPage: FetchLinkPage = fetchLinkPageNotConfigured) {
   return createTelegramService({
+    db,
     settingsService,
     documentsService,
     getUserId: async () => userId,
     clientFactory: () => client,
     fetchLinkPage,
   });
+}
+
+// The document is finished the moment both statuses land in a terminal state, so
+// tests move it there directly rather than running the real rules and summary jobs.
+async function markSortedAndSummarized({
+  documentId,
+  ruleStatus = "done",
+  summaryStatus = "done",
+}: {
+  documentId: string;
+  ruleStatus?: string;
+  summaryStatus?: string;
+}) {
+  const repository = createDocumentsRepository({ db });
+  await repository.update({ userId, documentId, patch: { ruleStatus, summaryStatus, updatedAt: new Date().toISOString() } });
 }
 
 describe("telegram service", () => {
@@ -362,5 +380,147 @@ describe("telegram service", () => {
 
     await expect(telegram.runOnce()).rejects.toThrow(/network blip/);
     await expect(telegram.runOnce()).resolves.toBeUndefined();
+  });
+});
+
+describe("telegram service, the second reply", () => {
+  it("reports a document once both the summary and the rules have finished", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    await settingsService.setInternal(userId, "telegram.lastReportedAt", "2020-01-01T00:00:00.000Z");
+    const tagsService = createTagsService({ db });
+    const category = await tagsService.createCategory({ userId, name: "Finance" });
+    const tag = await tagsService.createTag({ userId, name: "Receipts" });
+
+    const { document } = await documentsService.upload({
+      userId,
+      name: "invoice.pdf",
+      mimeType: "application/pdf",
+      body: Readable.from(["invoice bytes"]),
+      source: "telegram",
+    });
+    await tagsService.setDocumentCategory({ userId, documentId: document.id, categoryId: category.id });
+    await tagsService.setDocumentTag({ userId, documentId: document.id, tagId: tag.id });
+    await markSortedAndSummarized({ documentId: document.id });
+
+    const { client, sent } = fakeTelegram({ batches: [[]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.chatId).toBe(PAIRED_ID);
+    expect(sent[0]?.text).toContain("invoice.pdf");
+    expect(sent[0]?.text).toContain("Finance");
+    expect(sent[0]?.text).toContain("Receipts");
+    expect(sent[0]?.text).toContain(document.id);
+  });
+
+  it("does not report the same document twice", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    await settingsService.setInternal(userId, "telegram.lastReportedAt", "2020-01-01T00:00:00.000Z");
+    const { document } = await documentsService.upload({
+      userId,
+      name: "note.txt",
+      mimeType: "text/plain",
+      body: Readable.from(["a note"]),
+      source: "telegram",
+    });
+    await markSortedAndSummarized({ documentId: document.id });
+
+    const { client, sent } = fakeTelegram({ batches: [[], []] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+  });
+
+  it("says nothing about a document uploaded in the browser", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    await settingsService.setInternal(userId, "telegram.lastReportedAt", "2020-01-01T00:00:00.000Z");
+    const { document } = await documentsService.upload({
+      userId,
+      name: "manual.txt",
+      mimeType: "text/plain",
+      body: Readable.from(["typed by hand"]),
+    });
+    await markSortedAndSummarized({ documentId: document.id });
+
+    const { client, sent } = fakeTelegram({ batches: [[]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(0);
+  });
+
+  it("waits while the summary is still running", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    await settingsService.setInternal(userId, "telegram.lastReportedAt", "2020-01-01T00:00:00.000Z");
+    const { document } = await documentsService.upload({
+      userId,
+      name: "pending.txt",
+      mimeType: "text/plain",
+      body: Readable.from(["still working"]),
+      source: "telegram",
+    });
+    await markSortedAndSummarized({ documentId: document.id, summaryStatus: "processing" });
+
+    const { client, sent } = fakeTelegram({ batches: [[]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(0);
+  });
+
+  it("still reports a document whose sorting failed, naming the stage", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    await settingsService.setInternal(userId, "telegram.lastReportedAt", "2020-01-01T00:00:00.000Z");
+    const { document } = await documentsService.upload({
+      userId,
+      name: "unsortable.txt",
+      mimeType: "text/plain",
+      body: Readable.from(["could not be sorted"]),
+      source: "telegram",
+    });
+    await markSortedAndSummarized({ documentId: document.id, ruleStatus: "failed" });
+
+    const { client, sent } = fakeTelegram({ batches: [[]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toContain("unsortable.txt");
+    expect(sent[0]?.text).toMatch(/sorting failed/i);
+  });
+
+  it("does not announce the back catalogue on the very first run", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    // No telegram.lastReportedAt stored at all yet: this is the very first cycle.
+    const { document } = await documentsService.upload({
+      userId,
+      name: "old.txt",
+      mimeType: "text/plain",
+      body: Readable.from(["already here before pairing"]),
+      source: "telegram",
+    });
+    await markSortedAndSummarized({ documentId: document.id });
+
+    const { client, sent } = fakeTelegram({ batches: [[]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(0);
+    expect(await settingsService.get<string>(userId, "telegram.lastReportedAt")).not.toBe("");
   });
 });

@@ -115,6 +115,40 @@ export function compressedPhotoNotice(): string {
 // A refusal from the link guard already reads like a sentence a person can act on,
 // so the chat reply is just that reason with no extra framing added around it.
 
+// The bot's second message about a document: sent once the watcher sees both the
+// summary and the rules finish, so it can say what actually happened rather than just
+// that the file arrived. Sorting failing is named outright rather than glossed over,
+// since going quiet about it on a phone is worse than admitting it.
+export function finishedDocumentReply({
+  name,
+  categoryPath,
+  tagNames,
+  documentUrl,
+  ruleFailed,
+  summaryFailed,
+}: {
+  name: string;
+  categoryPath: string | null;
+  tagNames: string[];
+  documentUrl: string;
+  ruleFailed: boolean;
+  summaryFailed: boolean;
+}): string {
+  if (ruleFailed && summaryFailed) {
+    return `Filed "${name}", but summarizing and sorting both failed. ${documentUrl}`;
+  }
+  if (ruleFailed) {
+    return `Filed "${name}". Sorting failed, so it has no category or tags yet. ${documentUrl}`;
+  }
+  if (summaryFailed) {
+    return `Filed "${name}", but summarizing failed. ${documentUrl}`;
+  }
+  let message = `Filed "${name}"`;
+  if (categoryPath) message += ` under ${categoryPath}`;
+  if (tagNames.length > 0) message += `, tagged ${tagNames.join(", ")}`;
+  return `${message}. ${documentUrl}`;
+}
+
 // A fetched page keeps its own title when it has one. A page readability could make
 // nothing of, such as a bare listing, still gets a name from its own hostname rather
 // than a blank one.
