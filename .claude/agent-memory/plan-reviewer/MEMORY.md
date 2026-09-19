@@ -12,3 +12,5 @@
 - [LLM reply partial-tolerance lesson](lesson-llm-reply-partial-tolerance.md) -- generateStructured fails the whole reply on any bad array element; check the reply schema is loose where the spec claims per-row tolerance, mirror rules.schemas.ts
 - [Storage drivers spec review](review-spec-storage-drivers.md) -- scope claim false for chat/detail/download paths, OAuth loopback conflicts with tunnel workflow
 - [Storage S3/scope plan review](review-plan-storage-s3-scope.md) -- prior spec fixes verified real; storage.usecases.ts lacks documentsRepository, wrong test harness assumed, lib-storage Upload always multiparts streams
+- [Telegram intake spec review](review-spec-telegram-intake.md) -- "no new table" breaks at the completion-notifier requirement, job fan-out is not a chain, poller has no settings-reactivity design, DNS TOCTOU underspecified
+- [Background loop / notification gap lesson](lesson-background-loop-and-notification-gaps.md) -- no post-write settings hook, no job-completion hook, DNS-resolve-then-check needs a custom lookup function to close TOCTOU
