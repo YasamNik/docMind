@@ -3,9 +3,9 @@ import OpenAI from "openai";
 import { toJsonSchema } from "@valibot/to-json-schema";
 import { createError } from "../../../shared/errors/errors.js";
 import { sanitizeProviderError } from "../ai.models.js";
-import type { AiAdapter, ChatMessage, ModelInfo, StructuredResult, EmbedResult, TestResult } from "../ai.types.js";
+import type { AiAdapter, ChatMessage, ChatStreamPart, ModelInfo, StructuredResult, EmbedResult, TestResult, ToolDefinition } from "../ai.types.js";
 import type { AdapterConfig } from "./adapter.types.js";
-import type { ChatCompletionCreateParamsNonStreaming, ChatCompletionMessageParam } from "openai/resources/chat/completions.js";
+import type { ChatCompletionCreateParamsNonStreaming, ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions.js";
 
 // ChatMessage carries a single role union across system, user, and assistant, while the
 // SDK's ChatCompletionMessageParam is a discriminated union with a distinct interface per
@@ -38,6 +38,32 @@ function wrapError(err: unknown, apiKey: string): never {
     message: sanitizeMessage(err, apiKey),
     status: 502,
   });
+}
+
+function toChatCompletionTool(tool: ToolDefinition): ChatCompletionTool {
+  const jsonSchema = toJsonSchema(tool.schema);
+  const { $schema: _, ...cleanSchema } = jsonSchema as Record<string, unknown>;
+  return {
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: cleanSchema,
+    },
+  };
+}
+
+// A tool call's arguments arrive as a raw JSON string assembled from streamed
+// fragments. Malformed JSON is not repaired here: the raw string is handed back so
+// the caller's schema validation fails on it with a clear message, rather than the
+// adapter guessing at a fix.
+function parseToolArguments(raw: string): unknown {
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
 }
 
 export function createOpenAiCompatibleAdapter(config: AdapterConfig): AiAdapter {
@@ -140,20 +166,37 @@ export function createOpenAiCompatibleAdapter(config: AdapterConfig): AiAdapter 
       }
     },
 
-    async streamChat({ model, messages, maxTokens }): Promise<AsyncIterable<string>> {
+    async streamChat({ model, messages, maxTokens, tools }): Promise<AsyncIterable<ChatStreamPart>> {
       try {
         const stream = await client.chat.completions.create({
           model,
           messages: messages.map(toChatCompletionMessage),
           stream: true,
           max_tokens: maxTokens,
+          ...(tools && tools.length > 0 ? { tools: tools.map(toChatCompletionTool) } : {}),
         });
 
         return {
           async *[Symbol.asyncIterator]() {
+            // Tool calls arrive as deltas keyed by index: the first delta for an index
+            // carries the call id and function name, every following delta for that same
+            // index carries another fragment of the arguments JSON string. None of it is
+            // valid JSON until the model finishes, so fragments are concatenated here and
+            // only parsed, and only yielded, once the underlying stream ends.
+            const pending = new Map<number, { id: string; name: string; args: string }>();
             for await (const chunk of stream) {
-              const delta = chunk.choices[0]?.delta?.content;
-              if (delta) yield delta;
+              const delta = chunk.choices[0]?.delta;
+              if (delta?.content) yield { type: "text", text: delta.content };
+              for (const call of delta?.tool_calls ?? []) {
+                const entry = pending.get(call.index) ?? { id: "", name: "", args: "" };
+                if (call.id) entry.id = call.id;
+                if (call.function?.name) entry.name = call.function.name;
+                if (call.function?.arguments) entry.args += call.function.arguments;
+                pending.set(call.index, entry);
+              }
+            }
+            for (const [, call] of [...pending.entries()].sort(([a], [b]) => a - b)) {
+              yield { type: "toolCall", id: call.id, name: call.name, arguments: parseToolArguments(call.args) };
             }
           },
         };
@@ -230,6 +273,7 @@ export function createOpenAiCompatibleAdapter(config: AdapterConfig): AiAdapter 
             supportsStructured: config.isOpenRouter
               ? supportedParams.includes("structured_outputs")
               : undefined,
+            supportsTools: config.isOpenRouter ? supportedParams.includes("tools") : undefined,
           });
         }
         return models;

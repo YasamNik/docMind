@@ -8,7 +8,7 @@ export const deepseekProvider: AiProviderDefinition = {
   adapter: "openai-compatible",
   defaultBaseUrl: "https://api.deepseek.com/v1",
   requiresKey: true,
-  capabilities: { text: true, structured: true, embeddings: false, listModels: true, vision: true },
+  capabilities: { text: true, structured: true, embeddings: false, listModels: true, vision: true, tools: true },
   suggestedModels: {
     rules: "deepseek-chat",
     chat: "deepseek-chat",

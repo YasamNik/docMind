@@ -10,6 +10,10 @@ export type AiProviderCapabilities = {
   embeddings: boolean;
   listModels: boolean;
   vision: boolean;
+  // Whether the adapter can build a tool-calling request and parse the provider's
+  // wire format for it. A provider can declare this true and still refuse a specific
+  // model at request time; ModelInfo.supportsTools is the finer, per-model signal.
+  tools: boolean;
 };
 
 export type ModelSlot = "rules" | "chat" | "embedding" | "vision";
@@ -20,6 +24,10 @@ export type ModelInfo = {
   contextLength?: number;
   pricing?: { prompt: number; completion: number };
   supportsStructured?: boolean;
+  // Per-model tool support, the same precedent as supportsStructured: only OpenRouter's
+  // model list reports this today, so it stays undefined for every other provider rather
+  // than guessed at.
+  supportsTools?: boolean;
 };
 
 export type TestResult = {
@@ -40,6 +48,22 @@ export type EmbedResult = {
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
+// A tool the model may call. The schema doubles as the wire-level parameter shape,
+// converted to JSON schema by the adapter, and the boundary the caller validates a
+// tool call's arguments against once the adapter has assembled them.
+export type ToolDefinition = {
+  name: string;
+  description: string;
+  schema: GenericSchema;
+};
+
+// The typed shape a chat stream yields once tool calls are possible. Text arrives as
+// it is produced; a tool call arrives once fully assembled, since a fragment of tool
+// call JSON cannot be acted on before it is complete.
+export type ChatStreamPart =
+  | { type: "text"; text: string }
+  | { type: "toolCall"; id: string; name: string; arguments: unknown };
+
 export type AiAdapter = {
   generateStructured(args: {
     model: string;
@@ -55,11 +79,14 @@ export type AiAdapter = {
   }): Promise<AsyncIterable<string>>;
   // Multi-turn variant of streamText: takes a full messages array instead of a single
   // system and input string, for conversations that carry history (see the chat module).
+  // Yields ChatStreamPart rather than plain strings so a tool call can travel alongside
+  // text; passing no tools means the stream never contains a "toolCall" part.
   streamChat(args: {
     model: string;
     messages: ChatMessage[];
     maxTokens?: number;
-  }): Promise<AsyncIterable<string>>;
+    tools?: ToolDefinition[];
+  }): Promise<AsyncIterable<ChatStreamPart>>;
   embed(args: { model: string; texts: string[] }): Promise<EmbedResult>;
   recognizeImage(args: {
     model: string;

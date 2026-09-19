@@ -3,15 +3,18 @@ import { sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { createTestApp } from "../../shared/test/app.test-utils.js";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
-import type { AiAdapter, ModelInfo, StructuredResult, TestResult } from "../ai/ai.types.js";
+import type { AiAdapter, ChatStreamPart, ModelInfo, StructuredResult, TestResult } from "../ai/ai.types.js";
 import { createSearchRepository } from "../search/search.repository.js";
 import { deriveTitleFromMessage } from "./chat.models.js";
 import type { ChatStreamEvent } from "./chat.usecases.js";
 
-function asyncIterableOf(chunks: string[]): AsyncIterable<string> {
+// Wraps plain text chunks as the adapter's typed stream shape (see ai.types.ts). Chat
+// itself only ever gets plain text back from aiService.streamChat, which unwraps this,
+// so these tests still assert on plain concatenated strings.
+function asyncIterableOf(chunks: string[]): AsyncIterable<ChatStreamPart> {
   return {
     async *[Symbol.asyncIterator]() {
-      for (const chunk of chunks) yield chunk;
+      for (const chunk of chunks) yield { type: "text", text: chunk };
     },
   };
 }

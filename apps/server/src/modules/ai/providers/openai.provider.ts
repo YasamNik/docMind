@@ -8,7 +8,7 @@ export const openaiProvider: AiProviderDefinition = {
   adapter: "openai-compatible",
   defaultBaseUrl: "https://api.openai.com/v1",
   requiresKey: true,
-  capabilities: { text: true, structured: true, embeddings: true, listModels: true, vision: true },
+  capabilities: { text: true, structured: true, embeddings: true, listModels: true, vision: true, tools: true },
   suggestedModels: {
     rules: "gpt-4o-mini",
     chat: "gpt-4o",

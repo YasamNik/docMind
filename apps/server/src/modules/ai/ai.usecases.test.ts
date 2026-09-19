@@ -22,7 +22,7 @@ function fakeAdapter(overrides: Partial<AiAdapter> = {}): AiAdapter {
       async *[Symbol.asyncIterator]() { yield "hello"; },
     })),
     streamChat: vi.fn(async () => ({
-      async *[Symbol.asyncIterator]() { yield "hello"; },
+      async *[Symbol.asyncIterator]() { yield { type: "text" as const, text: "hello" }; },
     })),
     embed: vi.fn(async () => ({ vectors: [[0.1, 0.2]], dimension: 2 })),
     recognizeImage: vi.fn(async () => ({ text: "extracted text" })),
@@ -34,7 +34,10 @@ function fakeAdapter(overrides: Partial<AiAdapter> = {}): AiAdapter {
   };
 }
 
-async function setup(env: Record<string, string> = {}) {
+async function setup(
+  env: Record<string, string> = {},
+  options: { adapter?: AiAdapter; registry?: typeof aiProviderRegistry } = {},
+) {
   const { db } = await createTestDatabase();
   const registry = createSettingsRegistry(aiSettingDefinitions);
   const settingsService = createSettingsService({
@@ -42,14 +45,14 @@ async function setup(env: Record<string, string> = {}) {
     registry,
     config: { settingsEncryptionKey: "ab".repeat(32), env },
   });
-  const adapter = fakeAdapter();
+  const adapter = options.adapter ?? fakeAdapter();
   const adapterFactories = {
     "openai-compatible": vi.fn(() => adapter),
     "anthropic": vi.fn(() => adapter),
   };
   const aiService = createAiService({
     settingsService,
-    registry: aiProviderRegistry,
+    registry: options.registry ?? aiProviderRegistry,
     adapterFactories,
     logger: silentLogger,
   });
@@ -214,6 +217,135 @@ describe("ai service", () => {
       "ai.web_search_unsupported",
     );
     expect(adapter.streamChat).not.toHaveBeenCalled();
+  });
+
+  it("streamChatWithTools validates a tool call's arguments against the caller's schema", async () => {
+    const streamChatMock = vi.fn(async () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "text" as const, text: "One moment. " };
+        yield { type: "toolCall" as const, id: "call_1", name: "saveNote", arguments: { text: "buy milk" } };
+      },
+    }));
+    const { settingsService, aiService } = await setup({}, { adapter: fakeAdapter({ streamChat: streamChatMock }) });
+    await settingsService.set(userId, {
+      "ai.openrouter.apiKey": "sk-or-v1-test",
+      "ai.model.chat": "openrouter://google/gemini-2.0-flash-001",
+    });
+    const tools = [{ name: "saveNote", description: "Saves a note.", schema: v.object({ text: v.string() }) }];
+    const stream = await aiService.streamChatWithTools({ userId, messages: [{ role: "user", content: "note: buy milk" }], tools });
+    const parts = [];
+    for await (const part of stream) parts.push(part);
+    expect(parts).toEqual([
+      { type: "text", text: "One moment. " },
+      { type: "toolCall", id: "call_1", name: "saveNote", arguments: { text: "buy milk" } },
+    ]);
+    expect(streamChatMock).toHaveBeenCalledTimes(1);
+    expect(streamChatMock).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "google/gemini-2.0-flash-001", tools }),
+    );
+  });
+
+  it("streamChatWithTools retries once with the parse error when arguments fail validation, then succeeds", async () => {
+    const streamChatMock = vi
+      .fn()
+      .mockImplementationOnce(async () => ({
+        async *[Symbol.asyncIterator]() {
+          yield { type: "toolCall" as const, id: "call_1", name: "saveNote", arguments: { text: 123 } };
+        },
+      }))
+      .mockImplementationOnce(async () => ({
+        async *[Symbol.asyncIterator]() {
+          yield { type: "toolCall" as const, id: "call_2", name: "saveNote", arguments: { text: "buy milk" } };
+        },
+      }));
+    const { settingsService, aiService } = await setup({}, { adapter: fakeAdapter({ streamChat: streamChatMock }) });
+    await settingsService.set(userId, {
+      "ai.openrouter.apiKey": "sk-or-v1-test",
+      "ai.model.chat": "openrouter://google/gemini-2.0-flash-001",
+    });
+    const tools = [{ name: "saveNote", description: "Saves a note.", schema: v.object({ text: v.string() }) }];
+    const stream = await aiService.streamChatWithTools({ userId, messages: [{ role: "user", content: "note: buy milk" }], tools });
+    const parts = [];
+    for await (const part of stream) parts.push(part);
+    expect(parts).toEqual([{ type: "toolCall", id: "call_2", name: "saveNote", arguments: { text: "buy milk" } }]);
+    expect(streamChatMock).toHaveBeenCalledTimes(2);
+    const secondCallArgs = streamChatMock.mock.calls[1]![0] as { messages: Array<{ role: string; content: string }> };
+    const lastMessage = secondCallArgs.messages.at(-1);
+    expect(lastMessage?.role).toBe("user");
+    expect(lastMessage?.content).toContain("invalid arguments");
+  });
+
+  it("streamChatWithTools reports ai.tool_call_invalid honestly after a second invalid attempt, without repairing anything", async () => {
+    const streamChatMock = vi.fn(async () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "toolCall" as const, id: "call_1", name: "saveNote", arguments: { text: 123 } };
+      },
+    }));
+    const { settingsService, aiService } = await setup({}, { adapter: fakeAdapter({ streamChat: streamChatMock }) });
+    await settingsService.set(userId, {
+      "ai.openrouter.apiKey": "sk-or-v1-test",
+      "ai.model.chat": "openrouter://google/gemini-2.0-flash-001",
+    });
+    const tools = [{ name: "saveNote", description: "Saves a note.", schema: v.object({ text: v.string() }) }];
+    await expectAppError(async () => {
+      const stream = await aiService.streamChatWithTools({ userId, messages: [{ role: "user", content: "note: buy milk" }], tools });
+      for await (const _part of stream) {
+        // drain
+      }
+    }, "ai.tool_call_invalid");
+    expect(streamChatMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("streamChatWithTools throws ai.tools_unsupported when the provider's adapter has no tool capability", async () => {
+    const registry = { ...aiProviderRegistry, openrouter: { ...aiProviderRegistry.openrouter!, capabilities: { ...aiProviderRegistry.openrouter!.capabilities, tools: false } } };
+    const { settingsService, aiService } = await setup({}, { registry });
+    await settingsService.set(userId, {
+      "ai.openrouter.apiKey": "sk-or-v1-test",
+      "ai.model.chat": "openrouter://google/gemini-2.0-flash-001",
+    });
+    const tools = [{ name: "saveNote", description: "Saves a note.", schema: v.object({ text: v.string() }) }];
+    await expectAppError(
+      () => aiService.streamChatWithTools({ userId, messages: [{ role: "user", content: "hi" }], tools }),
+      "ai.tools_unsupported",
+    );
+  });
+
+  it("streamChatWithTools throws ai.tools_unsupported when OpenRouter's model list reports the model does not support tools", async () => {
+    const adapter = fakeAdapter({
+      listModels: vi.fn(async () => [
+        { id: "google/gemini-2.0-flash-001", label: "Gemini 2.0 Flash", supportsTools: false },
+      ]),
+    });
+    const { settingsService, aiService } = await setup({}, { adapter });
+    await settingsService.set(userId, {
+      "ai.openrouter.apiKey": "sk-or-v1-test",
+      "ai.model.chat": "openrouter://google/gemini-2.0-flash-001",
+    });
+    const tools = [{ name: "saveNote", description: "Saves a note.", schema: v.object({ text: v.string() }) }];
+    await expectAppError(
+      () => aiService.streamChatWithTools({ userId, messages: [{ role: "user", content: "hi" }], tools }),
+      "ai.tools_unsupported",
+    );
+    expect(adapter.streamChat).not.toHaveBeenCalled();
+  });
+
+  it("supportsTools reports true for a capable provider and false when the provider or model cannot", async () => {
+    const { settingsService, aiService } = await setup();
+    await settingsService.set(userId, {
+      "ai.openrouter.apiKey": "sk-or-v1-test",
+      "ai.model.chat": "openrouter://google/gemini-2.0-flash-001",
+    });
+    expect(await aiService.supportsTools(userId)).toBe(true);
+
+    const noToolsAdapter = fakeAdapter({
+      listModels: vi.fn(async () => [{ id: "google/gemini-2.0-flash-001", label: "Gemini 2.0 Flash", supportsTools: false }]),
+    });
+    const { settingsService: settingsService2, aiService: aiService2 } = await setup({}, { adapter: noToolsAdapter });
+    await settingsService2.set(userId, {
+      "ai.openrouter.apiKey": "sk-or-v1-test",
+      "ai.model.chat": "openrouter://google/gemini-2.0-flash-001",
+    });
+    expect(await aiService2.supportsTools(userId)).toBe(false);
   });
 
   it("lists models with cache", async () => {

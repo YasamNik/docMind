@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createError } from "../../shared/errors/errors.js";
 import { createTestDatabase } from "../../shared/test/database.test-utils.js";
 import { aiSettingDefinitions } from "../ai/ai.settings.js";
-import type { AiAdapter, ModelInfo, StructuredResult, TestResult } from "../ai/ai.types.js";
+import type { AiAdapter, ChatStreamPart, ModelInfo, StructuredResult, TestResult } from "../ai/ai.types.js";
 import { createAiService } from "../ai/ai.usecases.js";
 import { aiProviderRegistry } from "../ai/providers/index.js";
 import { createChatService, type ChatService } from "../chat/chat.usecases.js";
@@ -29,6 +29,17 @@ function asyncIterableOf(chunks: string[]): AsyncIterable<string> {
   return {
     async *[Symbol.asyncIterator]() {
       for (const chunk of chunks) yield chunk;
+    },
+  };
+}
+
+// Wraps plain text chunks as the adapter's typed stream shape (see ai.types.ts). The
+// telegram service only ever gets plain text back from aiService.streamChat, which
+// unwraps this, so these tests still assert on plain concatenated strings.
+function asyncChatPartsOf(chunks: string[]): AsyncIterable<ChatStreamPart> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for (const chunk of chunks) yield { type: "text", text: chunk };
     },
   };
 }
@@ -193,7 +204,7 @@ beforeEach(async () => {
 
   // Not configured by default (no ai.model.chat), so a test that never touches the
   // assistant gets the same graceful "no model configured" path production would.
-  streamChatImpl = vi.fn(async () => asyncIterableOf(["Okay."]));
+  streamChatImpl = vi.fn(async () => asyncChatPartsOf(["Okay."]));
   const adapter = fakeChatAdapter();
   const aiService = createAiService({
     settingsService,
@@ -618,7 +629,7 @@ describe("telegram service, the assistant", () => {
   it("answers a question about a document, and says which one it used", async () => {
     await pairAndConfigureChat();
     await uploadWithChunk("lease.txt", "The lease renews on March 1st.");
-    streamChatImpl = vi.fn(async () => asyncIterableOf(["The lease renews March 1st [1]."]));
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf(["The lease renews March 1st [1]."]));
     const { client, sent } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "when does my lease renew?" })]] });
     const telegram = buildService(client);
 
@@ -632,7 +643,7 @@ describe("telegram service, the assistant", () => {
 
   it("answers an ordinary question without documents rather than refusing", async () => {
     await pairAndConfigureChat();
-    streamChatImpl = vi.fn(async () => asyncIterableOf(["Morning! Nothing on your plate that I can see."]));
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf(["Morning! Nothing on your plate that I can see."]));
     const { client, sent } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "good morning" })]] });
     const telegram = buildService(client);
 
@@ -645,7 +656,7 @@ describe("telegram service, the assistant", () => {
   it("keeps the thread, so a follow up understands what it refers to", async () => {
     await pairAndConfigureChat();
     let call = 0;
-    streamChatImpl = vi.fn(async () => asyncIterableOf([call++ === 0 ? "It's a Labrador." : "Yes, still a Labrador."]));
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf([call++ === 0 ? "It's a Labrador." : "Yes, still a Labrador."]));
     const { client } = fakeTelegram({
       batches: [
         [updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "what breed is my dog" })],
@@ -665,7 +676,7 @@ describe("telegram service, the assistant", () => {
 
   it("starts fresh after /new", async () => {
     await pairAndConfigureChat();
-    streamChatImpl = vi.fn(async () => asyncIterableOf(["Sure."]));
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf(["Sure."]));
     const { client, sent } = fakeTelegram({
       batches: [
         [updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "what breed is my dog" })],
@@ -687,7 +698,7 @@ describe("telegram service, the assistant", () => {
   it("splits an answer longer than a telegram message rather than truncating it", async () => {
     await pairAndConfigureChat();
     const longAnswer = "x".repeat(5000);
-    streamChatImpl = vi.fn(async () => asyncIterableOf([longAnswer]));
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf([longAnswer]));
     const { client, sent } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "tell me a long story" })]] });
     const telegram = buildService(client);
 
@@ -702,7 +713,7 @@ describe("telegram service, the assistant", () => {
     await settingsService.set(userId, { "telegram.botToken": "111:token" });
     await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
     await settingsService.setInternal(userId, "telegram.noteMigrationNoticeSent", true);
-    streamChatImpl = vi.fn(async () => asyncIterableOf(["should never be reached"]));
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf(["should never be reached"]));
     const { client, sent } = fakeTelegram({ batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "what is my rent" })]] });
     const telegram = buildService(client);
 
@@ -715,7 +726,7 @@ describe("telegram service, the assistant", () => {
 
   it("does not spend a model call on a bare ok or an emoji", async () => {
     await pairAndConfigureChat();
-    streamChatImpl = vi.fn(async () => asyncIterableOf(["should never be reached"]));
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf(["should never be reached"]));
     const { client, sent } = fakeTelegram({
       batches: [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "ok" })], [updateWithText({ updateId: 2, fromId: PAIRED_ID, text: "👍" })]],
     });
@@ -742,7 +753,7 @@ describe("telegram service, /web", () => {
 
   it("attaches web search for a /web question, and not for the next plain one", async () => {
     await pairAndConfigureChat();
-    streamChatImpl = vi.fn(async () => asyncIterableOf(["Around 5 degrees and cloudy in Ottawa today."]));
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf(["Around 5 degrees and cloudy in Ottawa today."]));
     const { client, sent } = fakeTelegram({
       batches: [
         [updateWithCommand({ updateId: 1, fromId: PAIRED_ID, command: "/web", argument: "what's the weather in ottawa" })],
@@ -768,7 +779,7 @@ describe("telegram service, /web", () => {
     });
     await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
     await settingsService.setInternal(userId, "telegram.noteMigrationNoticeSent", true);
-    streamChatImpl = vi.fn(async () => asyncIterableOf(["should never be reached"]));
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf(["should never be reached"]));
     const { client, sent } = fakeTelegram({
       batches: [[updateWithCommand({ updateId: 1, fromId: PAIRED_ID, command: "/web", argument: "what's the weather in ottawa" })]],
     });

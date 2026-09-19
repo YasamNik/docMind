@@ -53,6 +53,36 @@ function anthropicTextStream(deltas: string[]): Response {
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
+// Builds a raw named-SSE-event stream from the given event/data pairs, for tests that
+// need control over the exact sequence of content_block_start, content_block_delta,
+// and content_block_stop events a tool_use block produces.
+function anthropicRawEventStream(events: Array<{ event: string; data: unknown }>): Response {
+  const body = events.map(({ event, data }) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join("");
+  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+// The SDK's client-side message accumulator requires a well-formed message_start as
+// the first event of every stream, content array included, or it throws before any of
+// our own parsing runs.
+function messageStartEvent(): { event: string; data: unknown } {
+  return {
+    event: "message_start",
+    data: {
+      type: "message_start",
+      message: {
+        id: "msg_test",
+        type: "message",
+        role: "assistant",
+        model: "claude-sonnet-4-20250514",
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 10, output_tokens: 0 },
+      },
+    },
+  };
+}
+
 const mockFetch = vi.fn<typeof fetch>();
 
 beforeEach(() => {
@@ -140,9 +170,10 @@ describe("anthropic adapter", () => {
         ],
         maxTokens: 500,
       });
-      const chunks: string[] = [];
-      for await (const chunk of stream) chunks.push(chunk);
-      expect(chunks.join("")).toBe("Hello world");
+      const parts = [];
+      for await (const part of stream) parts.push(part);
+      expect(parts.every((p) => p.type === "text")).toBe(true);
+      expect(parts.map((p) => (p.type === "text" ? p.text : "")).join("")).toBe("Hello world");
 
       const [callUrl, callInit] = mockFetch.mock.calls[0] as [string, RequestInit];
       expect(callUrl).toBe("https://api.anthropic.com/v1/messages");
@@ -177,6 +208,70 @@ describe("anthropic adapter", () => {
       const [, callInit] = mockFetch.mock.calls[0] as [string, RequestInit];
       const callBody = JSON.parse(callInit.body as string) as { max_tokens: number };
       expect(callBody.max_tokens).toBe(4096);
+    });
+
+    it("sends a tools array built from the schema and assembles a tool call from fragmented input_json_delta events", async () => {
+      // Realistic wire shape: content_block_start opens the tool_use block with its id
+      // and name (input starts as an empty placeholder), the input then arrives split
+      // across three input_json_delta fragments, and content_block_stop closes it.
+      const events = [
+        messageStartEvent(),
+        { event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+        { event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Sure, one moment. " } } },
+        { event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+        {
+          event: "content_block_start",
+          data: { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_abc123", name: "searchWeb", input: {} } },
+        },
+        { event: "content_block_delta", data: { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "{\"query\":\"invoices " } } },
+        { event: "content_block_delta", data: { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "over $100\"," } } },
+        { event: "content_block_delta", data: { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "\"limit\":5}" } } },
+        { event: "content_block_stop", data: { type: "content_block_stop", index: 1 } },
+        { event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 12 } } },
+        { event: "message_stop", data: { type: "message_stop" } },
+      ];
+      mockFetch.mockResolvedValueOnce(anthropicRawEventStream(events));
+      const adapter = createAnthropicAdapter(config);
+      const schema = v.object({ query: v.string(), limit: v.number() });
+      const stream = await adapter.streamChat({
+        model: "claude-sonnet-4-20250514",
+        messages: [{ role: "user", content: "find invoices over $100" }],
+        tools: [{ name: "searchWeb", description: "Searches the web.", schema }],
+      });
+      const parts = [];
+      for await (const part of stream) parts.push(part);
+      expect(parts).toEqual([
+        { type: "text", text: "Sure, one moment. " },
+        { type: "toolCall", id: "toolu_abc123", name: "searchWeb", arguments: { query: "invoices over $100", limit: 5 } },
+      ]);
+
+      const [, callInit] = mockFetch.mock.calls[0] as [string, RequestInit];
+      const callBody = JSON.parse(callInit.body as string) as { tools: Array<{ name: string; description: string; input_schema: { type: string } }> };
+      expect(callBody.tools).toHaveLength(1);
+      expect(callBody.tools[0]).toMatchObject({ name: "searchWeb", description: "Searches the web.", input_schema: { type: "object" } });
+    });
+
+    it("hands back the raw string when the assembled tool_use input is not valid JSON", async () => {
+      const events = [
+        messageStartEvent(),
+        {
+          event: "content_block_start",
+          data: { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_broken", name: "saveNote", input: {} } },
+        },
+        { event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{not valid json" } } },
+        { event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+        { event: "message_stop", data: { type: "message_stop" } },
+      ];
+      mockFetch.mockResolvedValueOnce(anthropicRawEventStream(events));
+      const adapter = createAnthropicAdapter(config);
+      const stream = await adapter.streamChat({
+        model: "claude-sonnet-4-20250514",
+        messages: [{ role: "user", content: "note something" }],
+        tools: [{ name: "saveNote", description: "Saves a note.", schema: v.object({ text: v.string() }) }],
+      });
+      const parts = [];
+      for await (const part of stream) parts.push(part);
+      expect(parts).toEqual([{ type: "toolCall", id: "toolu_broken", name: "saveNote", arguments: "{not valid json" }]);
     });
   });
 
