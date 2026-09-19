@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
+import type { ToolDefinition } from "../ai/ai.types.js";
 import {
+  assistantTroubleReply,
+  buildAssistantPrompt,
+  commandTurnText,
   duplicateReply,
   ensureQuestionMark,
   missingNoteTextReply,
@@ -10,6 +14,7 @@ import {
   requireSession,
   resolveQuestion,
   textDocumentName,
+  toolsUnsupportedNotice,
 } from "./assistant.models.js";
 
 describe("assistant models", () => {
@@ -53,5 +58,41 @@ describe("assistant models", () => {
   it("refuses a session-bound helper with a plain-English error when there is no session", async () => {
     await expectAppError(() => requireSession({ sessionId: null }), "assistant.session_required");
     expect(requireSession({ sessionId: "sess_1" })).toBe("sess_1");
+  });
+
+  it("builds a tool-choosing prompt that lists every tool by name and description", () => {
+    const tools: ToolDefinition[] = [
+      { name: "answerFromDocuments", description: "Answer from the user's own documents.", schema: {} as ToolDefinition["schema"] },
+      { name: "startNewThread", description: "Clear the current conversation.", schema: {} as ToolDefinition["schema"] },
+    ];
+
+    const prompt = buildAssistantPrompt({ basePrompt: "Base prompt.", tools, writesWithheld: false });
+
+    expect(prompt).toContain("Base prompt.");
+    expect(prompt).toContain("answerFromDocuments");
+    expect(prompt).toContain("Answer from the user's own documents.");
+    expect(prompt).toContain("startNewThread");
+    expect(prompt).not.toMatch(/\/note/);
+  });
+
+  it("points to /note in the prompt when writes are withheld, and says nothing about it otherwise", () => {
+    const tools: ToolDefinition[] = [];
+    expect(buildAssistantPrompt({ basePrompt: "Base.", tools, writesWithheld: true })).toMatch(/\/note/);
+    expect(buildAssistantPrompt({ basePrompt: "Base.", tools, writesWithheld: false })).not.toMatch(/\/note/);
+  });
+
+  it("names Settings in the no-tools notice, since that is where to fix it", () => {
+    expect(toolsUnsupportedNotice()).toMatch(/settings/i);
+  });
+
+  it("reads differently from telegram's own generic trouble reply", () => {
+    expect(assistantTroubleReply()).not.toBe("Something went wrong on my end there. Try sending that again.");
+    expect(assistantTroubleReply().length).toBeGreaterThan(0);
+  });
+
+  it("labels a recorded command exchange from its own string argument", () => {
+    expect(commandTurnText({ tool: "searchWeb", args: { question: "weather today" } })).toBe("weather today");
+    expect(commandTurnText({ tool: "startNewThread", args: {} })).toBe("/startNewThread");
+    expect(commandTurnText({ tool: "startNewThread", args: undefined })).toBe("/startNewThread");
   });
 });

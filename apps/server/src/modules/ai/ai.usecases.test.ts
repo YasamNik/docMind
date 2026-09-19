@@ -2,60 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import * as v from "valibot";
 import pino from "pino";
 import { createTestDatabase } from "../../shared/test/database.test-utils.js";
+import { assertAlternatingRoles, fakeAdapter } from "../../shared/test/ai.test-utils.js";
 import { createSettingsRegistry, defineSetting } from "../settings/settings.registry.js";
 import { createSettingsService, type SettingsService } from "../settings/settings.usecases.js";
 import { createAiService } from "./ai.usecases.js";
 import { aiSettingDefinitions } from "./ai.settings.js";
 import { aiProviderRegistry } from "./providers/index.js";
-import type { AiAdapter, ChatMessage, ModelInfo, StructuredResult, TestResult } from "./ai.types.js";
+import type { AiAdapter, ModelInfo, StructuredResult, TestResult } from "./ai.types.js";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
 
 const silentLogger = pino({ level: "silent" });
-
-// Anthropic's Messages API requires the conversation to alternate strictly between
-// "user" and "assistant" turns and rejects two adjacent turns of the same role with a
-// 400. System-role entries are pulled out and sent separately (see anthropic.adapter.ts),
-// so they never take part in the adjacency check. This is a test-time guard, not
-// production code: it exists so a usecase test that builds a same-role adjacency by
-// mistake fails loudly here instead of only failing later, once, against a live provider.
-function assertAlternatingRoles(messages: ChatMessage[]): void {
-  const conversation = messages.filter((m) => m.role !== "system");
-  for (let i = 1; i < conversation.length; i++) {
-    const previous = conversation[i - 1]!;
-    const current = conversation[i]!;
-    if (previous.role === current.role) {
-      throw new Error(
-        `assertAlternatingRoles: two adjacent "${current.role}" turns at index ${i - 1} and ${i}. ` +
-          `Anthropic requires user/assistant turns to alternate.`,
-      );
-    }
-  }
-}
-
-function fakeAdapter(overrides: Partial<AiAdapter> = {}): AiAdapter {
-  return {
-    generateStructured: vi.fn(async () => ({
-      data: { items: [{ type: "tag", id: "t1", matched: true, confidence: 0.9, reasoning: "test" }] },
-      usage: { promptTokens: 100, completionTokens: 20 },
-    })),
-    streamText: vi.fn(async () => ({
-      async *[Symbol.asyncIterator]() { yield "hello"; },
-    })),
-    streamChat: vi.fn(async (args: { messages: ChatMessage[] }) => {
-      assertAlternatingRoles(args.messages);
-      return {
-        async *[Symbol.asyncIterator]() { yield { type: "text" as const, text: "hello" }; },
-      };
-    }),
-    embed: vi.fn(async () => ({ vectors: [[0.1, 0.2]], dimension: 2 })),
-    recognizeImage: vi.fn(async () => ({ text: "extracted text" })),
-    listModels: vi.fn(async () => [
-      { id: "test-model", label: "Test Model", contextLength: 8000 },
-    ] as ModelInfo[]),
-    testConnection: vi.fn(async () => ({ ok: true, latencyMs: 42, message: "Connected. 1 models available." }) as TestResult),
-    ...overrides,
-  };
-}
 
 async function setup(
   env: Record<string, string> = {},

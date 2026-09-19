@@ -47,6 +47,7 @@ import { registerRulesRoutes } from "./modules/rules/rules.routes.js";
 import { createRulesService } from "./modules/rules/rules.usecases.js";
 import { registerChatRoutes } from "./modules/chat/chat.routes.js";
 import { createChatService } from "./modules/chat/chat.usecases.js";
+import { createAssistantService } from "./modules/assistant/assistant.usecases.js";
 import { registerSearchRoutes } from "./modules/search/search.routes.js";
 import { createSearchService } from "./modules/search/search.usecases.js";
 import { registerSummaryRoutes } from "./modules/summary/summary.routes.js";
@@ -174,6 +175,10 @@ export function createServer({
   const summaryService = createSummaryService({ db, aiService });
   const fieldsRepository = createFieldsRepository({ db });
   const chatService = createChatService({ db, aiService, searchService });
+  // No route yet and no caller yet: Telegram moves onto runTurn and runCommand in the
+  // next task. allowWritingTools stays at its default of false (Decision 1 in the
+  // assistant triage plan) until chat_sessions.pending_tool_call exists.
+  const assistantService = createAssistantService({ chatService, documentsService, aiService, settingsService });
   const jobRunner = createJobRunner({
     db,
     handlers: { extraction: extractionService.handler, rules: rulesService.handler, embedding: searchService.handler, summarize: summaryService.handler },
@@ -260,6 +265,7 @@ export function createServer({
     summaryService,
     fieldsRepository,
     chatService,
+    assistantService,
     getUserId,
   };
 }

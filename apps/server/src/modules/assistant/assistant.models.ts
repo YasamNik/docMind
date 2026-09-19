@@ -1,4 +1,5 @@
 import { createError } from "../../shared/errors/errors.js";
+import type { ToolDefinition } from "../ai/ai.types.js";
 import type { AssistantSurface, ToolContext } from "./assistant.types.js";
 
 // textDocumentName, missingNoteTextReply and newThreadReply moved here from
@@ -72,4 +73,62 @@ export function requireSession(ctx: Pick<ToolContext, "sessionId">): string {
 export function resolveQuestion({ argument, userMessage }: { argument: string | undefined; userMessage: string }): string {
   const trimmed = argument?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : userMessage;
+}
+
+// The system prompt for a turn that can call a tool (assistant.usecases.ts, runTurn).
+// Built from the same records the adapters turn into wire-level tool specs, so a new
+// capability widens what the model is told about the moment it joins the registry,
+// with no line here ever naming which tool it is. basePrompt is the surface's own
+// prompt (TELEGRAM_ASSISTANT_SYSTEM_PROMPT today, CHAT_SYSTEM_PROMPT once plan 5 merges
+// the two), kept as an argument rather than hard-coded so that merge stays a one line
+// change at the call site instead of a rewrite here.
+export function buildAssistantPrompt({
+  basePrompt,
+  tools,
+  writesWithheld,
+}: {
+  basePrompt: string;
+  tools: ToolDefinition[];
+  writesWithheld: boolean;
+}): string {
+  const toolLines = tools.map((tool) => `- ${tool.name}: ${tool.description}`).join("\n");
+  const sections = [
+    basePrompt,
+    `You can act on the user's message by calling one of the tools below. Call at most one per message, only when it clearly fits what was asked; otherwise just reply in plain text.\n\n${toolLines}`,
+  ];
+  if (writesWithheld) {
+    sections.push(
+      "You cannot save or write anything yourself right now. If someone asks you to save, note down, or remember something in writing, tell them to send /note followed by the text, for example /note buy milk. Never claim to have saved something you did not.",
+    );
+  }
+  return sections.join("\n\n");
+}
+
+// Said once per configured chat model uri (Decision 9 in the assistant triage plan), not
+// once ever and not on every turn: the settings flag that remembers which model this was
+// last said for lives in assistant.settings.ts.
+export function toolsUnsupportedNotice(): string {
+  return "Heads up, the chat model configured right now does not support tools, so I can only answer from your documents. Switch the chat model in Settings to get the rest back.";
+}
+
+// The assistant's own generic failure reply, distinct from telegram.models.ts's
+// assistantTroubleReply (Decision 10 in the assistant triage plan): read differently on
+// purpose, since the two modules keep their own copies rather than one importing the
+// other.
+export function assistantTroubleReply(): string {
+  return "That did not work on my end. Try sending it again in a moment.";
+}
+
+// A tool-agnostic label for the user's half of a recorded command exchange
+// (assistant.usecases.ts, runCommand), so the turn runner never has to know which
+// capability's schema uses which field name. Every capability that records a turn takes
+// its main instruction as a single string argument; anything else falls back to the
+// bare command name so the history still shows something legible.
+export function commandTurnText({ tool, args }: { tool: string; args: unknown }): string {
+  if (args && typeof args === "object") {
+    for (const value of Object.values(args as Record<string, unknown>)) {
+      if (typeof value === "string" && value.trim().length > 0) return value;
+    }
+  }
+  return `/${tool}`;
 }
