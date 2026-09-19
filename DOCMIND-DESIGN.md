@@ -403,6 +403,41 @@ cites sources. Stream to the client. Save the message with source references.
 The knowledge wiki in a later phase sits above this: chat reads wiki pages first and
 falls back to raw chunks, citing both.
 
+## The Assistant
+
+Chat is not a question box. The same brain answers in the app and in Telegram, and it can
+act, not only reply. Specs: `docs/superpowers/specs/2026-09-19-telegram-assistant-design.md`
+and `docs/superpowers/specs/2026-09-19-assistant-instructions-design.md`.
+
+**Tool calling lives in the AI layer.** `streamChatWithTools` yields a typed stream,
+`{ type: "text" }` or `{ type: "toolCall" }`, and each adapter reassembles its own
+provider's wire format into that shape: OpenAI-style fragmented deltas that must be
+concatenated into valid JSON, Anthropic's discrete `tool_use` blocks. Arguments are parsed
+with the tool's valibot schema, a malformed call is retried once with the parse error fed
+back, and a second failure is reported as `ai.tool_call_invalid` rather than guessed at.
+`supportsTools` is checked before tools are offered, because a model that silently ignores
+them would make the assistant look like it worked while saving nothing.
+
+**Triage is tool choice, not a classify pass.** One model call picks the tool and writes
+the answer. A clarifying question is a tool (`askUser`), not a branch in our code. Slash
+commands bypass triage: someone who types `/note` means it.
+
+**Capabilities are records, not a switch.** Each tool is a registry entry: name, the
+description the model reads, a valibot schema, `writes`, `destructive`, and a handler.
+Reminders and calendar arrive as records, and the router does not change.
+
+**Every write proposes and waits.** The pending proposal lives in
+`chat_sessions.pending_tool_call` until it is answered, so the app (a stream event and a
+pair of buttons) and Telegram (an inline keyboard, which means the poll loop handles
+`callback_query`) share one mechanism. Deleting is always confirmed, and no instruction can
+loosen that: the guard is the `destructive` flag on the record, not a sentence in a prompt.
+
+**The user's standing instructions** are one markdown document in `chat.instructions`,
+appended to the system prompt each turn, versioned into `chat.instructionsHistory` (twenty
+versions), and refused above 8000 characters. The cap is enforced in code, because an
+unbounded document is unbounded cost on every message. Precedence is stated in the prompt:
+the user's instructions beat the defaults, and the code guards beat both.
+
 ## Delivery Phases
 
 Every phase ends with something the user runs daily. The full map with item numbers is
