@@ -102,12 +102,15 @@ than reinvent.
 
 ### 3. The instructions document
 
-One markdown document in `chat.instructions`, shipped with an editable default, appended to
-the system prompt every turn under a heading marking it as the user's standing
-instructions.
+One markdown document in `assistant.instructions`, shipped with an editable default,
+appended to the system prompt every turn under a heading marking it as the user's standing
+instructions. This document first drafted the key as `chat.instructions`; the implementation
+plan renamed it, because every settings key is prefixed with the module that owns it and the
+chat module never reads this document, only the assistant module's prompt builder and turn
+runner do.
 
-**Versioned.** Each save pushes the previous body onto `chat.instructionsHistory`, capped at
-twenty versions with timestamps. Settings are key value, so no migration.
+**Versioned.** Each save pushes the previous body onto `assistant.instructionsHistory`,
+capped at twenty versions with timestamps. Settings are key value, so no migration.
 
 **Capped, not merely warned about.** The first draft relied on a size warning, which the
 review correctly called protection that protects nothing: `MAX_CONTEXT_CHARS` bounds only
@@ -198,6 +201,9 @@ Sequenced by risk, first is the foundation:
 3. **Confirmation**: the column, the state machine, the new stream event, Telegram
    `callback_query`.
 4. **The instructions document**: storage, versioning, the enforced cap, the Settings editor.
+   `proposeInstruction`, the offer-to-write-a-rule tool from section 4, is the last task of
+   this plan and waits for plan 3's `pending_tool_call` and confirmation state machine before
+   it lands, the same way `saveNote` waited in plan 2.
 5. **Prompt unification and the client confirmation UI.**
 
 `DOCMIND-DESIGN.md` gains a section on this layer once plan 1 lands, since it currently says

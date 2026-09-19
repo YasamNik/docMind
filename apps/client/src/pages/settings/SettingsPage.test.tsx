@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "./SettingsPage";
@@ -50,6 +50,20 @@ vi.mock("@/lib/settings-api", () => ({
   },
 }));
 
+vi.mock("@/lib/assistant-api", () => ({
+  assistantApi: {
+    instructions: vi.fn(async () => ({
+      body: "Keep replies short.",
+      source: "default",
+      maxChars: 8000,
+      warnChars: 6000,
+      history: [],
+    })),
+    saveInstructions: vi.fn(),
+    restoreInstructions: vi.fn(),
+  },
+}));
+
 describe("SettingsPage", () => {
   it("shows AI tab with a provider card and the key status", async () => {
     render(
@@ -92,9 +106,22 @@ describe("SettingsPage", () => {
     const tabStrip = screen.getByRole("tablist");
     expect(tabStrip.className).toContain("overflow-x-auto");
     const tabs = screen.getAllByRole("tab");
-    expect(tabs).toHaveLength(5);
+    expect(tabs).toHaveLength(6);
     for (const tab of tabs) {
       expect(tab.className).toContain("shrink-0");
     }
+  });
+
+  it("shows the Assistant tab with the instructions document", async () => {
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={new QueryClient()}>
+          <SettingsPage />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    await screen.findAllByText("OpenRouter");
+    fireEvent.click(screen.getByRole("tab", { name: "Assistant" }));
+    expect(await screen.findByDisplayValue("Keep replies short.")).toBeInTheDocument();
   });
 });

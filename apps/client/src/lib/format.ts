@@ -26,3 +26,12 @@ export function formatDocumentDate(value: string | null) {
   const [, year, month, day] = match;
   return `${MONTH_NAMES[Number(month) - 1]} ${Number(day)}, ${year}`;
 }
+
+// A timestamp from the instructions history, shown as "19 Sep, 14:02" next to
+// "In use until" in the Assistant settings tab.
+export function formatReplacedAt(iso: string) {
+  const d = new Date(iso);
+  const hours = String(d.getHours()).padStart(2, "0");
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  return `${d.getDate()} ${MONTH_NAMES[d.getMonth()]}, ${hours}:${minutes}`;
+}

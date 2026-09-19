@@ -439,11 +439,35 @@ proposal. A slash command is unaffected either way, since typing `/note` is itse
 confirmation, not something triage decided on its own; `/note` writes immediately today
 and keeps doing so once the model can propose a write of its own.
 
-**The user's standing instructions** are one markdown document in `chat.instructions`,
-appended to the system prompt each turn, versioned into `chat.instructionsHistory` (twenty
-versions), and refused above 8000 characters. The cap is enforced in code, because an
-unbounded document is unbounded cost on every message. Precedence is stated in the prompt:
-the user's instructions beat the defaults, and the code guards beat both.
+**The user's standing instructions** are one markdown document in `assistant.instructions`,
+edited in Settings' Assistant tab and appended to the system prompt on every model call a
+turn makes, in the app and in Telegram. Both the body and its history live under the
+`assistant` module's own settings keys, not `chat`, because the chat module never reads
+this document: the assistant module's prompt builder and turn runner are what consume it.
+Each save versions the previous body into `assistant.instructionsHistory`, newest first,
+twenty kept; the twenty-first push drops the oldest. The document is refused above 8000
+characters on save, warned about from 6000 in the editor, and the cap is enforced in code
+because the document reaches every message and an unbounded document is unbounded cost.
+Both keys are `internal`, so only the assistant module's own routes can write them, which
+keeps the history complete: a write that skipped versioning would silently defeat the
+feature.
+
+Precedence is stated in the prompt: the user's document beats the defaults, and DocMind's
+own code beats both, because an instruction is a prompt and a prompt can be argued with.
+What the document can change and what it cannot, and where each guard actually lives:
+
+| Guard | Where it is |
+|-------|-------------|
+| Whether a writing tool is offered to the model at all | `allowWritingTools` filter, `createAssistantService` |
+| Whether a `destructive` capability skips its confirmation | the record's flag, read by the confirmation state machine |
+| Which capabilities exist, and their schemas | `assistant.registry.ts` |
+| That document text never reaches a call that can call a tool | `answerFromDocuments` doing its own retrieval |
+| The 8000 character cap and the twenty version history | `saveInstructions` |
+| That the settings API cannot write the document | `internal: true` |
+
+None of these move into the document, ever: the temptation on a future bug is to add a
+line to the default document instead of writing the guard, and this table is what settles
+that argument.
 
 ## Delivery Phases
 
