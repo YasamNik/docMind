@@ -133,7 +133,11 @@ const fetchLinkPageNotConfigured: FetchLinkPage = () => {
   throw new Error("this test sent a link but did not configure fetchLinkPage");
 };
 
-function buildService(client: TelegramClient, fetchLinkPage: FetchLinkPage = fetchLinkPageNotConfigured) {
+function buildService(
+  client: TelegramClient,
+  fetchLinkPage: FetchLinkPage = fetchLinkPageNotConfigured,
+  overrides: Partial<Parameters<typeof createTelegramService>[0]> = {},
+) {
   return createTelegramService({
     db,
     settingsService,
@@ -141,6 +145,10 @@ function buildService(client: TelegramClient, fetchLinkPage: FetchLinkPage = fet
     getUserId: async () => userId,
     clientFactory: () => client,
     fetchLinkPage,
+    // Zero rather than the real backoff, so a test exercising a poisoned update does
+    // not have to sit through real delays between retries.
+    updateRetryDelayMs: () => 0,
+    ...overrides,
   });
 }
 
@@ -381,6 +389,81 @@ describe("telegram service", () => {
     await expect(telegram.runOnce()).rejects.toThrow(/network blip/);
     await expect(telegram.runOnce()).resolves.toBeUndefined();
   });
+
+  // Regression test: handleUpdate throwing used to escape pollUpdatesOnce before the
+  // cursor advanced, so a single message that always fails held every later update in
+  // the same batch, and every future poll, hostage behind it.
+  it("keeps handling later updates in the same batch after an earlier one fails on every retry", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    const { client } = fakeTelegram({
+      batches: [
+        [
+          updateWithDocument({ updateId: 1, fromId: PAIRED_ID, fileId: "missing-file", fileName: "ghost.pdf" }),
+          updateWithText({ updateId: 2, fromId: PAIRED_ID, text: "a note that should still land" }),
+        ],
+      ],
+      // No fixture for "missing-file": getFile throws a plain Error every attempt.
+    });
+    const telegram = buildService(client);
+
+    await expect(telegram.runOnce()).resolves.toBeUndefined();
+
+    const documents = await documentsService.list({ userId });
+    expect(documents.map((d) => d.name)).toContain("a note that should still land.txt");
+  });
+
+  it("does not let a poisoned update block the next poll cycle", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    const { client, getUpdatesOffsets } = fakeTelegram({
+      batches: [
+        [updateWithDocument({ updateId: 5, fromId: PAIRED_ID, fileId: "missing-file", fileName: "ghost.pdf" })],
+        [updateWithText({ updateId: 6, fromId: PAIRED_ID, text: "still alive" })],
+      ],
+    });
+    const telegram = buildService(client);
+
+    await expect(telegram.runOnce()).resolves.toBeUndefined();
+    await expect(telegram.runOnce()).resolves.toBeUndefined();
+
+    expect(getUpdatesOffsets).toEqual([1, 6]);
+    const documents = await documentsService.list({ userId });
+    expect(documents.map((d) => d.name)).toContain("still alive.txt");
+  });
+
+  // Regression test: stop() used to await both loops with no bound, so a loop stuck on
+  // a call that never resolves kept the process's shutdown handler from ever finishing.
+  it("returns from stop() even when a loop is stuck, instead of hanging forever", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    const client: TelegramClient = {
+      async getUpdates() {
+        return new Promise(() => {});
+      },
+      async getFile() {
+        throw new Error("not used in this test");
+      },
+      async sendMessage() {},
+    };
+    const telegram = createTelegramService({
+      db,
+      settingsService,
+      documentsService,
+      getUserId: async () => userId,
+      clientFactory: () => client,
+      fetchLinkPage: fetchLinkPageNotConfigured,
+      idleIntervalMs: 10,
+      notifyIntervalMs: 10,
+      shutdownTimeoutMs: 50,
+    });
+
+    await telegram.start();
+    const startedAt = Date.now();
+    await telegram.stop();
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(elapsedMs).toBeLessThan(1000);
+  });
 });
 
 describe("telegram service, the second reply", () => {
@@ -522,6 +605,105 @@ describe("telegram service, the second reply", () => {
 
     expect(sent).toHaveLength(0);
     expect(await settingsService.get<string>(userId, "telegram.lastReportedAt")).not.toBe("");
+  });
+
+  // Regression test: the watermark used to be a plain createdAt string, so a document
+  // that lands at the exact same createdAt as the one already reported could never
+  // satisfy gt(createdAt, since) again and was dropped forever.
+  it("still reports a document that shares a createdAt with the one already reported", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    const repository = createDocumentsRepository({ db });
+    const sharedTimestamp = "2024-01-01T00:00:00.000Z";
+
+    const { document: docA } = await documentsService.upload({
+      userId,
+      name: "a.txt",
+      mimeType: "text/plain",
+      body: Readable.from(["a"]),
+      source: "telegram",
+    });
+    const { document: docB } = await documentsService.upload({
+      userId,
+      name: "b.txt",
+      mimeType: "text/plain",
+      body: Readable.from(["b"]),
+      source: "telegram",
+    });
+    for (const doc of [docA, docB]) {
+      await markSortedAndSummarized({ documentId: doc.id });
+      await repository.update({ userId, documentId: doc.id, patch: { createdAt: sharedTimestamp } });
+    }
+    // Sorted so the test does not depend on which of the two random ids happens to be
+    // smaller: the lexicographically earlier one is treated as already reported.
+    const [alreadyReported, stillPending] = [docA, docB].sort((x, y) => (x.id < y.id ? -1 : 1));
+    await settingsService.setInternal(userId, "telegram.lastReportedAt", sharedTimestamp);
+    await settingsService.setInternal(userId, "telegram.lastReportedId", alreadyReported.id);
+
+    const { client, sent } = fakeTelegram({ batches: [[]] });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toContain(stillPending.name);
+  });
+
+  // Regression test: the watermark used to be written once after the whole loop, so a
+  // send that threw partway through a batch caused every document sent before it to be
+  // announced again on the next attempt.
+  it("does not re-announce a document already sent when a later send in the same batch fails", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    await settingsService.setInternal(userId, "telegram.lastReportedAt", "2020-01-01T00:00:00.000Z");
+    const repository = createDocumentsRepository({ db });
+
+    const { document: docA } = await documentsService.upload({
+      userId,
+      name: "first.txt",
+      mimeType: "text/plain",
+      body: Readable.from(["first"]),
+      source: "telegram",
+    });
+    await markSortedAndSummarized({ documentId: docA.id });
+    await repository.update({ userId, documentId: docA.id, patch: { createdAt: "2024-01-01T00:00:00.000Z" } });
+
+    const { document: docB } = await documentsService.upload({
+      userId,
+      name: "second.txt",
+      mimeType: "text/plain",
+      body: Readable.from(["second"]),
+      source: "telegram",
+    });
+    await markSortedAndSummarized({ documentId: docB.id });
+    await repository.update({ userId, documentId: docB.id, patch: { createdAt: "2024-01-01T00:00:01.000Z" } });
+
+    const sent: { chatId: number; text: string }[] = [];
+    let sendCount = 0;
+    const client: TelegramClient = {
+      async getUpdates() {
+        return [];
+      },
+      async getFile() {
+        throw new Error("not used in this test");
+      },
+      async sendMessage({ chatId, text }) {
+        sendCount += 1;
+        if (sendCount === 2) throw new Error("blocked by user, simulated");
+        sent.push({ chatId, text });
+      },
+    };
+    const telegram = buildService(client);
+
+    await expect(telegram.runOnce()).rejects.toThrow(/blocked by user/);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toContain("first.txt");
+
+    // The second send now succeeds, on a later cycle.
+    await telegram.runOnce();
+
+    expect(sent.filter((m) => m.text.includes("first.txt"))).toHaveLength(1);
+    expect(sent.some((m) => m.text.includes("second.txt"))).toBe(true);
   });
 });
 

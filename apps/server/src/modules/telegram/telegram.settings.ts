@@ -47,6 +47,13 @@ export const telegramSettingDefinitions: SettingDefinition[] = [
     default: "",
     doc: "Timestamp of the newest telegram-sourced document already announced by the second reply.",
   }),
+  defineSetting({
+    key: "telegram.lastReportedId",
+    schema: v.string(),
+    internal: true,
+    default: "",
+    doc: "Id of the document at telegram.lastReportedAt, so two documents that share that exact timestamp cannot make the second one invisible to the watermark forever.",
+  }),
   // Not in the original spec table: the compressed-photo notice must be said once
   // ever, not once per process, so it needs its own persisted flag. Settings are a
   // plain key/value store, so this needs no migration, the same reasoning the AI

@@ -55,6 +55,14 @@ function backoffDelayMs(attempt: number): number {
   return Math.min(1000 * 2 ** Math.max(0, attempt - 1), 60000);
 }
 
+// A short, capped delay between retries of the same update, distinct from
+// backoffDelayMs above: that one paces whole failed cycles up to a minute apart, this
+// one only smooths over a blip such as one failed sendMessage call, so it stays under
+// a couple of seconds even at its ceiling.
+function defaultUpdateRetryDelayMs(attempt: number): number {
+  return Math.min(250 * 2 ** Math.max(0, attempt - 1), 2000);
+}
+
 export type FetchLinkPage = (args: { url: string }) => Promise<{ title: string; text: string; finalUrl: string }>;
 
 export function createTelegramService({
@@ -69,6 +77,11 @@ export function createTelegramService({
   idleIntervalMs = 1000,
   notifyIntervalMs = 3000,
   appBaseUrl = "http://localhost:5173",
+  // Matches the jobs module's own default maxAttempts, so the retry policy for a
+  // failing background unit of work is the same number everywhere in the app.
+  updateRetryAttempts = 3,
+  updateRetryDelayMs = defaultUpdateRetryDelayMs,
+  shutdownTimeoutMs = 5000,
 }: {
   db: Database;
   settingsService: SettingsService;
@@ -91,6 +104,19 @@ export function createTelegramService({
   // Where the app is reachable from a phone, so the second reply can link straight to
   // the document rather than just naming it.
   appBaseUrl?: string;
+  // How many times a single update is retried, in place, before pollUpdatesOnce gives
+  // up and skips it. Bounded so one message that always fails, or a sendMessage that
+  // always errors because the user blocked the bot, can cost at most itself rather than
+  // jamming every later update behind it forever.
+  updateRetryAttempts?: number;
+  // Delay before each retry, by attempt number starting at 1. Overridable so a test
+  // exercising a poisoned update does not have to sit through real delays.
+  updateRetryDelayMs?: (attempt: number) => number;
+  // How long stop() waits for both loops to finish their current cycle before it gives
+  // up on the wait. A getUpdates call or a send that never returns must not keep the
+  // process's shutdown handler from ever completing: index.ts calls process.exit right
+  // after stop() regardless, so a loop still running past this deadline costs nothing.
+  shutdownTimeoutMs?: number;
 }) {
   // Read directly rather than through documentsService: the second reply asks a
   // question ("which of my documents just finished") no route or upload flow needs,
@@ -246,15 +272,19 @@ export function createTelegramService({
     const pairedUserId = await settingsService.get<number>(userId, "telegram.pairedUserId");
     if (pairedUserId === undefined) return;
 
-    const stored = await settingsService.get<string>(userId, "telegram.lastReportedAt");
-    const isFirstRun = !stored;
+    const storedAt = await settingsService.get<string>(userId, "telegram.lastReportedAt");
+    const isFirstRun = !storedAt;
     // A brand new watcher must not announce the whole existing library the moment
     // someone pairs, so it starts its watermark at now and only reports what finishes
     // after that, the same way a new subscriber does not get every past post at once.
-    const since = isFirstRun ? new Date().toISOString() : stored;
-    if (isFirstRun) await settingsService.setInternal(userId, "telegram.lastReportedAt", since);
+    const since = isFirstRun ? new Date().toISOString() : storedAt;
+    const storedId = isFirstRun ? "" : await settingsService.get<string>(userId, "telegram.lastReportedId");
+    if (isFirstRun) {
+      await settingsService.setInternal(userId, "telegram.lastReportedAt", since);
+      await settingsService.setInternal(userId, "telegram.lastReportedId", "");
+    }
 
-    const finished = await documentsRepository.listFinishedSince({ userId, source: "telegram", since });
+    const finished = await documentsRepository.listFinishedSince({ userId, source: "telegram", since, sinceId: storedId || undefined });
     for (const document of finished) {
       const text = finishedDocumentReply({
         name: document.name,
@@ -265,10 +295,13 @@ export function createTelegramService({
         summaryFailed: document.summaryStatus === "failed",
       });
       await client.sendMessage({ chatId: pairedUserId, text });
+      // Persisted right after this one send, not once after the whole loop: if a later
+      // send in this same batch throws, the watermark must already sit past every
+      // document already announced, the same reasoning pollUpdatesOnce uses for its own
+      // per-update cursor, or the next attempt announces them all over again.
+      await settingsService.setInternal(userId, "telegram.lastReportedAt", document.createdAt);
+      await settingsService.setInternal(userId, "telegram.lastReportedId", document.id);
     }
-
-    const last = finished.at(-1);
-    if (last) await settingsService.setInternal(userId, "telegram.lastReportedAt", last.createdAt);
   }
 
   // Shared by pollUpdatesOnce and notifyOnce so each resolves the sole user and the
@@ -294,13 +327,37 @@ export function createTelegramService({
 
     for (const raw of updates) {
       const parsed = v.safeParse(telegramUpdateSchema, raw);
-      // A crash while handling one update must not replay updates already confirmed:
-      // the cursor advances right here, after this one is fully handled, not once for
-      // the whole batch. A thrown error skips the advance below and stops the loop for
-      // this cycle, so Telegram redelivers exactly this update and nothing earlier.
-      if (parsed.success) await handleUpdate({ userId, client, update: parsed.output });
-
       const updateId = readUpdateId(raw);
+
+      // A failing update gets a few immediate retries right here, in this same call,
+      // since a blip such as one failed sendMessage often clears within a second or
+      // two. If it is still failing after updateRetryAttempts, it is logged and skipped
+      // rather than left to jam every update behind it: the cursor advances below
+      // either way, so one message that always errors, or a user who blocked the bot,
+      // costs at most this one message instead of stopping the loop for good.
+      if (parsed.success) {
+        let handled = false;
+        let lastError: unknown;
+        for (let attempt = 1; attempt <= updateRetryAttempts && !handled; attempt += 1) {
+          try {
+            await handleUpdate({ userId, client, update: parsed.output });
+            handled = true;
+          } catch (error) {
+            lastError = error;
+            if (attempt < updateRetryAttempts) await new Promise((resolve) => setTimeout(resolve, updateRetryDelayMs(attempt)));
+          }
+        }
+        if (!handled) {
+          logger.warn(
+            { updateId, attempts: updateRetryAttempts, err: (lastError as Error)?.message ?? String(lastError) },
+            "Telegram update failed on every retry, skipping it",
+          );
+        }
+      }
+
+      // The cursor advances here, after this update is either handled or given up on,
+      // not once for the whole batch, so a later update never gets replayed on top of
+      // work already done for an earlier one.
       if (updateId !== undefined) await settingsService.setInternal(userId, "telegram.lastUpdateId", updateId);
     }
   }
@@ -354,7 +411,14 @@ export function createTelegramService({
 
   async function stop() {
     running = false;
-    await Promise.all([pollLoop, notifyLoop]);
+    const timedOut = Symbol("telegram-shutdown-timeout");
+    const outcome = await Promise.race([
+      Promise.all([pollLoop, notifyLoop]).then(() => "stopped" as const),
+      new Promise<typeof timedOut>((resolve) => setTimeout(() => resolve(timedOut), shutdownTimeoutMs)),
+    ]);
+    if (outcome === timedOut) {
+      logger.warn({ shutdownTimeoutMs }, "Telegram loop still running past the shutdown deadline, no longer waiting on it");
+    }
     pollLoop = null;
     notifyLoop = null;
   }

@@ -220,13 +220,22 @@ export function createDocumentsRepository({ db }: { db: Database }) {
       userId,
       source,
       since,
+      sinceId,
       limit = 20,
     }: {
       userId: string;
       source: string;
       since: string;
+      // Id of the document at `since`, so the cursor matches the query's own
+      // (createdAt, id) order. Without it, two documents sharing the exact createdAt
+      // at the watermark would mean the one not yet reported can never satisfy a plain
+      // gt(createdAt, since) again. Left undefined only for a watermark with no id yet.
+      sinceId?: string;
       limit?: number;
     }): Promise<DocumentListRow[]> {
+      const pastWatermark = sinceId
+        ? or(gt(documentsTable.createdAt, since), and(eq(documentsTable.createdAt, since), gt(documentsTable.id, sinceId)))!
+        : gt(documentsTable.createdAt, since);
       const rows = await db
         .select(listColumns)
         .from(documentsTable)
@@ -237,7 +246,7 @@ export function createDocumentsRepository({ db }: { db: Database }) {
             isNull(documentsTable.deletedAt),
             inArray(documentsTable.summaryStatus, ["done", "failed"]),
             inArray(documentsTable.ruleStatus, ["done", "failed"]),
-            gt(documentsTable.createdAt, since),
+            pastWatermark,
           ),
         )
         .orderBy(asc(documentsTable.createdAt), asc(documentsTable.id))
