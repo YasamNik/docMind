@@ -1,7 +1,5 @@
 import { basename } from "node:path";
 import { createError } from "../../shared/errors/errors.js";
-import type { Database } from "../database/database.js";
-import { createDocumentsRepository } from "../documents/documents.repository.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
 import { storageDriverRegistry, type StorageDriverId } from "./storage.registry.js";
 import type { StorageDriverDefinition } from "./storage.types.js";
@@ -24,9 +22,16 @@ export function buildStorageKey({
   return `${userId}/${yyyy}/${mm}/${documentId}/${safe}`;
 }
 
-export function createStorageService({ settingsService, db }: { settingsService: SettingsService; db: Database }) {
-  const documentsRepository = createDocumentsRepository({ db });
-
+export function createStorageService({
+  settingsService,
+  countDocuments,
+}: {
+  settingsService: SettingsService;
+  // Storage is a foundational module; it does not depend on the documents repository.
+  // The caller supplies this narrow count function from whatever repository it already
+  // has, instead of storage building its own copy of it.
+  countDocuments: (args: { userId: string; storageDriver: string }) => Promise<number>;
+}) {
   // A driver is ready when nothing it cannot invent is missing. Settings that carry a
   // default (prefix, path style) are never the reason a driver is unusable, so only the
   // ones without one are checked.
@@ -64,7 +69,7 @@ export function createStorageService({ settingsService, db }: { settingsService:
           label: definition.label,
           guide: definition.guide,
           configured: await isConfigured({ definition, userId }),
-          documentCount: await documentsRepository.countByUser({ userId, view: "all", storageDriver: definition.id }),
+          documentCount: await countDocuments({ userId, storageDriver: definition.id }),
           active: definition.id === active,
         })),
       );

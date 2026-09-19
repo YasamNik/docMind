@@ -19,6 +19,7 @@ import type { AdapterConfig } from "./modules/ai/adapters/adapter.types.js";
 import type { AiAdapter } from "./modules/ai/ai.types.js";
 import { parseModelUri } from "./modules/ai/ai.models.js";
 import { registerDocumentsRoutes } from "./modules/documents/documents.routes.js";
+import { createDocumentsRepository } from "./modules/documents/documents.repository.js";
 import { createDocumentsService } from "./modules/documents/documents.usecases.js";
 import { createImageExtractor } from "./modules/extraction/extractors/image.extractor.js";
 import { docxExtractor } from "./modules/extraction/extractors/docx.extractor.js";
@@ -144,7 +145,13 @@ export function createServer({
       },
     },
   });
-  const storageService = createStorageService({ settingsService, db });
+  // Storage is a foundational module and does not depend on documents. The count it
+  // needs per driver is supplied here from the documents repository instead.
+  const documentsRepository = createDocumentsRepository({ db });
+  const storageService = createStorageService({
+    settingsService,
+    countDocuments: ({ userId, storageDriver }) => documentsRepository.countByUser({ userId, view: "all", storageDriver }),
+  });
   const registry = createExtractorRegistry([textExtractor, pdfExtractor, docxExtractor, xlsxExtractor, pptxExtractor, createImageExtractor(ocrEngine)]);
   const jobsService = createJobsService({ db });
   const documentsService = createDocumentsService({

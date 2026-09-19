@@ -96,6 +96,21 @@ describe("s3 driver extras", () => {
     expect(driver.describeLocation({ key: "user_1/a.pdf" }).label).toBe("s3://docs/docmind/user_1/a.pdf");
   });
 
+  it("reports a healthy write even when the probe cleanup delete fails", async () => {
+    const { client: baseClient } = createFakeS3();
+    const client = {
+      ...baseClient,
+      send: async (command: unknown) => {
+        if (command instanceof DeleteObjectCommand) {
+          throw Object.assign(new Error("Access denied"), { $metadata: { httpStatusCode: 403 } });
+        }
+        return baseClient.send(command);
+      },
+    } as never;
+    const driver = createS3Driver({ bucket: "docs", region: "auto", prefix: "docmind/", client });
+    expect(await driver.healthCheck()).toMatchObject({ ok: true });
+  });
+
   it("round trips a body larger than one multipart chunk", async () => {
     const driver = createS3Driver({ bucket: "docs", region: "auto", prefix: "docmind/", client });
     const big = Buffer.alloc(6 * 1024 * 1024, "x");

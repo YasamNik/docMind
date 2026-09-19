@@ -27,7 +27,7 @@ describe("storage service", () => {
       registry: createSettingsRegistry(storageSettingDefinitions),
       config: { settingsEncryptionKey: "ef".repeat(32), env: { DOCUMENT_STORAGE_ROOT: "/tmp/docmind-test-root" } },
     });
-    const storage = createStorageService({ settingsService, db });
+    const storage = createStorageService({ settingsService, countDocuments: async () => 0 });
     expect(await storage.getActiveDriverId("u1")).toBe("local");
     const driver = await storage.getActiveDriver("u1");
     expect(driver.id).toBe("local");

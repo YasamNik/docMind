@@ -7,7 +7,7 @@ export const activeDriverSetting = defineSetting({
   schema: v.picklist(storageDriverIds),
   env: "STORAGE_DRIVER",
   default: "local",
-  doc: "Which storage driver receives new uploads.",
+  doc: "Which storage driver receives new uploads. It is also the storage the library shows and the only one whose files can be opened.",
 });
 
 export const storageSettingDefinitions = [

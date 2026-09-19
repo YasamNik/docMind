@@ -78,10 +78,17 @@ export function createS3Driver({
         await client.send(new HeadBucketCommand({ Bucket: bucket }));
         // HeadBucket only proves the bucket is reachable. A read-only credential would
         // pass that check and then fail on the first real upload, so a probe object is
-        // written and removed here to prove the credential can actually write.
+        // written here to prove the credential can actually write.
         const probeKey = fullKey(prefix, ".docmind-health");
         await client.send(new PutObjectCommand({ Bucket: bucket, Key: probeKey, Body: Buffer.from("ok") }));
-        await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: probeKey }));
+        // Cleanup is best effort. A credential that can write but not delete must not
+        // turn a successful write check into a reported failure, and the probe object
+        // must never survive a single Test click due to a swallowed delete error.
+        try {
+          await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: probeKey }));
+        } catch {
+          // Ignored: the write already succeeded, which is what this check reports on.
+        }
         return { ok: true, message: `Reachable and writable: s3://${bucket}/${prefix}` };
       } catch (error) {
         return { ok: false, message: `Cannot reach bucket "${bucket}": ${(error as Error).message}` };
