@@ -31,7 +31,7 @@ beforeEach(async () => {
     registry: createSettingsRegistry(storageSettingDefinitions),
     config: { settingsEncryptionKey: "22".repeat(32), env: { DOCUMENT_STORAGE_ROOT: root } },
   });
-  storageService = createStorageService({ settingsService, db });
+  storageService = createStorageService({ settingsService, countDocuments: async () => 0 });
   documents = createDocumentsService({ db, storageService });
 });
 afterEach(() => rm(root, { recursive: true, force: true }));
@@ -187,6 +187,50 @@ describe("documents service filters and enrichment", () => {
 
     // The metadata is knowledge and stays reachable.
     expect((await documents.get({ userId, documentId: document.id })).id).toBe(document.id);
+  });
+
+  it("refuses to open a file whose driver cannot be built, and still names the storage without a location", async () => {
+    const { document } = await documents.upload({ userId, name: "elsewhere.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    // No s3 settings configured this time, so building the driver to describe the
+    // location fails with storage.driver_not_configured. The guard must not leak that
+    // and must still refuse the read.
+    await db.run(sql`update documents set storage_driver = 's3' where id = ${document.id}`);
+
+    let caught: unknown;
+    try {
+      await documents.openFile({ userId, documentId: document.id });
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as { code: string } | undefined)?.code).toBe("documents.storage_inactive");
+    expect((caught as Error).message).toContain("s3");
+    expect((caught as Error).message).not.toContain("s3://");
+  });
+
+  it("get() reports a null storage location while the document is on the active storage", async () => {
+    const { document } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    const detail = await documents.get({ userId, documentId: document.id });
+    expect(detail.storageLocation).toBeNull();
+  });
+
+  it("get() includes the storage location computed from the document's own driver when it is off the active storage", async () => {
+    const { document } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    await settingsService.set(userId, {
+      "storage.s3.bucket": "test-bucket",
+      "storage.s3.region": "us-east-1",
+      "storage.s3.accessKeyId": "test-key",
+      "storage.s3.secretAccessKey": "test-secret",
+    });
+    await db.run(sql`update documents set storage_driver = 's3' where id = ${document.id}`);
+    const detail = await documents.get({ userId, documentId: document.id });
+    expect(detail.storageLocation).toMatchObject({ label: expect.stringContaining("a.txt") });
+  });
+
+  it("get() reports a null storage location when the document is off the active storage and its driver cannot be built", async () => {
+    const { document } = await documents.upload({ userId, name: "a.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
+    await db.run(sql`update documents set storage_driver = 's3' where id = ${document.id}`);
+    const detail = await documents.get({ userId, documentId: document.id });
+    expect(detail.storageLocation).toBeNull();
   });
 
   it("filters by categoryId including descendants, and by tagId", async () => {

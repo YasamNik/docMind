@@ -30,23 +30,40 @@ export function createDocumentsService({
     return document;
   }
 
+  // A document on the active storage has its bytes reachable right here, so there is
+  // nothing to point at. Building the driver just to describe where a file sits can
+  // itself fail, for example when a driver's settings were cleared after it held
+  // documents. That must never block reading the record: it just means the location
+  // cannot be shown.
+  async function describeStorageLocation(userId: string, document: Document) {
+    const active = await storageService.getActiveDriverId(userId);
+    if (document.storageDriver === active) return null;
+    try {
+      const driver = await storageService.getDriver(userId, document.storageDriver);
+      return driver.describeLocation({ key: document.storageKey });
+    } catch {
+      return null;
+    }
+  }
+
   async function getEnrichedOrThrow(userId: string, documentId: string) {
     const row = await repository.findByIdWithExtras({ userId, documentId });
     if (!row || row.deletedAt) throw notFound(documentId);
-    return row;
+    const storageLocation = await describeStorageLocation(userId, row);
+    return { ...row, storageLocation };
   }
 
   // The bytes need their storage, the metadata does not. A document on an inactive
   // storage stays fully readable as a record and refuses only the file itself, with
-  // the original's location in the message so the user can go and get it.
+  // the original's location in the message when it can be worked out.
   async function requireActiveStorage(userId: string, document: Document) {
     const active = await storageService.getActiveDriverId(userId);
     if (document.storageDriver === active) return;
-    const driver = await storageService.getDriver(userId, document.storageDriver);
-    const location = driver.describeLocation({ key: document.storageKey });
+    const location = await describeStorageLocation(userId, document);
+    const whereItIs = location ? ` The original is at ${location.label}.` : "";
     throw createError({
       code: "documents.storage_inactive",
-      message: `This file is stored on ${document.storageDriver}, which is not the active storage. The original is at ${location.label}.`,
+      message: `This file is stored on ${document.storageDriver}, which is not the active storage.${whereItIs}`,
       status: 409,
     });
   }

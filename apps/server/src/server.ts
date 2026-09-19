@@ -164,7 +164,7 @@ export function createServer({
   const aiService = createAiService({ settingsService, registry: aiProviderRegistry, adapterFactories });
   const tagsService = createTagsService({ db, aiService });
   const rulesService = createRulesService({ db, aiService, documentsService });
-  const extractionService: ExtractionService = createExtractionService({ db, documentsService, settingsService, registry, rulesService, aiService });
+  const extractionService: ExtractionService = createExtractionService({ db, documentsService, settingsService, registry, rulesService, aiService, storageService });
   const searchService = createSearchService({ db, aiService, settingsService });
   const summaryService = createSummaryService({ db, aiService });
   const fieldsRepository = createFieldsRepository({ db });
