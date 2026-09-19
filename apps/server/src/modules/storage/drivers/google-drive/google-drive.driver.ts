@@ -278,10 +278,21 @@ export const googleDriveDriverDefinition: StorageDriverDefinition = {
     const clientSecret = await settings.get<string>(userId, "storage.googleDrive.clientSecret");
     const refreshToken = await settings.get<string>(userId, "storage.googleDrive.refreshToken");
 
-    if (!clientId || !clientSecret || !refreshToken) {
+    // Named separately because the three are reached in order and the user is only ever
+    // missing the next one. A single message listing all three reads as though the work
+    // already done does not count.
+    if (!clientId || !clientSecret) {
       throw createError({
         code: "storage.driver_not_configured",
-        message: "The Google Drive driver needs a client id and secret, and a completed connection, before it can be used.",
+        message: "Google Drive needs a client id and client secret from your Google Cloud project. Add them below, then press Connect.",
+        status: 400,
+      });
+    }
+
+    if (!refreshToken) {
+      throw createError({
+        code: "storage.driver_not_configured",
+        message: "Google Drive is not connected yet. Press Connect and approve access to your Drive.",
         status: 400,
       });
     }
