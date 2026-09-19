@@ -1,4 +1,5 @@
 import { randomInt } from "node:crypto";
+import type { ProposalAnswer } from "../assistant/assistant.types.js";
 import type { TelegramMessage, TelegramMessageEntity, TelegramUpdate } from "./telegram.schemas.js";
 
 // Pure mapping from a validated Telegram update to what the loop should do about it.
@@ -224,6 +225,37 @@ export function isAnsweringAQuestion(lastAssistantMessage: string | undefined): 
 // to try again.
 export function assistantTroubleReply(): string {
   return "Something went wrong on my end there. Try sending that again.";
+}
+
+// The inline keyboard shape Telegram's sendMessage and editMessageReplyMarkup both
+// accept, one row of buttons per array entry. A confirmation only ever needs one row.
+export type TelegramInlineKeyboard = { inline_keyboard: { text: string; callback_data: string }[][] };
+
+// One row, Yes then No, carrying the proposal's own id rather than the chat or message
+// id (assistant confirmation plan, Task 3): matching by id is what tells a stale button
+// apart from the one actually waiting. c:<id>:y or c:<id>:n, comfortably inside
+// Telegram's 64 byte callback_data cap for a prop_<12 hex> id.
+export function confirmationKeyboard(proposalId: string): TelegramInlineKeyboard {
+  return {
+    inline_keyboard: [
+      [
+        { text: "Yes", callback_data: `c:${proposalId}:y` },
+        { text: "No", callback_data: `c:${proposalId}:n` },
+      ],
+    ],
+  };
+}
+
+// The inverse of confirmationKeyboard. Anything else, including empty, missing, or a
+// different prefix, is not a confirmation callback and reads as null rather than a
+// best guess: untrusted input straight off the network gets no benefit of the doubt.
+export function parseConfirmationCallback(data: string | undefined): { proposalId: string; decision: ProposalAnswer } | null {
+  if (!data) return null;
+  const match = /^c:([^:]+):(y|n)$/.exec(data);
+  if (!match) return null;
+  const [, proposalId, code] = match;
+  if (!proposalId) return null;
+  return { proposalId, decision: code === "y" ? "yes" : "no" };
 }
 
 // A refusal from the link guard already reads like a sentence a person can act on,

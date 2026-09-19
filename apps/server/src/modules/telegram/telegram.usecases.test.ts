@@ -24,6 +24,7 @@ import { storageSettingDefinitions } from "../storage/storage.settings.js";
 import { createStorageService } from "../storage/storage.usecases.js";
 import { createTagsService } from "../tags/tags.usecases.js";
 import type { TelegramClient } from "./telegram.client.js";
+import { acknowledgementReply, type TelegramInlineKeyboard } from "./telegram.models.js";
 import { telegramSettingDefinitions } from "./telegram.settings.js";
 import { createTelegramService, type FetchLinkPage } from "./telegram.usecases.js";
 
@@ -72,7 +73,9 @@ const OTHER_ID = 222;
 type FileFixture = { content: string; fileName?: string } | { tooLarge: true };
 
 function fakeTelegram({ batches, files = {} }: { batches: (unknown[] | Error)[]; files?: Record<string, FileFixture> }) {
-  const sent: { chatId: number; text: string }[] = [];
+  const sent: { chatId: number; text: string; replyMarkup?: TelegramInlineKeyboard }[] = [];
+  const answeredCallbacks: { callbackQueryId: string; text?: string }[] = [];
+  const removedKeyboards: { chatId: number; messageId: number }[] = [];
   const getUpdatesOffsets: number[] = [];
   let batchIndex = 0;
 
@@ -92,12 +95,18 @@ function fakeTelegram({ batches, files = {} }: { batches: (unknown[] | Error)[];
       }
       return { stream: Readable.from([fixture.content]), fileName: fixture.fileName ?? "file.bin", sizeBytes: fixture.content.length };
     },
-    async sendMessage({ chatId, text }) {
-      sent.push({ chatId, text });
+    async sendMessage({ chatId, text, replyMarkup }) {
+      sent.push({ chatId, text, replyMarkup });
+    },
+    async answerCallbackQuery({ callbackQueryId, text }) {
+      answeredCallbacks.push({ callbackQueryId, text });
+    },
+    async editMessageReplyMarkup({ chatId, messageId }) {
+      removedKeyboards.push({ chatId, messageId });
     },
   };
 
-  return { client, sent, getUpdatesOffsets };
+  return { client, sent, answeredCallbacks, removedKeyboards, getUpdatesOffsets };
 }
 
 function updateWithText({ updateId, fromId, text }: { updateId: number; fromId: number; text: string }) {
@@ -165,6 +174,23 @@ function updateWithLink({ updateId, fromId, url }: { updateId: number; fromId: n
       text: url,
       entities: [{ type: "url", offset: 0, length: url.length }],
     },
+  };
+}
+
+function updateWithCallback({
+  updateId,
+  fromId,
+  data,
+  messageId = 900,
+}: {
+  updateId: number;
+  fromId: number;
+  data: string | undefined;
+  messageId?: number;
+}) {
+  return {
+    update_id: updateId,
+    callback_query: { id: `cbq_${updateId}`, from: { id: fromId, first_name: "Alex" }, message: { message_id: messageId, chat: { id: fromId } }, data },
   };
 }
 
@@ -639,6 +665,8 @@ describe("telegram service", () => {
         throw new Error("not used in this test");
       },
       async sendMessage() {},
+      async answerCallbackQuery() {},
+      async editMessageReplyMarkup() {},
     };
     const telegram = createTelegramService({
       db,
@@ -908,6 +936,8 @@ describe("telegram service, the assistant", () => {
         }
         throw new Error("network blip, simulated");
       },
+      async answerCallbackQuery() {},
+      async editMessageReplyMarkup() {},
     };
     const telegram = buildService(client);
 
@@ -934,6 +964,8 @@ describe("telegram service, the assistant", () => {
       async sendMessage() {
         throw new Error("permanently blocked, simulated");
       },
+      async answerCallbackQuery() {},
+      async editMessageReplyMarkup() {},
     };
     const telegram = buildService(client);
 
@@ -962,6 +994,8 @@ describe("telegram service, the assistant", () => {
         if (sendCalls === 2) throw new Error("network blip, simulated");
         sent.push({ chatId, text });
       },
+      async answerCallbackQuery() {},
+      async editMessageReplyMarkup() {},
     };
     const telegram = buildService(client);
 
@@ -1087,6 +1121,313 @@ describe("telegram service, the assistant", () => {
     expect(newSessionId).not.toBe("session-that-no-longer-exists");
     const sessions = await chatService.listSessions(userId);
     expect(sessions.map((s) => s.id)).toContain(newSessionId);
+  });
+});
+
+describe("telegram service, confirmation buttons", () => {
+  async function pairAndConfigureChat() {
+    await settingsService.set(userId, {
+      "telegram.botToken": "111:token",
+      "ai.openrouter.apiKey": "sk-or-v1-test",
+      "ai.model.chat": "openrouter://test-chat-model",
+    });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    await settingsService.setInternal(userId, "telegram.noteMigrationNoticeSent", true);
+  }
+
+  function saveNoteToolCall(text: string): AiAdapter["streamChat"] {
+    return vi.fn(async () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "toolCall" as const, id: "call_1", name: "saveNote", arguments: { text } };
+      },
+    }));
+  }
+
+  async function currentProposalId(): Promise<string> {
+    const sessionId = await settingsService.get<string>(userId, "telegram.chatSessionId");
+    const pending = await assistantService.getPendingProposal({ userId, sessionId: sessionId! });
+    if (!pending) throw new Error("expected a pending proposal in this test");
+    return pending.id;
+  }
+
+  it("puts Yes and No under a proposal, and nothing under an ordinary reply", async () => {
+    await pairAndConfigureChat();
+    let call = 0;
+    streamChatImpl = vi.fn(async () => {
+      call += 1;
+      if (call === 1) {
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "toolCall" as const, id: "call_1", name: "saveNote", arguments: { text: "buy milk before the shop closes" } };
+          },
+        };
+      }
+      return asyncChatPartsOf(["Sure, anything else?"]);
+    });
+    const { client, sent } = fakeTelegram({
+      batches: [
+        [updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "save a note to buy milk before the shop closes" })],
+        [updateWithText({ updateId: 2, fromId: PAIRED_ID, text: "what's the weather like" })],
+      ],
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    await telegram.runOnce();
+
+    expect(sent[0]?.replyMarkup?.inline_keyboard[0]).toEqual([
+      { text: "Yes", callback_data: expect.stringMatching(/^c:prop_.+:y$/) },
+      { text: "No", callback_data: expect.stringMatching(/^c:prop_.+:n$/) },
+    ]);
+    expect(sent[1]?.replyMarkup).toBeUndefined();
+  });
+
+  it("saves the note when the user presses Yes", async () => {
+    await pairAndConfigureChat();
+    streamChatImpl = saveNoteToolCall("buy milk before the shop closes");
+    const batches: (unknown[] | Error)[] = [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "save a note to buy milk before the shop closes" })]];
+    const { client, sent, answeredCallbacks, removedKeyboards } = fakeTelegram({ batches });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    const proposalId = await currentProposalId();
+    batches.push([updateWithCallback({ updateId: 2, fromId: PAIRED_ID, data: `c:${proposalId}:y`, messageId: 42 })]);
+
+    await telegram.runOnce();
+
+    const documents = await documentsService.list({ userId });
+    expect(documents).toHaveLength(1);
+    expect(sent[1]?.text).toMatch(/got it/i);
+    expect(answeredCallbacks).toHaveLength(1);
+    expect(removedKeyboards).toEqual([{ chatId: PAIRED_ID, messageId: 42 }]);
+    expect(await assistantService.getPendingProposal({ userId, sessionId: (await settingsService.get<string>(userId, "telegram.chatSessionId"))! })).toBeNull();
+  });
+
+  it("writes nothing when the user presses No", async () => {
+    await pairAndConfigureChat();
+    streamChatImpl = saveNoteToolCall("buy milk before the shop closes");
+    const batches: (unknown[] | Error)[] = [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "save a note to buy milk before the shop closes" })]];
+    const { client, sent } = fakeTelegram({ batches });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    const proposalId = await currentProposalId();
+    batches.push([updateWithCallback({ updateId: 2, fromId: PAIRED_ID, data: `c:${proposalId}:n` })]);
+
+    await telegram.runOnce();
+
+    expect(await documentsService.list({ userId })).toHaveLength(0);
+    expect(sent[1]?.text).toMatch(/did not do that/i);
+  });
+
+  it("tells the user a button from an older proposal is not waiting any more", async () => {
+    await pairAndConfigureChat();
+    let call = 0;
+    streamChatImpl = vi.fn(async () => {
+      call += 1;
+      const text = call === 1 ? "buy milk" : "walk the dog";
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "toolCall" as const, id: `call_${call}`, name: "saveNote", arguments: { text } };
+        },
+      };
+    });
+    const batches: (unknown[] | Error)[] = [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "save a note to buy milk" })]];
+    const { client, sent, answeredCallbacks } = fakeTelegram({ batches });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    const oldProposalId = await currentProposalId();
+    batches.push([updateWithText({ updateId: 2, fromId: PAIRED_ID, text: "also save a note to walk the dog" })]);
+    await telegram.runOnce();
+    const newProposalId = await currentProposalId();
+    expect(newProposalId).not.toBe(oldProposalId);
+
+    batches.push([updateWithCallback({ updateId: 3, fromId: PAIRED_ID, data: `c:${oldProposalId}:y` })]);
+    await telegram.runOnce();
+
+    expect(answeredCallbacks.at(-1)?.text).toMatch(/not waiting/i);
+    expect(sent).toHaveLength(2); // the two proposal questions, no third message from the stale press
+    expect(await documentsService.list({ userId })).toHaveLength(0);
+  });
+
+  it("ignores a button press from someone who is not the paired user", async () => {
+    await pairAndConfigureChat();
+    streamChatImpl = saveNoteToolCall("buy milk");
+    const batches: (unknown[] | Error)[] = [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "save a note to buy milk" })]];
+    const { client, sent, answeredCallbacks, removedKeyboards } = fakeTelegram({ batches });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    const proposalId = await currentProposalId();
+    batches.push([updateWithCallback({ updateId: 2, fromId: OTHER_ID, data: `c:${proposalId}:y` })]);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(answeredCallbacks).toHaveLength(0);
+    expect(removedKeyboards).toHaveLength(0);
+    expect(await documentsService.list({ userId })).toHaveLength(0);
+  });
+
+  it("ignores a button press while the bot is unpaired", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    const { client, sent, answeredCallbacks } = fakeTelegram({
+      batches: [[updateWithCallback({ updateId: 1, fromId: PAIRED_ID, data: "c:prop_doesnotmatter:y" })]],
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(0);
+    expect(answeredCallbacks).toHaveLength(0);
+  });
+
+  it("advances the update cursor past a handled button", async () => {
+    await pairAndConfigureChat();
+    streamChatImpl = saveNoteToolCall("buy milk");
+    const batches: (unknown[] | Error)[] = [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "save a note to buy milk" })]];
+    const { client } = fakeTelegram({ batches });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    const proposalId = await currentProposalId();
+    batches.push([updateWithCallback({ updateId: 7, fromId: PAIRED_ID, data: `c:${proposalId}:y` })]);
+
+    await telegram.runOnce();
+
+    expect(await settingsService.get<number>(userId, "telegram.lastUpdateId")).toBe(7);
+  });
+
+  // Decision 4's claim doing its job: the confirmation reply's own first delivery
+  // attempt fails and is retried inside the bounded send retry, and the same button
+  // update is then redelivered exactly as Telegram can after a crash between handling
+  // an update and persisting the cursor (see the comment on that write in
+  // pollUpdatesOnce). Either way, the claim means answerProposal runs the handler at
+  // most once.
+  it("saves nothing twice when the same button update is retried", async () => {
+    await pairAndConfigureChat();
+    streamChatImpl = saveNoteToolCall("buy milk before the shop closes");
+    const batches: unknown[][] = [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "save a note to buy milk before the shop closes" })]];
+    let sendAttempts = 0;
+    const sent: { chatId: number; text: string }[] = [];
+    const client: TelegramClient = {
+      async getUpdates() {
+        return batches.shift() ?? [];
+      },
+      async getFile() {
+        throw new Error("not used in this test");
+      },
+      async sendMessage({ chatId, text }) {
+        sendAttempts += 1;
+        // The confirmation reply's first delivery attempt fails; the bounded retry
+        // already covered elsewhere recovers it within the same update.
+        if (sendAttempts === 2) throw new Error("network blip, simulated");
+        sent.push({ chatId, text });
+      },
+      async answerCallbackQuery() {},
+      async editMessageReplyMarkup() {},
+    };
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    const proposalId = await currentProposalId();
+    const callbackUpdate = updateWithCallback({ updateId: 2, fromId: PAIRED_ID, data: `c:${proposalId}:y` });
+    batches.push([callbackUpdate]);
+    await telegram.runOnce();
+    // The exact same update, redelivered as it would be after a crash before the
+    // cursor write, per the comment in pollUpdatesOnce.
+    batches.push([callbackUpdate]);
+    await telegram.runOnce();
+
+    expect(await documentsService.list({ userId })).toHaveLength(1);
+    expect(sent.filter((m) => /got it/i.test(m.text))).toHaveLength(1);
+  });
+
+  it("still sends the reply when the keyboard cannot be removed", async () => {
+    await pairAndConfigureChat();
+    streamChatImpl = saveNoteToolCall("buy milk before the shop closes");
+    const batches: unknown[][] = [[updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "save a note to buy milk before the shop closes" })]];
+    const sent: { chatId: number; text: string }[] = [];
+    const client: TelegramClient = {
+      async getUpdates() {
+        return batches.shift() ?? [];
+      },
+      async getFile() {
+        throw new Error("not used in this test");
+      },
+      async sendMessage({ chatId, text }) {
+        sent.push({ chatId, text });
+      },
+      async answerCallbackQuery() {},
+      async editMessageReplyMarkup() {
+        throw new Error("cannot edit an old message, simulated");
+      },
+    };
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    const proposalId = await currentProposalId();
+    batches.push([updateWithCallback({ updateId: 2, fromId: PAIRED_ID, data: `c:${proposalId}:y` })]);
+
+    await telegram.runOnce();
+
+    expect(sent[1]?.text).toMatch(/got it/i);
+    expect(await documentsService.list({ userId })).toHaveLength(1);
+  });
+
+  // Pins Decision 6 where a change to this task would actually break it: the confirm
+  // sentence ends with a question mark, so isAnsweringAQuestion already lets a bare word
+  // that is also a cheap acknowledgement reach the assistant instead of a thumbs up.
+  it("does not answer a bare yes with a thumbs up while a proposal is waiting", async () => {
+    await pairAndConfigureChat();
+    streamChatImpl = saveNoteToolCall("buy milk before the shop closes");
+    const { client, sent } = fakeTelegram({
+      batches: [
+        [updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "save a note to buy milk before the shop closes" })],
+        [updateWithText({ updateId: 2, fromId: PAIRED_ID, text: "sure" })],
+      ],
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    await telegram.runOnce();
+
+    expect(sent[1]?.text).not.toBe(acknowledgementReply());
+    expect(sent[1]?.text).toMatch(/got it/i);
+    expect(streamChatImpl).toHaveBeenCalledTimes(1);
+    expect(await documentsService.list({ userId })).toHaveLength(1);
+  });
+
+  it("still answers a bare ok with a thumbs up once the conversation has moved on", async () => {
+    await pairAndConfigureChat();
+    let call = 0;
+    streamChatImpl = vi.fn(async () => {
+      call += 1;
+      if (call === 1) {
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "toolCall" as const, id: "call_1", name: "saveNote", arguments: { text: "buy milk" } };
+          },
+        };
+      }
+      return asyncChatPartsOf(["Noted."]);
+    });
+    const { client, sent } = fakeTelegram({
+      batches: [
+        [updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "save a note to buy milk" })],
+        [updateWithText({ updateId: 2, fromId: PAIRED_ID, text: "what time is it in tokyo" })],
+        [updateWithText({ updateId: 3, fromId: PAIRED_ID, text: "ok" })],
+      ],
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+    await telegram.runOnce();
+    await telegram.runOnce();
+
+    expect(sent[2]?.text).toBe(acknowledgementReply());
+    expect(streamChatImpl).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -1369,6 +1710,8 @@ describe("telegram service, the second reply", () => {
         if (sendCount === 2) throw new Error("blocked by user, simulated");
         sent.push({ chatId, text });
       },
+      async answerCallbackQuery() {},
+      async editMessageReplyMarkup() {},
     };
     const telegram = buildService(client);
 
@@ -1421,6 +1764,8 @@ describe("telegram service, background loops", () => {
       async sendMessage({ chatId, text }) {
         sent.push({ chatId, text });
       },
+      async answerCallbackQuery() {},
+      async editMessageReplyMarkup() {},
     };
 
     const telegram = createTelegramService({

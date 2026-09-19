@@ -48,11 +48,26 @@ const telegramMessageSchema = v.object({
   audio: v.optional(telegramFileAttachmentSchema),
 });
 
+// A callback update carries no message of its own: the sender is callback_query.from,
+// never update.message.from, which has to stay true all the way through the intake and
+// the pairing guard (telegram.usecases.ts, handleUpdate). message is optional because
+// Telegram omits it for a button on a message old enough to have fallen out of its
+// cache, and data is optional for the same reason a very old client can send a callback
+// with none.
+const telegramCallbackQuerySchema = v.object({
+  id: v.string(),
+  from: telegramUserSchema,
+  message: v.optional(v.object({ message_id: v.number(), chat: telegramChatSchema })),
+  data: v.optional(v.string()),
+});
+
 export const telegramUpdateSchema = v.object({
   update_id: v.number(),
   message: v.optional(telegramMessageSchema),
+  callback_query: v.optional(telegramCallbackQuerySchema),
 });
 
 export type TelegramUpdate = v.InferOutput<typeof telegramUpdateSchema>;
 export type TelegramMessage = v.InferOutput<typeof telegramMessageSchema>;
 export type TelegramMessageEntity = v.InferOutput<typeof telegramMessageEntitySchema>;
+export type TelegramCallbackQuery = v.InferOutput<typeof telegramCallbackQuerySchema>;

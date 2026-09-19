@@ -124,4 +124,51 @@ describe("createTelegramClient", () => {
     expect(calls[0]!.url).toBe(`https://api.telegram.org/bot${TOKEN}/sendMessage`);
     expect(calls[0]!.body).toMatchObject({ chat_id: 42, text: "Got it." });
   });
+
+  it("sends a keyboard only when one is given", async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    const fetchImpl: TelegramFetch = async (url, init) => {
+      calls.push({ url, body: init.body ? JSON.parse(init.body) : undefined });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+    };
+    const client = createTelegramClient({ token: TOKEN, fetchImpl });
+    const keyboard = { inline_keyboard: [[{ text: "Yes", callback_data: "c:prop_1:y" }, { text: "No", callback_data: "c:prop_1:n" }]] };
+
+    await client.sendMessage({ chatId: 42, text: "Save that as a note?", replyMarkup: keyboard });
+    await client.sendMessage({ chatId: 42, text: "An ordinary reply" });
+
+    expect(calls[0]!.body).toMatchObject({ reply_markup: keyboard });
+    expect(calls[1]!.body).not.toHaveProperty("reply_markup");
+  });
+
+  it("answers a callback query with a short toast", async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    const fetchImpl: TelegramFetch = async (url, init) => {
+      calls.push({ url, body: init.body ? JSON.parse(init.body) : undefined });
+      return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+    };
+    const client = createTelegramClient({ token: TOKEN, fetchImpl });
+
+    await client.answerCallbackQuery({ callbackQueryId: "cbq_1", text: "That one is not waiting for an answer any more." });
+
+    expect(calls[0]!.url).toBe(`https://api.telegram.org/bot${TOKEN}/answerCallbackQuery`);
+    expect(calls[0]!.body).toMatchObject({
+      callback_query_id: "cbq_1",
+      text: "That one is not waiting for an answer any more.",
+    });
+  });
+
+  it("removes a keyboard by sending no markup at all", async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    const fetchImpl: TelegramFetch = async (url, init) => {
+      calls.push({ url, body: init.body ? JSON.parse(init.body) : undefined });
+      return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+    };
+    const client = createTelegramClient({ token: TOKEN, fetchImpl });
+
+    await client.editMessageReplyMarkup({ chatId: 42, messageId: 7 });
+
+    expect(calls[0]!.url).toBe(`https://api.telegram.org/bot${TOKEN}/editMessageReplyMarkup`);
+    expect(calls[0]!.body).toEqual({ chat_id: 42, message_id: 7 });
+  });
 });

@@ -1,6 +1,7 @@
 import { Readable } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { createError } from "../../shared/errors/errors.js";
+import type { TelegramInlineKeyboard } from "./telegram.models.js";
 
 // Bot API calls over plain fetch, in the shape of the google-drive client: three
 // endpoints (getUpdates, getFile, sendMessage) are less surface than a Telegram SDK.
@@ -107,11 +108,34 @@ export function createTelegramClient({
     };
   }
 
-  async function sendMessage({ chatId, text }: { chatId: number; text: string }) {
-    await callMethod<{ message_id: number }>("sendMessage", { chat_id: chatId, text });
+  async function sendMessage({ chatId, text, replyMarkup }: { chatId: number; text: string; replyMarkup?: TelegramInlineKeyboard }) {
+    await callMethod<{ message_id: number }>("sendMessage", {
+      chat_id: chatId,
+      text,
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    });
   }
 
-  return { getUpdates, getFile, sendMessage };
+  // Stops the button's own loading spinner. text is a short toast Telegram shows the
+  // user, omitted entirely when there is nothing worth surfacing beyond the ordinary
+  // reply that already follows (assistant confirmation plan, Decision 11).
+  async function answerCallbackQuery({ callbackQueryId, text }: { callbackQueryId: string; text?: string }): Promise<void> {
+    await callMethod<boolean>("answerCallbackQuery", {
+      callback_query_id: callbackQueryId,
+      ...(text ? { text } : {}),
+    });
+  }
+
+  // Sends no reply_markup at all, which is how Telegram is told to remove whatever
+  // keyboard the message currently has, rather than replace it with another one.
+  async function editMessageReplyMarkup({ chatId, messageId }: { chatId: number; messageId: number }): Promise<void> {
+    await callMethod<{ message_id: number } | boolean>("editMessageReplyMarkup", {
+      chat_id: chatId,
+      message_id: messageId,
+    });
+  }
+
+  return { getUpdates, getFile, sendMessage, answerCallbackQuery, editMessageReplyMarkup };
 }
 
 export type TelegramClient = ReturnType<typeof createTelegramClient>;

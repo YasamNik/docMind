@@ -6,6 +6,7 @@ import {
   assistantTroubleReply,
   isAnsweringAQuestion,
   compressedPhotoNotice,
+  confirmationKeyboard,
   duplicateReply,
   fileDocumentName,
   fileTooLargeReply,
@@ -17,6 +18,7 @@ import {
   newPairingCode,
   notesMovedNotice,
   pairingSucceededReply,
+  parseConfirmationCallback,
   receivedReply,
   splitForTelegram,
   stripCitationMarkers,
@@ -400,5 +402,33 @@ describe("telegram models", () => {
       summaryFailed: true,
     });
     expect(reply).toMatch(/summarizing and sorting both failed/i);
+  });
+
+  it("puts Yes and No in one row, carrying the proposal's own id", () => {
+    const keyboard = confirmationKeyboard("prop_abc123def456");
+
+    expect(keyboard.inline_keyboard).toHaveLength(1);
+    expect(keyboard.inline_keyboard[0]).toEqual([
+      { text: "Yes", callback_data: "c:prop_abc123def456:y" },
+      { text: "No", callback_data: "c:prop_abc123def456:n" },
+    ]);
+  });
+
+  it("keeps callback data inside Telegram's 64 byte limit", () => {
+    const keyboard = confirmationKeyboard("prop_abc123def456");
+
+    for (const button of keyboard.inline_keyboard[0]!) {
+      expect(Buffer.byteLength(button.callback_data, "utf8")).toBeLessThanOrEqual(64);
+    }
+  });
+
+  it("parses a confirmation button, and refuses anything else", () => {
+    expect(parseConfirmationCallback("c:prop_abc123:y")).toEqual({ proposalId: "prop_abc123", decision: "yes" });
+    expect(parseConfirmationCallback("c:prop_abc123:n")).toEqual({ proposalId: "prop_abc123", decision: "no" });
+    expect(parseConfirmationCallback(undefined)).toBeNull();
+    expect(parseConfirmationCallback("")).toBeNull();
+    expect(parseConfirmationCallback("junk")).toBeNull();
+    expect(parseConfirmationCallback("other:prop_abc123:y")).toBeNull();
+    expect(parseConfirmationCallback("c:prop_abc123:maybe")).toBeNull();
   });
 });

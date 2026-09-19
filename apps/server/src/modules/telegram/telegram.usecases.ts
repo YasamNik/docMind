@@ -3,10 +3,10 @@ import { Readable } from "node:stream";
 import * as v from "valibot";
 import { isAppError } from "../../shared/errors/errors.js";
 import { createLogger, type Logger } from "../../shared/logger/logger.js";
-import { ASSISTANT_TRIAGE_SYSTEM_PROMPT } from "../assistant/assistant.models.js";
+import { ASSISTANT_TRIAGE_SYSTEM_PROMPT, staleProposalReply } from "../assistant/assistant.models.js";
 import type { AssistantService } from "../assistant/assistant.usecases.js";
+import type { AnswerResult, TurnResult } from "../assistant/assistant.types.js";
 import type { ChatService } from "../chat/chat.usecases.js";
-import type { Citation } from "../chat/chat.types.js";
 import type { Database } from "../database/database.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
@@ -18,6 +18,7 @@ import {
   assistantReplyText,
   assistantTroubleReply,
   compressedPhotoNotice,
+  confirmationKeyboard,
   duplicateReply,
   fileDocumentName,
   fileTooLargeReply,
@@ -29,12 +30,14 @@ import {
   linkDocumentName,
   notesMovedNotice,
   pairingSucceededReply,
+  parseConfirmationCallback,
   receivedReply,
   splitForTelegram,
   stripCitationMarkers,
+  type TelegramInlineKeyboard,
   type TelegramIntent,
 } from "./telegram.models.js";
-import { telegramUpdateSchema, type TelegramMessage, type TelegramUpdate } from "./telegram.schemas.js";
+import { telegramUpdateSchema, type TelegramCallbackQuery, type TelegramMessage, type TelegramUpdate } from "./telegram.schemas.js";
 
 // Only what stays a direct chat.usecases.ts call once the assistant owns the turn
 // itself: creating a session, and reading back a session's own last message to tell a
@@ -297,11 +300,21 @@ export function createTelegramService({
   // by this point the reply already exists: rethrowing would only buy a second paid
   // model call and a duplicate line in the chat session for a message that has
   // nothing left to retry about.
-  async function sendReplyPart({ client, chatId, text }: { client: TelegramClient; chatId: number; text: string }): Promise<void> {
+  async function sendReplyPart({
+    client,
+    chatId,
+    text,
+    replyMarkup,
+  }: {
+    client: TelegramClient;
+    chatId: number;
+    text: string;
+    replyMarkup?: TelegramInlineKeyboard;
+  }): Promise<void> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= updateRetryAttempts; attempt += 1) {
       try {
-        await client.sendMessage({ chatId, text });
+        await client.sendMessage({ chatId, text, replyMarkup });
         return;
       } catch (error) {
         lastError = error;
@@ -348,11 +361,14 @@ export function createTelegramService({
     // id, and the user got no reply at all, forever, unless they happened to send
     // /new. One retry on a fresh session recovers the conversation; any other failure
     // still gets a plain reply rather than silence.
-    async function startTurn(): Promise<{ reply: string; citations: Citation[]; toolUsed: string | null }> {
+    // /web runs through runCommand, which never makes a proposal today (no destructive
+    // capability runs this path), so its result is widened with proposal: null rather
+    // than left to carry a different shape than runTurn's own TurnResult.
+    async function startTurn(): Promise<TurnResult> {
       const sessionId = await ensureChatSession({ userId });
       const startNewThread = () => clearChatSession(userId);
       if (web) {
-        return assistantService.runCommand({
+        const commandResult = await assistantService.runCommand({
           userId,
           sessionId,
           surface: "telegram",
@@ -360,6 +376,7 @@ export function createTelegramService({
           args: { question: trimmed },
           startNewThread,
         });
+        return { ...commandResult, proposal: null };
       }
       return assistantService.runTurn({
         userId,
@@ -371,7 +388,7 @@ export function createTelegramService({
       });
     }
 
-    let result: { reply: string; citations: Citation[]; toolUsed: string | null };
+    let result: TurnResult;
     try {
       result = await startTurn();
     } catch (error) {
@@ -393,12 +410,124 @@ export function createTelegramService({
 
     const sourceNames = result.citations.map((citation) => citation.documentName);
     const reply = assistantReplyText({ answer: stripCitationMarkers(result.reply), sourceNames, web: result.toolUsed === "searchWeb" });
-    for (const part of splitForTelegram(reply)) {
+    // The keyboard rides on the last part of a split reply, the one carrying the
+    // question the buttons answer. An ordinary reply keeps result.proposal null and
+    // gets no markup at all.
+    const parts = splitForTelegram(reply);
+    for (const [index, part] of parts.entries()) {
+      const replyMarkup = result.proposal && index === parts.length - 1 ? confirmationKeyboard(result.proposal.id) : undefined;
+      await sendReplyPart({ client, chatId, text: part, replyMarkup });
+    }
+  }
+
+  // Stops the button's own spinner and, best effort, forgets a rejected or late answer:
+  // a toast that never lands is not worth failing the whole update over (assistant
+  // confirmation plan, Decision 11).
+  async function answerCallbackSafely({ client, id, text }: { client: TelegramClient; id: string; text?: string }): Promise<void> {
+    try {
+      await client.answerCallbackQuery({ callbackQueryId: id, text });
+    } catch (error) {
+      logger.warn({ err: (error as Error).message }, "Telegram callback answer failed, continuing anyway");
+    }
+  }
+
+  // Best effort for the same reason: a button that stays visible after being pressed
+  // costs nothing, since a second press on an already-claimed proposal is harmless
+  // (resolveConfirmation below returns stale for it).
+  async function removeKeyboardSafely({ client, chatId, messageId }: { client: TelegramClient; chatId: number; messageId: number }): Promise<void> {
+    try {
+      await client.editMessageReplyMarkup({ chatId, messageId });
+    } catch (error) {
+      logger.warn({ err: (error as Error).message }, "Telegram keyboard removal failed, continuing anyway");
+    }
+  }
+
+  // Shares the exact stale reply answerProposal itself returns for an id it no longer
+  // recognizes, so a button that never reaches a real proposal (no bridged session, or
+  // one whose row is gone) reads the same to the user as one that was simply answered
+  // first. chat.session_not_found is the one error answerProposal deliberately lets
+  // escape (assistant.usecases.ts): here that means the bridged session itself no
+  // longer exists, which is exactly the "belongs to a session that is gone" case, not
+  // something to retry or to fail the update over.
+  async function resolveConfirmation({
+    userId,
+    sessionId,
+    proposalId,
+    decision,
+  }: {
+    userId: string;
+    sessionId: string | undefined;
+    proposalId: string;
+    decision: "yes" | "no";
+  }): Promise<AnswerResult> {
+    if (!sessionId) return { status: "stale", reply: staleProposalReply(), citations: [], toolUsed: null };
+    try {
+      return await assistantService.answerProposal({
+        userId,
+        sessionId,
+        proposalId,
+        decision,
+        surface: "telegram",
+        startNewThread: () => clearChatSession(userId),
+      });
+    } catch (error) {
+      if (isAppError(error) && error.code === "chat.session_not_found") {
+        return { status: "stale", reply: staleProposalReply(), citations: [], toolUsed: null };
+      }
+      throw error;
+    }
+  }
+
+  // The button half of a proposal. A callback update carries no message of its own, so
+  // the pairing guard reads callback_query.from rather than update.message.from
+  // (assistant confirmation plan, Task 3): an unpaired bot or a sender who is not the
+  // paired user gets no reply and no work at all, exactly like every other guarded
+  // path, since confirming receipt to a stranger is itself information leaked.
+  async function handleCallbackQuery({
+    userId,
+    client,
+    callbackQuery,
+  }: {
+    userId: string;
+    client: TelegramClient;
+    callbackQuery: TelegramCallbackQuery;
+  }) {
+    const pairedUserId = await settingsService.get<number>(userId, "telegram.pairedUserId");
+    if (pairedUserId === undefined || callbackQuery.from.id !== pairedUserId) return;
+
+    const parsed = parseConfirmationCallback(callbackQuery.data);
+    if (!parsed) {
+      await answerCallbackSafely({ client, id: callbackQuery.id, text: staleProposalReply() });
+      return;
+    }
+
+    const sessionId = await settingsService.get<string>(userId, "telegram.chatSessionId");
+    const outcome = await resolveConfirmation({ userId, sessionId, proposalId: parsed.proposalId, decision: parsed.decision });
+
+    if (outcome.status === "stale") {
+      await answerCallbackSafely({ client, id: callbackQuery.id, text: outcome.reply });
+      return;
+    }
+
+    await answerCallbackSafely({ client, id: callbackQuery.id });
+    if (callbackQuery.message) {
+      await removeKeyboardSafely({ client, chatId: callbackQuery.message.chat.id, messageId: callbackQuery.message.message_id });
+    }
+
+    const chatId = callbackQuery.message?.chat.id ?? pairedUserId;
+    for (const part of splitForTelegram(outcome.reply)) {
       await sendReplyPart({ client, chatId, text: part });
     }
   }
 
   async function handleUpdate({ userId, client, update }: { userId: string; client: TelegramClient; update: TelegramUpdate }) {
+    // Checked before update.message: a callback update has no message of its own to
+    // read a sender from at all, so it must never fall into the message guard below.
+    if (update.callback_query) {
+      await handleCallbackQuery({ userId, client, callbackQuery: update.callback_query });
+      return;
+    }
+
     const message = update.message;
     if (!message || message.from === undefined) return;
     const fromId = message.from.id;
