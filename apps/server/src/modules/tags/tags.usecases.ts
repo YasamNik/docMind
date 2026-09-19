@@ -471,7 +471,7 @@ export function createTagsService({
     },
 
     async updateType({ userId, typeId, patch }: { userId: string; typeId: string; patch: TypePatch }): Promise<DocumentTypeWithCount> {
-      await getTypeOrThrow(userId, typeId);
+      const existing = await getTypeOrThrow(userId, typeId);
       const dbPatch: Partial<NewDocumentType> = { updatedAt: nowIso() };
       if (patch.name !== undefined) dbPatch.name = normalizeName(patch.name);
       if (patch.color !== undefined) dbPatch.color = patch.color;
@@ -479,7 +479,16 @@ export function createTagsService({
       if (patch.confidenceThreshold !== undefined) dbPatch.confidenceThreshold = patch.confidenceThreshold;
       if (patch.autoApply !== undefined) dbPatch.autoApply = patch.autoApply ? 1 : 0;
       try {
-        await repository.updateType({ userId, typeId, patch: dbPatch });
+        // The type patch and clearing auto-sourced documents must commit together, the
+        // same reasoning as updateCategory: turning autoApply off while its auto-sourced
+        // documents kept a stale type link would be a state the UI cannot express.
+        await db.transaction(async (tx) => {
+          const txDb = asTxDb(tx);
+          await repository.updateType({ userId, typeId, patch: dbPatch, tx: txDb });
+          if (patch.autoApply === false && existing.autoApply === 1) {
+            await repository.clearAutoTypeOnDocuments({ userId, typeId, tx: txDb });
+          }
+        });
       } catch (error) {
         if (isUniqueConstraintError(error)) throw typeDuplicateName();
         throw error;
@@ -493,8 +502,28 @@ export function createTagsService({
       await db.transaction(async (tx) => {
         const txDb = asTxDb(tx);
         await repository.clearTypeOnDocuments({ userId, typeId, tx: txDb });
+        await rulesRepository.deleteEvaluationsForTarget({ targetType: "type", targetId: typeId, tx: txDb });
         await repository.deleteType({ userId, typeId, tx: txDb });
       });
+    },
+
+    async setDocumentType({
+      userId,
+      documentId,
+      documentTypeId,
+    }: {
+      userId: string;
+      documentId: string;
+      documentTypeId: string | null;
+    }) {
+      await ensureDocumentExists(userId, documentId);
+      if (documentTypeId !== null) await getTypeOrThrow(userId, documentTypeId);
+      await documentsRepository.update({
+        userId,
+        documentId,
+        patch: { documentTypeId, documentTypeSource: documentTypeId === null ? null : "manual", updatedAt: nowIso() },
+      });
+      return documentsRepository.findByIdWithExtras({ userId, documentId });
     },
 
     async setDocumentCategory({
@@ -541,7 +570,7 @@ export function createTagsService({
       description,
     }: {
       userId: string;
-      targetType: "tag" | "category";
+      targetType: "tag" | "category" | "type";
       name: string;
       description: string;
     }): Promise<{ suggestion: string }> {

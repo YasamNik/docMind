@@ -51,6 +51,30 @@ export const documentCategoryBodySchema = v.object({
   categoryId: v.nullable(categoryIdSchema),
 });
 
+// Types have no hierarchy, so their description budget mirrors a category's rather than
+// a tag's: same 2000 character cap, no parentId or sortOrder fields.
+export const typeDescriptionSchema = v.pipe(v.string(), v.maxLength(2000));
+
+export const createTypeBodySchema = v.object({
+  name: nameSchema,
+  color: v.optional(nullableColor, null),
+  description: v.optional(typeDescriptionSchema, ""),
+  confidenceThreshold: v.optional(thresholdSchema, 0.7),
+  autoApply: v.optional(v.boolean(), true),
+});
+
+export const updateTypeBodySchema = v.object({
+  name: v.optional(nameSchema),
+  color: v.optional(nullableColor),
+  description: v.optional(typeDescriptionSchema),
+  confidenceThreshold: v.optional(thresholdSchema),
+  autoApply: v.optional(v.boolean()),
+});
+
+export const documentTypeBodySchema = v.object({
+  documentTypeId: v.nullable(documentTypeIdSchema),
+});
+
 const reorderEntrySchema = v.object({
   id: categoryIdSchema,
   sortOrder: v.pipe(v.number(), v.integer(), v.minValue(0)),
@@ -61,7 +85,7 @@ export const reorderCategoriesBodySchema = v.object({
   b: reorderEntrySchema,
 });
 
-export const descriptionAssistantTargetTypeSchema = v.picklist(["tag", "category"]);
+export const descriptionAssistantTargetTypeSchema = v.picklist(["tag", "category", "type"]);
 
 export const descriptionAssistantBodySchema = v.object({
   targetType: descriptionAssistantTargetTypeSchema,

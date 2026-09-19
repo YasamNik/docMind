@@ -130,12 +130,13 @@ export function sortCategories<T extends { name: string; sortOrder: number }>(it
   return [...items].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
 }
 
-// A tag description is capped at 300 and a category's at 2000, so the assistant writes to
-// whichever budget the field it is filling actually has. Writing every category to 300
-// would waste five sixths of the space the sorter is allowed to read.
-export const DESCRIPTION_ASSISTANT_LIMITS = { tag: 300, category: 2000 } as const;
+// A tag description is capped at 300, a category's at 2000, and a document type's at
+// 2000 too since it reads to the sorter the same way a category description does, so
+// the assistant writes to whichever budget the field it is filling actually has. Writing
+// every category to 300 would waste five sixths of the space the sorter is allowed to read.
+export const DESCRIPTION_ASSISTANT_LIMITS = { tag: 300, category: 2000, type: 2000 } as const;
 
-export function descriptionAssistantLimit(targetType: "tag" | "category"): number {
+export function descriptionAssistantLimit(targetType: "tag" | "category" | "type"): number {
   return DESCRIPTION_ASSISTANT_LIMITS[targetType];
 }
 
@@ -163,7 +164,7 @@ export function buildDescriptionAssistantPrompt({
   name,
   description,
 }: {
-  targetType: "tag" | "category";
+  targetType: "tag" | "category" | "type";
   name: string;
   description: string;
 }): { system: string; input: string } {

@@ -191,6 +191,23 @@ describe("tags and categories routes", () => {
     expect(body.suggestion.length).toBeLessThanOrEqual(300);
   });
 
+  it("accepts targetType type for the description assistant, capped at 2000 characters", async () => {
+    const replyRef = { current: { description: `${"word ".repeat(500)}tail` } as unknown };
+    const adapter = fakeAdapter(replyRef);
+    const t = await createTestApp({ adapterFactories: { "openai-compatible": () => adapter, "anthropic": () => adapter } });
+    const { cookie, userId } = await t.signIn();
+    await t.services.settingsService.set(userId, { "ai.openrouter.apiKey": "sk-or-v1-test", "ai.model.rules": "openrouter://test-model" });
+
+    const res = await t.app.request("/api/tags/description-assistant", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ targetType: "type", name: "Quote", description: "" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.suggestion.length).toBeLessThanOrEqual(2000);
+  });
+
   it("returns a clean error when no rules model is configured", async () => {
     const { app, signIn } = await createTestApp();
     const { cookie } = await signIn();
@@ -213,5 +230,106 @@ describe("tags and categories routes", () => {
       body: JSON.stringify({ targetType: "widget", name: "Medical", description: "" }),
     });
     expect(res.status).toBe(400);
+  });
+
+  it("creates, lists, updates, and deletes a document type over HTTP", async () => {
+    const { app, signIn } = await createTestApp();
+    const { cookie } = await signIn();
+
+    const created = await app.request("/api/types", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Quote", color: "#4f46e5" }),
+    });
+    expect(created.status).toBe(201);
+    const { type } = await created.json();
+    expect(type).toMatchObject({ name: "Quote", color: "#4f46e5", autoApply: true, confidenceThreshold: 0.7, documentCount: 0 });
+
+    const list = await (await app.request("/api/types", { headers: { cookie } })).json();
+    expect(list.types.map((x: { id: string }) => x.id)).toContain(type.id);
+
+    const updated = await app.request(`/api/types/${type.id}`, {
+      method: "PATCH",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ description: "A price offered before any work is done." }),
+    });
+    expect((await updated.json()).type.description).toBe("A price offered before any work is done.");
+
+    expect((await app.request(`/api/types/${type.id}`, { method: "DELETE", headers: { cookie } })).status).toBe(204);
+    expect((await (await app.request("/api/types", { headers: { cookie } })).json()).types.map((x: { id: string }) => x.id)).not.toContain(type.id);
+  });
+
+  it("rejects an invalid type body and a duplicate name", async () => {
+    const { app, signIn } = await createTestApp();
+    const { cookie } = await signIn();
+    const empty = await app.request("/api/types", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "" }) });
+    expect(empty.status).toBe(400);
+    await app.request("/api/types", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "Quote" }) });
+    const dup = await app.request("/api/types", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "quote" }) });
+    expect(dup.status).toBe(409);
+    expect((await dup.json()).error.code).toBe("types.duplicate_name");
+  });
+
+  it("sets a document's type, records a correction, and returns the type name on every enriched document response", async () => {
+    const { app, db, signIn, services } = await createTestApp();
+    const { cookie, userId } = await signIn();
+    const { document } = await services.documentsService.upload({ userId, name: "a.txt", mimeType: "text/plain", body: (await import("node:stream")).Readable.from(["a"]) });
+    const type = (
+      await (await app.request("/api/types", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "Quote" }) })).json()
+    ).type;
+
+    const setType = await app.request(`/api/documents/${document.id}/type`, {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ documentTypeId: type.id }),
+    });
+    const setTypeBody = await setType.json();
+    expect(setTypeBody.document).toMatchObject({ documentTypeId: type.id, documentTypeSource: "manual", documentTypeName: "Quote" });
+    expect(Object.keys(setTypeBody.document)).not.toContain("extractedText");
+
+    // recordCorrection is fired without being awaited by the route (matching the
+    // category and tag routes), so its write can land a tick after the response does.
+    const { createRulesRepository } = await import("../rules/rules.repository.js");
+    const rulesRepository = createRulesRepository({ db });
+    await vi.waitFor(async () => {
+      const correction = await rulesRepository.listExamplesForTarget({ targetType: "type", targetId: type.id });
+      expect(correction).toHaveLength(1);
+      expect(correction[0]).toMatchObject({ signal: "positive", documentId: document.id });
+    });
+
+    const clearType = await app.request(`/api/documents/${document.id}/type`, {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ documentTypeId: null }),
+    });
+    const clearTypeBody = await clearType.json();
+    expect(clearTypeBody.document).toMatchObject({ documentTypeId: null, documentTypeSource: null, documentTypeName: null });
+
+    const missing = await app.request(`/api/documents/doc_0000000000000000/type`, {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ documentTypeId: null }),
+    });
+    expect(missing.status).toBe(404);
+  });
+
+  it("deleting a type clears it from its documents", async () => {
+    const { app, signIn, services } = await createTestApp();
+    const { cookie, userId } = await signIn();
+    const { document } = await services.documentsService.upload({ userId, name: "a.txt", mimeType: "text/plain", body: (await import("node:stream")).Readable.from(["a"]) });
+    const type = (
+      await (await app.request("/api/types", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "Quote" }) })).json()
+    ).type;
+    await app.request(`/api/documents/${document.id}/type`, {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ documentTypeId: type.id }),
+    });
+
+    expect((await app.request(`/api/types/${type.id}`, { method: "DELETE", headers: { cookie } })).status).toBe(204);
+
+    const list = await (await app.request("/api/documents", { headers: { cookie } })).json();
+    const row = list.documents.find((d: { id: string }) => d.id === document.id);
+    expect(row).toMatchObject({ documentTypeId: null, documentTypeName: null });
   });
 });

@@ -7,18 +7,22 @@ import {
   categoryIdSchema,
   createCategoryBodySchema,
   createTagBodySchema,
+  createTypeBodySchema,
   descriptionAssistantBodySchema,
   documentCategoryBodySchema,
+  documentTypeBodySchema,
+  documentTypeIdSchema,
   reorderCategoriesBodySchema,
   tagIdSchema,
   updateCategoryBodySchema,
   updateTagBodySchema,
+  updateTypeBodySchema,
 } from "./tags.schemas.js";
 import type { TagChip } from "./tags.types.js";
 import type { RulesService } from "../rules/rules.usecases.js";
 import type { TagsService } from "./tags.usecases.js";
 
-type EnrichedDocument = Document & { categoryPath: string | null; tags: TagChip[]; fields: ExtractedField[] };
+type EnrichedDocument = Document & { categoryPath: string | null; documentTypeName: string | null; tags: TagChip[]; fields: ExtractedField[] };
 
 // setDocumentCategory returns the full enriched document row, extractedText included.
 // Routes must never hand that back to the client, so strip it here before responding.
@@ -132,5 +136,40 @@ export function registerTagsRoutes({
       rulesService.recordCorrection({ userId, documentId, targetType: "tag", targetId: tagId, signal: "negative" }).catch(() => {});
     }
     return c.json({ tags });
+  });
+
+  app.get("/api/types", async (c) => {
+    const types = await tagsService.listTypes(getUserId(c));
+    return c.json({ types });
+  });
+
+  app.post("/api/types", async (c) => {
+    const body = await parseJsonBody(c, createTypeBodySchema);
+    const type = await tagsService.createType({ userId: getUserId(c), ...body });
+    return c.json({ type }, 201);
+  });
+
+  app.patch("/api/types/:id", async (c) => {
+    const typeId = parseOrValidationError(documentTypeIdSchema, c.req.param("id"));
+    const patch = await parseJsonBody(c, updateTypeBodySchema);
+    const type = await tagsService.updateType({ userId: getUserId(c), typeId, patch });
+    return c.json({ type });
+  });
+
+  app.delete("/api/types/:id", async (c) => {
+    const typeId = parseOrValidationError(documentTypeIdSchema, c.req.param("id"));
+    await tagsService.deleteType({ userId: getUserId(c), typeId });
+    return c.body(null, 204);
+  });
+
+  app.put("/api/documents/:id/type", async (c) => {
+    const documentId = parseOrValidationError(documentIdSchema, c.req.param("id"));
+    const { documentTypeId } = await parseJsonBody(c, documentTypeBodySchema);
+    const userId = getUserId(c);
+    const document = await tagsService.setDocumentType({ userId, documentId, documentTypeId });
+    if (rulesService && documentTypeId) {
+      rulesService.recordCorrection({ userId, documentId, targetType: "type", targetId: documentTypeId, signal: "positive" }).catch(() => {});
+    }
+    return c.json({ document: document ? omitExtractedText(document) : null });
   });
 }

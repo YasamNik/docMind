@@ -424,3 +424,89 @@ describe("document type presets and the retired field migration", () => {
     expect(await fieldsRepository.listByDocument({ userId, documentId: otherDoc.id! as string })).toEqual([]);
   });
 });
+
+describe("document type CRUD and manual setting", () => {
+  it("creates, updates, and deletes a type", async () => {
+    const type = await tags.createType({ userId, name: "Quote", description: "A price offer." });
+    expect(type).toMatchObject({ name: "Quote", description: "A price offer.", autoApply: true, confidenceThreshold: 0.7, documentCount: 0 });
+
+    const updated = await tags.updateType({ userId, typeId: type.id, patch: { color: "#4f46e5", description: "A price offered before work." } });
+    expect(updated).toMatchObject({ color: "#4f46e5", description: "A price offered before work." });
+
+    await tags.deleteType({ userId, typeId: type.id });
+    expect((await tags.listTypes(userId)).map((t) => t.id)).not.toContain(type.id);
+  });
+
+  it("rejects a sibling type name that differs only by case", async () => {
+    await tags.createType({ userId, name: "Quote" });
+    await expectAppError(() => tags.createType({ userId, name: "quote" }), "types.duplicate_name");
+  });
+
+  it("turning autoApply off on a type clears only the auto-sourced documents", async () => {
+    const type = await tags.createType({ userId, name: "Quote", description: "A price offer." });
+    const manualDoc = documentFixture({ documentTypeId: type.id, documentTypeSource: "manual" });
+    const autoDoc = documentFixture({ documentTypeId: type.id, documentTypeSource: "auto" });
+    await documents.insert(manualDoc);
+    await documents.insert(autoDoc);
+
+    const updated = await tags.updateType({ userId, typeId: type.id, patch: { autoApply: false } });
+
+    expect(updated.autoApply).toBe(false);
+    expect(await documents.findById({ userId, documentId: manualDoc.id! as string })).toMatchObject({ documentTypeId: type.id, documentTypeSource: "manual" });
+    expect(await documents.findById({ userId, documentId: autoDoc.id! as string })).toMatchObject({ documentTypeId: null, documentTypeSource: null });
+  });
+
+  it("deletes a type's sort_evaluations when the type is deleted", async () => {
+    const { db: freshDb } = await createTestDatabase();
+    const freshTags = createTestTagsService({ db: freshDb });
+    const freshDocuments = createDocumentsRepository({ db: freshDb });
+    const freshRulesRepository = createRulesRepository({ db: freshDb });
+    const type = await freshTags.createType({ userId, name: "Quote", description: "A price offer." });
+    const doc = documentFixture();
+    await freshDocuments.insert(doc);
+    await freshRulesRepository.insertEvaluations([
+      {
+        id: "eval_0000000000000002",
+        documentId: doc.id,
+        targetType: "type",
+        targetId: type.id,
+        matched: 1,
+        confidence: 0.9,
+        reasoning: "x",
+        outcome: "applied",
+        proposalKind: null,
+        modelId: "openrouter://test",
+        jobId: "job_0000000000000002",
+        contentHash: null,
+        evaluatedAt: new Date().toISOString(),
+      },
+    ]);
+
+    await freshTags.deleteType({ userId, typeId: type.id });
+
+    expect((await freshTags.listTypes(userId)).map((t) => t.id)).not.toContain(type.id);
+    const remaining = await freshDb.select().from((await import("../rules/rules.tables.js")).sortEvaluationsTable);
+    expect(remaining).toEqual([]);
+  });
+
+  it("sets and clears a document's manual type, rejecting an unknown type or document", async () => {
+    const doc = documentFixture();
+    await documents.insert(doc);
+    const type = await tags.createType({ userId, name: "Quote", description: "A price offer." });
+
+    const withType = await tags.setDocumentType({ userId, documentId: doc.id! as string, documentTypeId: type.id });
+    expect(withType).toMatchObject({ documentTypeId: type.id, documentTypeSource: "manual" });
+
+    const cleared = await tags.setDocumentType({ userId, documentId: doc.id! as string, documentTypeId: null });
+    expect(cleared).toMatchObject({ documentTypeId: null, documentTypeSource: null });
+
+    await expectAppError(
+      () => tags.setDocumentType({ userId, documentId: doc.id! as string, documentTypeId: "dtype_0000000000000000" }),
+      "types.not_found",
+    );
+    await expectAppError(
+      () => tags.setDocumentType({ userId, documentId: "doc_0000000000000000", documentTypeId: null }),
+      "documents.not_found",
+    );
+  });
+});

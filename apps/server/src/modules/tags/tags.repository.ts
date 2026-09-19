@@ -147,6 +147,20 @@ export function createTagsRepository({ db }: { db: Database }) {
         .set({ documentTypeId: null, documentTypeSource: null })
         .where(and(eq(documentsTable.userId, userId), eq(documentsTable.documentTypeId, typeId)));
     },
+    async clearAutoTypeOnDocuments({
+      userId,
+      typeId,
+      tx = db,
+    }: {
+      userId: string;
+      typeId: string;
+      tx?: Database;
+    }) {
+      await tx
+        .update(documentsTable)
+        .set({ documentTypeId: null, documentTypeSource: null })
+        .where(and(eq(documentsTable.userId, userId), eq(documentsTable.documentTypeId, typeId), eq(documentsTable.documentTypeSource, "auto")));
+    },
 
     // The one time migration off the retired documentType smart field. Read once per
     // ensureTypesSeeded call, then deleted as a batch once every row has been resolved.
