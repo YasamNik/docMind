@@ -12,7 +12,7 @@ import { storageSettingDefinitions } from "../storage/storage.settings.js";
 import { createStorageService } from "../storage/storage.usecases.js";
 import type { TelegramClient } from "./telegram.client.js";
 import { telegramSettingDefinitions } from "./telegram.settings.js";
-import { createTelegramService } from "./telegram.usecases.js";
+import { createTelegramService, type FetchLinkPage } from "./telegram.usecases.js";
 
 const userId = "user-1";
 const PAIRED_ID = 111;
@@ -80,6 +80,19 @@ function updateWithDocument({
   };
 }
 
+function updateWithLink({ updateId, fromId, url }: { updateId: number; fromId: number; url: string }) {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      from: { id: fromId, first_name: "Alex" },
+      chat: { id: fromId },
+      text: url,
+      entities: [{ type: "url", offset: 0, length: url.length }],
+    },
+  };
+}
+
 function updateWithPhoto({ updateId, fromId, fileId, caption }: { updateId: number; fromId: number; fileId: string; caption?: string }) {
   return {
     update_id: updateId,
@@ -112,12 +125,19 @@ beforeEach(async () => {
 
 afterEach(() => rm(root, { recursive: true, force: true }));
 
-function buildService(client: TelegramClient) {
+// No test may reach the real fetcher: link-fetch.ts has its own suite that covers the
+// guard with fakes of its own. A test that exercises a link intent overrides this.
+const fetchLinkPageNotConfigured: FetchLinkPage = () => {
+  throw new Error("this test sent a link but did not configure fetchLinkPage");
+};
+
+function buildService(client: TelegramClient, fetchLinkPage: FetchLinkPage = fetchLinkPageNotConfigured) {
   return createTelegramService({
     settingsService,
     documentsService,
     getUserId: async () => userId,
     clientFactory: () => client,
+    fetchLinkPage,
   });
 }
 
@@ -258,6 +278,54 @@ describe("telegram service", () => {
 
     const compressionNotices = sent.filter((m) => /compress/i.test(m.text));
     expect(compressionNotices).toHaveLength(1);
+  });
+
+  it("turns a link into a document holding the fetched page's text", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    const url = "https://example.com/kettles";
+    const fetchLinkPage: FetchLinkPage = async () => ({ title: "Kettles", text: "Kettles boil fast.", finalUrl: url });
+    const { client, sent } = fakeTelegram({ batches: [[updateWithLink({ updateId: 1, fromId: PAIRED_ID, url })]] });
+    const telegram = buildService(client, fetchLinkPage);
+
+    await telegram.runOnce();
+
+    const [document] = await documentsService.list({ userId });
+    expect(document).toMatchObject({ name: "Kettles.txt", source: "telegram" });
+    expect(sent.map((m) => m.text)).toContainEqual(expect.stringMatching(/got it/i));
+  });
+
+  it("replies with the plain reason when the link guard refuses a url", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    const url = "https://localhost.attacker.test/";
+    const fetchLinkPage: FetchLinkPage = async () => {
+      throw createError({ code: "telegram.link_refused", message: "Link refused: not a public address", status: 400 });
+    };
+    const { client, sent } = fakeTelegram({ batches: [[updateWithLink({ updateId: 1, fromId: PAIRED_ID, url })]] });
+    const telegram = buildService(client, fetchLinkPage);
+
+    await telegram.runOnce();
+
+    expect(await documentsService.list({ userId })).toHaveLength(0);
+    expect(sent).toEqual([{ chatId: PAIRED_ID, text: "Link refused: not a public address" }]);
+  });
+
+  it("says it already has a link that was sent twice, rather than going quiet", async () => {
+    await settingsService.set(userId, { "telegram.botToken": "111:token" });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    const urlOne = "https://example.com/kettles";
+    const urlTwo = "https://example.com/kettles-again";
+    const fetchLinkPage: FetchLinkPage = async () => ({ title: "Kettles", text: "Kettles boil fast.", finalUrl: urlOne });
+    const { client, sent } = fakeTelegram({
+      batches: [[updateWithLink({ updateId: 1, fromId: PAIRED_ID, url: urlOne }), updateWithLink({ updateId: 2, fromId: PAIRED_ID, url: urlTwo })]],
+    });
+    const telegram = buildService(client, fetchLinkPage);
+
+    await telegram.runOnce();
+
+    expect(await documentsService.list({ userId })).toHaveLength(1);
+    expect(sent.map((m) => m.text)).toContainEqual(expect.stringMatching(/already/i));
   });
 
   it("never acts on a message from an unpaired user id", async () => {

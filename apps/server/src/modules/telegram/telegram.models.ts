@@ -112,8 +112,29 @@ export function compressedPhotoNotice(): string {
   return "Heads up, Telegram compresses photos, which can hurt text recognition. Send it as a file instead of a photo to keep the original quality.";
 }
 
-export function linkNotSupportedReply(): string {
-  return "Links aren't supported yet. Send the file itself or a note instead.";
+// A refusal from the link guard already reads like a sentence a person can act on,
+// so the chat reply is just that reason with no extra framing added around it.
+
+// A fetched page keeps its own title when it has one. A page readability could make
+// nothing of, such as a bare listing, still gets a name from its own hostname rather
+// than a blank one.
+export function linkDocumentName({ title, url }: { title: string; url: string }): string {
+  const trimmedTitle = title.trim();
+  if (trimmedTitle) {
+    const short = trimmedTitle.length > 80 ? `${trimmedTitle.slice(0, 80).trimEnd()}...` : trimmedTitle;
+    return `${short}.txt`;
+  }
+  try {
+    return `${new URL(url).hostname}.txt`;
+  } catch {
+    return "Saved link.txt";
+  }
+}
+
+// The source url is kept as the document's own first line, not in a new column, so
+// search and chat can cite where a saved link came from with no schema change.
+export function linkDocumentBody({ url, text }: { url: string; text: string }): string {
+  return `${url}\n\n${text}`;
 }
 
 // Extensions this module ever actually needs to guess: a photo always reports

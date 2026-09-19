@@ -19,6 +19,7 @@
     "@better-auth/drizzle-adapter": "^1.7.5",
     "@hono/node-server": "^1.14.0",
     "@libsql/client": "^0.18.0",
+    "@mozilla/readability": "^0.6.0",
     "@valibot/to-json-schema": "^1.8.0",
     "better-auth": "^1.7.5",
     "drizzle-orm": "^0.45.2",
@@ -26,11 +27,13 @@
     "google-auth-library": "^11.1.0",
     "hono": "^4.7.0",
     "jszip": "^3.10.2",
+    "linkedom": "^0.18.13",
     "mammoth": "^1.12.3",
     "openai": "^7.16.0",
     "pdfjs-dist": "^6.3.289",
     "pino": "^9.6.0",
     "tesseract.js": "^7.0.0",
+    "undici": "^8.10.2",
     "valibot": "^1.1.0"
   },
   "devDependencies": {

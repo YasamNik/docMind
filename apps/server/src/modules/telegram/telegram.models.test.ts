@@ -6,7 +6,8 @@ import {
   fileDocumentName,
   fileTooLargeReply,
   intentOf,
-  linkNotSupportedReply,
+  linkDocumentBody,
+  linkDocumentName,
   newPairingCode,
   pairingSucceededReply,
   receivedReply,
@@ -136,7 +137,6 @@ describe("telegram models", () => {
     expect(duplicateReply("receipt.pdf")).toMatch(/already/i);
     expect(fileTooLargeReply()).toMatch(/20 ?mb/i);
     expect(compressedPhotoNotice()).toMatch(/compress/i);
-    expect(linkNotSupportedReply()).toMatch(/not.*support|support.*not/i);
   });
 
   it("names a file document from telegram's own filename first", () => {
@@ -158,5 +158,30 @@ describe("telegram models", () => {
     expect(textDocumentName("Remember to renew the lease by Friday.")).toBe("Remember to renew the lease by Friday..txt");
     const long = "x".repeat(80);
     expect(textDocumentName(`${long}\nsecond line`)).toBe(`${long.slice(0, 60)}....txt`);
+  });
+
+  it("names a saved link from the page title", () => {
+    expect(linkDocumentName({ title: "A Long Article About Kettles", url: "https://example.com/kettles" })).toBe(
+      "A Long Article About Kettles.txt",
+    );
+  });
+
+  it("names a saved link from the hostname when the page has no title", () => {
+    expect(linkDocumentName({ title: "", url: "https://example.com/kettles" })).toBe("example.com.txt");
+  });
+
+  it("names a saved link something reasonable even for an unparseable url", () => {
+    expect(linkDocumentName({ title: "", url: "not a url" })).toBe("Saved link.txt");
+  });
+
+  it("truncates a very long page title", () => {
+    const long = "x".repeat(100);
+    expect(linkDocumentName({ title: long, url: "https://example.com/" })).toBe(`${long.slice(0, 80)}....txt`);
+  });
+
+  it("keeps the source url as the document's first line", () => {
+    expect(linkDocumentBody({ url: "https://example.com/kettles", text: "Kettles boil fast." })).toBe(
+      "https://example.com/kettles\n\nKettles boil fast.",
+    );
   });
 });

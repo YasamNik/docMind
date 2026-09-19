@@ -5,6 +5,7 @@ import { isAppError } from "../../shared/errors/errors.js";
 import { createLogger, type Logger } from "../../shared/logger/logger.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
 import type { SettingsService } from "../settings/settings.usecases.js";
+import { fetchReadablePage } from "./link-fetch.js";
 import { createTelegramClient, type TelegramClient } from "./telegram.client.js";
 import {
   compressedPhotoNotice,
@@ -12,7 +13,8 @@ import {
   fileDocumentName,
   fileTooLargeReply,
   intentOf,
-  linkNotSupportedReply,
+  linkDocumentBody,
+  linkDocumentName,
   pairingSucceededReply,
   receivedReply,
   textDocumentName,
@@ -47,11 +49,14 @@ function backoffDelayMs(attempt: number): number {
   return Math.min(1000 * 2 ** Math.max(0, attempt - 1), 60000);
 }
 
+export type FetchLinkPage = (args: { url: string }) => Promise<{ title: string; text: string; finalUrl: string }>;
+
 export function createTelegramService({
   settingsService,
   documentsService,
   getUserId,
   clientFactory = createTelegramClient,
+  fetchLinkPage = fetchReadablePage,
   logger = createLogger("telegram"),
   pollTimeoutSeconds = 25,
   idleIntervalMs = 1000,
@@ -63,6 +68,9 @@ export function createTelegramService({
   // process started is picked up without a restart, the same way the token is.
   getUserId: () => Promise<string | undefined>;
   clientFactory?: ClientFactory;
+  // Injectable so tests can save a link with no dispatcher, no DNS lookup and no
+  // network at all. link-fetch.ts owns the real guard and has its own test suite.
+  fetchLinkPage?: FetchLinkPage;
   logger?: Logger;
   pollTimeoutSeconds?: number;
   idleIntervalMs?: number;
@@ -137,6 +145,28 @@ export function createTelegramService({
     }
   }
 
+  async function handleLink({ userId, client, chatId, url }: { userId: string; client: TelegramClient; chatId: number; url: string }) {
+    let page: Awaited<ReturnType<FetchLinkPage>>;
+    try {
+      page = await fetchLinkPage({ url });
+    } catch (error) {
+      if (isAppError(error) && error.code === "telegram.link_refused") {
+        await client.sendMessage({ chatId, text: error.message });
+        return;
+      }
+      throw error;
+    }
+
+    const { document, duplicateOf } = await documentsService.upload({
+      userId,
+      name: linkDocumentName({ title: page.title, url: page.finalUrl }),
+      mimeType: "text/plain",
+      body: Readable.from([linkDocumentBody({ url: page.finalUrl, text: page.text })]),
+      source: "telegram",
+    });
+    await client.sendMessage({ chatId, text: duplicateOf ? duplicateReply(document.name) : receivedReply(document.name) });
+  }
+
   async function handleText({ userId, client, chatId, text }: { userId: string; client: TelegramClient; chatId: number; text: string }) {
     const { document, duplicateOf } = await documentsService.upload({
       userId,
@@ -179,7 +209,7 @@ export function createTelegramService({
       return;
     }
     if (intent.kind === "link") {
-      await client.sendMessage({ chatId, text: linkNotSupportedReply() });
+      await handleLink({ userId, client, chatId, url: intent.url });
       return;
     }
     // "pairing" while already paired, or "ignore": nothing to do.
