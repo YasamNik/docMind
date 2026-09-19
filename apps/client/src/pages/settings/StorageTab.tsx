@@ -42,6 +42,10 @@ export function StorageTab() {
     mutationFn: (id: string) => settingsApi.update({ "storage.activeDriver": id }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["storage-drivers"] });
+      // The library and its sidebar counts are scoped to the active storage, so both
+      // need to refetch once the switch lands, alongside the settings the tab reads.
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
       setConfirmSwitch(null);
       toast.success("Storage switched");
     },

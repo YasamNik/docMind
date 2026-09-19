@@ -65,11 +65,14 @@ vi.mock("@/lib/settings-api", () => ({
 }));
 
 function renderStorageTab() {
-  return render(
-    <QueryClientProvider client={new QueryClient()}>
+  const queryClient = new QueryClient();
+  const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+  const result = render(
+    <QueryClientProvider client={queryClient}>
       <StorageTab />
     </QueryClientProvider>,
   );
+  return { ...result, invalidateSpy };
 }
 
 describe("StorageTab", () => {
@@ -140,6 +143,19 @@ describe("StorageTab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Switch storage" }));
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ "storage.activeDriver": "s3" }));
+  });
+
+  it("refetches documents, counts and settings after switching storage, not only the drivers list", async () => {
+    const { invalidateSpy } = renderStorageTab();
+    await screen.findByText("Active");
+    fireEvent.click(screen.getByRole("button", { name: /Amazon S3/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /switch to amazon s3/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "Switch storage" }));
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["storage-drivers"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["documents"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["settings"] });
   });
 
   it("refuses to switch while the driver's health check fails", async () => {
