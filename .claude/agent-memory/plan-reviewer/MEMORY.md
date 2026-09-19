@@ -18,3 +18,7 @@
 - [Tool-calling / pending-confirmation lesson](lesson-tool-calling-and-pending-confirmation.md) -- check AiAdapter for real tools support before trusting "tools exist today"; propose-then-confirm needs a named pending-state store
 - [Assistant plan 2 review](review-plan-assistant-triage.md) -- capability registry and triage plan, sound with 4 fixes: narrow test gate, registry naming, runCommand validation, recordsTurn test
 - [runCommand validation / registry naming lesson](lesson-runcommand-validation-and-registry-naming.md) -- check both entry points of a two-path registry validate args; name registries *.registry.ts
+- [Assistant plan 4 review](assistant-instructions-plan-review.md) -- instructions doc plan, sound; prompt ordering on the answering call and settings cache facts to reuse for plan 5
+- [Guard tests must flip the flag](guard-tests-must-flip-the-flag.md) -- a "the prompt cannot change guard X" test is vacuous when X is already false by default in the test's own setup
+- [Settings cache reloads every row](settings-cache-full-row-reload.md) -- the cache is per user, not per key; any write for that user drops and reloads all of their keys
+- [Telegram retry idempotency ruling](telegram-retry-idempotency.md) -- fix the unguarded send loop, not cursor timing; a retry belongs at the boundary that is idempotent

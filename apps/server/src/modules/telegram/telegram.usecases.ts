@@ -289,6 +289,31 @@ export function createTelegramService({
     }
   }
 
+  // Bounded retry for delivering one already-generated reply part, sharing
+  // updateRetryAttempts and updateRetryDelayMs with the update-level retry below: a
+  // blip on sendMessage is the same kind of transient failure those already model.
+  // Never throws. Exhausting every attempt is logged and swallowed here, the same
+  // skip-it-and-move-on policy pollUpdatesOnce applies to a poisoned update, because
+  // by this point the reply already exists: rethrowing would only buy a second paid
+  // model call and a duplicate line in the chat session for a message that has
+  // nothing left to retry about.
+  async function sendReplyPart({ client, chatId, text }: { client: TelegramClient; chatId: number; text: string }): Promise<void> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= updateRetryAttempts; attempt += 1) {
+      try {
+        await client.sendMessage({ chatId, text });
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt < updateRetryAttempts) await new Promise((resolve) => setTimeout(resolve, updateRetryDelayMs(attempt)));
+      }
+    }
+    logger.warn(
+      { chatId, attempts: updateRetryAttempts, err: (lastError as Error)?.message ?? String(lastError) },
+      "Telegram reply part failed on every retry, skipping it",
+    );
+  }
+
   // Runs one turn of the assistant conversation through the shared assistant service,
   // keeping exactly three responsibilities of its own: the cheap acknowledgement short
   // circuit, the stale-session retry, and presentation, since runTurn and runCommand
@@ -369,7 +394,7 @@ export function createTelegramService({
     const sourceNames = result.citations.map((citation) => citation.documentName);
     const reply = assistantReplyText({ answer: stripCitationMarkers(result.reply), sourceNames, web: result.toolUsed === "searchWeb" });
     for (const part of splitForTelegram(reply)) {
-      await client.sendMessage({ chatId, text: part });
+      await sendReplyPart({ client, chatId, text: part });
     }
   }
 
@@ -545,7 +570,12 @@ export function createTelegramService({
 
       // The cursor advances here, after this update is either handled or given up on,
       // not once for the whole batch, so a later update never gets replayed on top of
-      // work already done for an earlier one.
+      // work already done for an earlier one. A process crash in the gap between
+      // handleUpdate returning and this write still lets the same update be redelivered
+      // once the process comes back, costing one wasted model call and one duplicate
+      // line in the chat session, once. A ring of recently handled update ids was
+      // considered to close that gap and rejected: it is more machinery than a window
+      // this narrow, hit only by a crash at this exact instant, is worth.
       if (updateId !== undefined) await settingsService.setInternal(userId, "telegram.lastUpdateId", updateId);
     }
   }

@@ -880,6 +880,97 @@ describe("telegram service, the assistant", () => {
     expect(sent.map((m) => m.text).join("")).toBe(longAnswer);
   });
 
+  // Regression test: a send failing on a later part of a split reply used to escape
+  // handleAssistantTurn uncaught, straight into pollUpdatesOnce's own retry loop, which
+  // reran the whole turn from scratch: a second model call and a second copy of the
+  // user's own message appended to the chat session. The reply was already generated,
+  // so a delivery failure must be handled where it happens, not by redoing the turn.
+  it("does not repeat the whole turn when delivering a later part of a split reply fails on every retry", async () => {
+    await pairAndConfigureChat();
+    const longAnswer = "x".repeat(5000);
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf([longAnswer]));
+    let sendCalls = 0;
+    const sent: { chatId: number; text: string }[] = [];
+    const client: TelegramClient = {
+      async getUpdates({ offset }) {
+        return offset === 1 ? [updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "tell me a long story" })] : [];
+      },
+      async getFile() {
+        throw new Error("not used in this test");
+      },
+      async sendMessage({ chatId, text }) {
+        sendCalls += 1;
+        // The first part delivers fine. Every attempt at the second part fails, standing
+        // in for a send that never recovers within the bounded retry.
+        if (sendCalls === 1) {
+          sent.push({ chatId, text });
+          return;
+        }
+        throw new Error("network blip, simulated");
+      },
+    };
+    const telegram = buildService(client);
+
+    await expect(telegram.runOnce()).resolves.toBeUndefined();
+
+    expect(streamChatImpl).toHaveBeenCalledTimes(1);
+    const sessions = await chatService.listSessions(userId);
+    const messages = await chatService.listMessages({ userId, sessionId: sessions[0]!.id });
+    expect(messages.filter((m) => m.role === "user")).toHaveLength(1);
+  });
+
+  it("swallows a send that fails on every retry instead of throwing out of the poll cycle, and still advances the cursor", async () => {
+    await pairAndConfigureChat();
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf(["Short reply."]));
+    let getUpdatesCalls = 0;
+    const client: TelegramClient = {
+      async getUpdates() {
+        getUpdatesCalls += 1;
+        return getUpdatesCalls === 1 ? [updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "hello" })] : [];
+      },
+      async getFile() {
+        throw new Error("not used in this test");
+      },
+      async sendMessage() {
+        throw new Error("permanently blocked, simulated");
+      },
+    };
+    const telegram = buildService(client);
+
+    await expect(telegram.runOnce()).resolves.toBeUndefined();
+
+    expect(await settingsService.get<number>(userId, "telegram.lastUpdateId")).toBe(1);
+    expect(streamChatImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers every part of a split reply, in order and with no duplicates, when a send fails once and succeeds on retry", async () => {
+    await pairAndConfigureChat();
+    const longAnswer = "x".repeat(5000);
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf([longAnswer]));
+    let sendCalls = 0;
+    const sent: { chatId: number; text: string }[] = [];
+    const client: TelegramClient = {
+      async getUpdates({ offset }) {
+        return offset === 1 ? [updateWithText({ updateId: 1, fromId: PAIRED_ID, text: "tell me a long story" })] : [];
+      },
+      async getFile() {
+        throw new Error("not used in this test");
+      },
+      async sendMessage({ chatId, text }) {
+        sendCalls += 1;
+        // The second part's first attempt fails, then its retry succeeds.
+        if (sendCalls === 2) throw new Error("network blip, simulated");
+        sent.push({ chatId, text });
+      },
+    };
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(2);
+    expect(sent.map((m) => m.text).join("")).toBe(longAnswer);
+  });
+
   it("says so when no chat model is configured, instead of failing silently", async () => {
     await settingsService.set(userId, { "telegram.botToken": "111:token" });
     await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
