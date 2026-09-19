@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { Briefcase, Inbox, LogOut, MessageCircle, Moon, Search, Settings, Sparkles, Sun, Tags as TagsIcon } from "lucide-react";
+import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
+import { Briefcase, Inbox, LogOut, Menu, MessageCircle, Moon, Search, Settings, Sparkles, Sun, Tags as TagsIcon, X } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -11,10 +13,15 @@ import { jobsApi } from "@/lib/jobs-api";
 import { savedSearchesApi } from "@/lib/saved-searches-api";
 import { useKeyboardShortcuts } from "@/lib/use-keyboard-shortcuts";
 import { categoriesApi, tagsApi, type CategoryRow, type TagRow } from "@/lib/tags-api";
+import { useIsMobile } from "@/lib/use-media-query";
 
 // Two-level navigation: a thin icon rail selects a section, a context panel next to
 // it shows that section's links. Pattern similar to editors like VS Code that pair an
 // activity bar with a contextual side panel.
+//
+// Below the md breakpoint the rail and panel give way to a sticky top bar and a slide-over
+// drawer holding both levels, the same shape shadcn's sidebar block uses to collapse a rail
+// into a sheet on a phone.
 
 type RailTab = "files" | "search" | "tags" | "sorting" | "chat" | "settings" | "jobs";
 
@@ -73,17 +80,21 @@ function CountRow({ to, label, count, color }: { to: string; label: string; coun
   );
 }
 
-function ThemeToggle() {
+function ThemeToggle({ size = "sm" }: { size?: "sm" | "lg" }) {
   const { resolvedTheme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
+  const buttonClass =
+    size === "lg"
+      ? "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-org-neutral-600 hover:text-foreground"
+      : "rounded-xl p-2 text-org-neutral-600 hover:text-foreground";
   if (!mounted) return <span className="h-5 w-5" />;
   const isDark = resolvedTheme === "dark";
   return (
     <button
       type="button"
       title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-      className="rounded-xl p-2 text-org-neutral-600 hover:text-foreground"
+      className={buttonClass}
       onClick={() => setTheme(isDark ? "light" : "dark")}
     >
       {isDark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
@@ -242,13 +253,162 @@ function JobsPanel({ failedCount }: { failedCount: number }) {
   );
 }
 
+// The context panel's content depends only on the active section, so both the desktop
+// aside and the mobile drawer render it from this one place.
+function ContextPanelContent({
+  activeTab,
+  inboxCount,
+  needsReviewCount,
+  trashCount,
+  tags,
+  categories,
+  failedJobCount,
+}: {
+  activeTab: RailTab;
+  inboxCount: number;
+  needsReviewCount: number;
+  trashCount: number;
+  tags: TagRow[];
+  categories: CategoryRow[];
+  failedJobCount: number;
+}) {
+  if (activeTab === "files") return <FilesPanel inboxCount={inboxCount} needsReviewCount={needsReviewCount} trashCount={trashCount} />;
+  if (activeTab === "search") return <SearchPanel />;
+  if (activeTab === "tags") return <TagsPanel tags={tags} categories={categories} />;
+  if (activeTab === "sorting") return <SortingPanel automaticCount={countAutomaticItems(tags, categories)} />;
+  if (activeTab === "chat") return <ChatPanel />;
+  if (activeTab === "settings") return <SettingsPanel />;
+  if (activeTab === "jobs") return <JobsPanel failedCount={failedJobCount} />;
+  return null;
+}
+
+function MobileTopBar({
+  label,
+  failedJobCount,
+  unreadCount,
+  onOpenMenu,
+}: {
+  label: string;
+  failedJobCount: number;
+  unreadCount: number;
+  onOpenMenu: () => void;
+}) {
+  return (
+    <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-border bg-card px-2 py-1">
+      <button
+        type="button"
+        aria-label="Open navigation menu"
+        onClick={onOpenMenu}
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-org-neutral-600 hover:text-foreground"
+      >
+        <Menu className="h-5 w-5" />
+      </button>
+      <span className="font-heading text-lg">{label}</span>
+      <div className="flex items-center gap-1.5">
+        {failedJobCount > 0 && (
+          <Badge variant="destructive" aria-label="Failed jobs">
+            {failedJobCount}
+          </Badge>
+        )}
+        {unreadCount > 0 && (
+          <Badge variant="secondary" aria-label="Items needing attention">
+            {unreadCount}
+          </Badge>
+        )}
+      </div>
+      <div className="ml-auto flex items-center">
+        <ThemeToggle size="lg" />
+      </div>
+    </header>
+  );
+}
+
+function NavDrawer({
+  open,
+  onOpenChange,
+  activeTab,
+  failedJobCount,
+  panel,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  activeTab: RailTab;
+  failedJobCount: number;
+  panel: ReactNode;
+}) {
+  // Any nav link inside the drawer closes it once chosen. A click elsewhere in the same
+  // area (empty padding, the section heading) does nothing, since it did not choose a
+  // destination.
+  function closeIfLinkClicked(event: React.MouseEvent<HTMLElement>) {
+    if ((event.target as HTMLElement).closest("a")) onOpenChange(false);
+  }
+
+  return (
+    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Backdrop className="fixed inset-0 z-50 bg-org-neutral-900/50 duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
+        <DialogPrimitive.Popup
+          aria-label="Navigation"
+          className="fixed inset-y-0 left-0 z-50 flex w-[280px] max-w-[85vw] flex-col gap-6 overflow-y-auto bg-card p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] outline-none duration-150 data-open:animate-in data-open:slide-in-from-left data-closed:animate-out data-closed:slide-out-to-left"
+        >
+          <div className="flex items-center justify-between">
+            <span className="font-heading text-lg">DocMind</span>
+            <DialogPrimitive.Close
+              aria-label="Close navigation"
+              className="flex h-11 w-11 items-center justify-center rounded-xl text-org-neutral-600 hover:text-foreground"
+            >
+              <X className="h-5 w-5" />
+            </DialogPrimitive.Close>
+          </div>
+
+          <nav className="flex flex-col gap-1" onClick={closeIfLinkClicked}>
+            {railItems.map(({ tab, label, to, icon: Icon }) => (
+              <NavLink
+                key={tab}
+                to={to}
+                className={`flex min-h-11 items-center gap-3 rounded-xl px-3 py-3 text-sm ${
+                  activeTab === tab ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-foreground/5"
+                }`}
+              >
+                <Icon className="h-5 w-5 shrink-0" />
+                <span>{label}</span>
+                {tab === "jobs" && failedJobCount > 0 && (
+                  <Badge variant="destructive" className="ml-auto" aria-label="Failed jobs">
+                    {failedJobCount}
+                  </Badge>
+                )}
+              </NavLink>
+            ))}
+          </nav>
+
+          <div className="flex flex-col gap-6 border-t border-border pt-6 [&_a]:py-3" onClick={closeIfLinkClicked}>
+            {panel}
+          </div>
+
+          <button
+            type="button"
+            className="mt-auto flex min-h-11 items-center gap-2 rounded-xl px-3 py-3 text-sm text-org-neutral-600 hover:text-foreground"
+            onClick={() => authClient.signOut().then(() => window.location.assign("/sign-in"))}
+          >
+            <LogOut className="h-5 w-5" />
+            <span>Sign out</span>
+          </button>
+        </DialogPrimitive.Popup>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
+  );
+}
+
 export function AppShell() {
   useKeyboardShortcuts();
   const location = useLocation();
   const [activeTab, setActiveTab] = useState<RailTab>(() => tabForPath(location.pathname));
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const isMobileLayout = useIsMobile();
 
   useEffect(() => {
     setActiveTab(tabForPath(location.pathname));
+    setIsMenuOpen(false);
   }, [location.pathname]);
 
   const { data: counts = { inbox: 0, needsReview: 0, trash: 0 } } = useQuery({ queryKey: ["documents", "counts"], queryFn: () => documentsApi.counts() });
@@ -256,17 +416,39 @@ export function AppShell() {
   const { data: categories = [] } = useQuery({ queryKey: ["categories"], queryFn: categoriesApi.list });
   const { data: tags = [] } = useQuery({ queryKey: ["tags"], queryFn: tagsApi.list });
 
+  const failedJobCount = jobCounts.failed;
+  const unreadCount = counts.inbox + counts.needsReview;
+  const activeLabel = railItems.find((item) => item.tab === activeTab)?.label ?? "";
+
+  const panel = (
+    <ContextPanelContent
+      activeTab={activeTab}
+      inboxCount={counts.inbox}
+      needsReviewCount={counts.needsReview}
+      trashCount={counts.trash}
+      tags={tags}
+      categories={categories}
+      failedJobCount={failedJobCount}
+    />
+  );
+
+  if (isMobileLayout) {
+    return (
+      <div className="flex min-h-screen flex-col">
+        <MobileTopBar label={activeLabel} failedJobCount={failedJobCount} unreadCount={unreadCount} onOpenMenu={() => setIsMenuOpen(true)} />
+        <NavDrawer open={isMenuOpen} onOpenChange={setIsMenuOpen} activeTab={activeTab} failedJobCount={failedJobCount} panel={panel} />
+        <main className="flex-1 p-8">
+          <Outlet />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen">
-      <IconRail activeTab={activeTab} failedJobCount={jobCounts.failed} />
+      <IconRail activeTab={activeTab} failedJobCount={failedJobCount} />
       <aside className="flex w-[220px] shrink-0 flex-col gap-6 overflow-y-auto border-r border-border bg-card p-6">
-        {activeTab === "files" && <FilesPanel inboxCount={counts.inbox} needsReviewCount={counts.needsReview} trashCount={counts.trash} />}
-        {activeTab === "search" && <SearchPanel />}
-        {activeTab === "tags" && <TagsPanel tags={tags} categories={categories} />}
-        {activeTab === "sorting" && <SortingPanel automaticCount={countAutomaticItems(tags, categories)} />}
-        {activeTab === "chat" && <ChatPanel />}
-        {activeTab === "settings" && <SettingsPanel />}
-        {activeTab === "jobs" && <JobsPanel failedCount={jobCounts.failed} />}
+        {panel}
       </aside>
       <main className="flex-1 p-8">
         <Outlet />
