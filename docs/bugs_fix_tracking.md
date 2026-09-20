@@ -475,6 +475,139 @@ Before debugging anything, search this file for the symptom first.
 
 ---
 
+## A connected mailbox was told to go and create an app password, 2026-09-19T23:56:44Z
+
+**Component:** client/email
+**Severity:** Major
+**Tags:** setup, oauth, guide
+
+### Symptoms
+- A Gmail mailbox connected via OAuth was shown the IMAP setup guide
+- The guide tells the user to create an app password and enter a host, port, and mailbox address
+- All of those are wrong for the OAuth mode and none of them are shown in the UI
+- This was the exact text the user could not follow, which is what prompted the whole Gmail OAuth feature
+
+### Root Cause
+- The guide was chosen with `status.mode === "unconfigured" && status.googleAppAvailable ? gmailGuide : imapGuide`
+- The Gmail guide only showed while nothing was connected
+- The moment Gmail connected, the panel fell back to the IMAP guide because the mode was no longer "unconfigured"
+
+### Solution / Fix
+- Added a connected mailbox panel that shows what DocMind does with the folder and when Google will expire the connection
+- The guide selector now chooses based on the resolved mode (unconfigured, gmail, imap) rather than checking only `status.mode`
+- Added regression test asserting the app password sentence is nowhere on screen when connected
+- Changes in `apps/client/src/pages/settings/EmailTab.tsx`
+
+### Regression Test
+- `apps/client/src/pages/settings/EmailTab.test.tsx`, "a connected mailbox" (regression test added in this commit)
+
+---
+
+## The bot answered a voice note with silence, 2026-09-20T00:40:50Z
+
+**Component:** telegram/voice
+**Severity:** Blocker
+**Tags:** telegram, input-type, transcription, test-isolation
+
+### Symptoms
+- A user sent a voice note to the Telegram bot (held-to-record audio)
+- The bot received the message but sent no reply at all
+- No error or fallback message appeared; the user got silence
+- Other message types (text, photo, audio files) replied normally
+
+### Root Cause
+- Telegram sends a held-to-record voice note in a `voice` field, distinct from `audio` (which is an attached audio file)
+- The schema and intent detection had `audio` but neither knew about `voice`
+- A voice note matched no intent and produced no reply
+- Regression tests written first failed with "expected [] to have a length of 1 but got +0", the signature of a missing reply
+
+### Solution / Fix
+- Added `voice` field to the Telegram message schema in `telegram.schemas.ts`
+- Added voice intent to `intentOf()` in `telegram.models.ts`
+- Voice notes transcribe through the AI layer and are treated exactly as typed text
+- Same triage, confirmation guard, and save confirmation apply to voice as to any message
+- Transcription failures (too large, provider error, no audible content) return a plain sentence instead of silence
+- Changes in `apps/server/src/modules/telegram/telegram.schemas.ts`, `telegram.models.ts`, and `telegram.usecases.ts`
+- Added transcribeAudio method to ai adapters and ai.usecases
+
+### Regression Test
+- `apps/server/src/modules/telegram/telegram.usecases.test.ts`, "transcribes a voice note and answers it exactly like a typed message"
+
+### Follow-up / Notes
+- The fix was never caught by the test suite before writing regression tests because the fake Telegram update fixture never carried a `voice` field
+- Fake fixtures do not naturally include fields that nobody wrote support for
+- This is an instance of the broader pattern: a test that injects a fake cannot catch defects in what the real system does
+
+---
+
+## Em dashes reached the user in six of the last twelve assistant replies, 2026-09-20T01:22:08Z
+
+**Component:** assistant/output
+**Severity:** Major
+**Tags:** prompt, formatting, live-model, test-isolation
+
+### Symptoms
+- Six occurrences of em dashes in five of the last twelve assistant replies in production
+- Examples: "anything more recent-or point me" and "your documents - I only have access to"
+- The shipped instructions document asked the model for none: "No em dashes anywhere"
+- The model simply did not obey that line
+
+### Root Cause
+- Instructions are prompts and prompts can be argued with
+- The model chose to use em dashes anyway
+- A rule that must hold cannot rest on a prompt request; it must be code
+- No test caught this because a fake model adapter returns whatever the test author wrote, never an em dash the real model chose
+
+### Solution / Fix
+- Created `removeEmDashes()` pure function that handles three cases: digit ranges (become hyphens), clause separators (become commas), and plain hyphens in filenames (untouched)
+- Applied once where a reply is finished, not inside each capability
+- Every tool, failure path, and future tool are covered by this one place
+- Changes in `apps/server/src/modules/assistant/assistant.models.ts` and `assistant.usecases.ts`
+- Added `chat.usecases.ts` to apply the same function to saved messages
+- Added comprehensive tests for each case (digit range, clause, filename hyphen)
+
+### Regression Test
+- `apps/server/src/modules/assistant/assistant.models.test.ts`, test "removeEmDashes converts em/en dashes to punctuation or hyphens"
+- `apps/server/src/modules/assistant/assistant.usecases.test.ts`, test "chat reply that would have reached the user still gets cleaned"
+
+### Follow-up / Notes
+- The chat page still streams raw tokens to the browser, so a dash can flash live before the saved message is cleaned
+- That gap closes when plan 5 moves the chat page onto the same path
+- This is an instance of the broader pattern: the prompt asks the real model for something it does not obey, but a test with a fake adapter never discovers this gap
+
+---
+
+## A merge conflict marker was left in WORKLOG.md for several hours, 2026-09-20T01:43:02Z
+
+**Component:** docs/worklog
+**Severity:** Minor
+**Tags:** merge, conflict, markdown
+
+### Symptoms
+- The opening conflict marker `<<<<<<< HEAD` was left in WORKLOG.md after resolving a merge
+- The `=======` and `>>>>>>>` markers were removed by the resolution script
+- Nothing looked obviously broken because the conflict markers were incomplete
+- No test covers markdown file structure, so the break was not caught by the test suite
+
+### Root Cause
+- Merging the office machine's document types branch caused a conflict in WORKLOG.md
+- The conflict was resolved with a script that spliced the two sides together to preserve the file's header
+- The slice that preserved the header included the opening `<<<<<<< HEAD` line by mistake
+- The markers were found when the file was read during the end of session routine
+
+### Solution / Fix
+- Manually removed the `<<<<<<< HEAD` marker from the file
+- This fix is in commit 29c4797 which documents the WORKLOG entry for that session
+
+### Regression Test
+- None. A merge-conflict pattern cannot be covered by the vitest suite.
+
+### Follow-up / Notes
+- What would have caught it: a check for conflict markers across the whole tree after resolving a merge
+- Current practice only checks files that still show as conflicted in git status
+
+---
+
 ## Cross-cutting: Tests that only meet fakes cannot catch defects in real counterparties, 2026-09-19T17:00:00Z
 
 **Component:** testing
@@ -487,17 +620,22 @@ Before debugging anything, search this file for the symptom first.
 - Triage call: a fake adapter never decides it feels unable; the real model's hesitation was never tested
 - Telegram bot prompt: mock calls always behave as expected; real API never confirmed the prompt worked
 - Telegram failed send: mocks don't fail transiently; the real transport was never stressed
+- Voice note field: fake Telegram update fixtures never carried a `voice` field nobody wrote support for; that path ran nowhere else
+- Em dashes: a fake model adapter returns whatever the test author wrote, never an em dash the real model chose
 
 ### Impact
 - A test that stubs the counterparty (HTTP client, LLM, message queue) validates only the stub
 - It cannot catch timing issues, selection bugs, or mismatch between the prompt and real behavior
 - It cannot catch that the code path exists and is wired correctly
+- It cannot catch what a real system does when nobody wrote a test author's expectation for it
 
 ### Recommendation
 - At least one test per surface should meet the real thing or a high-fidelity stand-in
 - Link fetcher now has a local HTTP server test
 - Triage and answering paths should have one call to a real model before shipping
 - Telegram send/retry paths could stress-test a real transport once, with a slow or lossy mode
+- New inputs (voice notes) need at least one real fixture test alongside the fake ones
+- Model behavior (em dashes) needs sample checking against the live model before declaring a prompt rule done
 
 ---
 
