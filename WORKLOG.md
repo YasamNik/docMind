@@ -3,8 +3,88 @@
 Newest entry first. The `end-session` skill appends one entry per session. Each entry has
 four parts: Done, Decisions, Comments (the user's words, not a paraphrase), Open / Next.
 
-<<<<<<< HEAD
-Active branch: `feat/email-intake`
+Active branch: `main`
+
+## 2026-09-19 evening: everything merged, the assistant acts, Gmail by OAuth
+
+### Done
+- Merged both outstanding branches into `main` and pushed 135 commits to `origin/main`,
+  the first push since the 18th. `feat/email-intake` and `feat/assistant-triage`
+  fast-forwarded; the office machine's `feat/document-types-office` (25 commits, document
+  types as their own vocabulary) merged as c788b9a with its migration renumbered 0014 to
+  0016 and regenerated against the merged schema.
+- Seven fixes from three pre-merge reviews, then four more bugs found while fixing those:
+  re-uploading a trashed file threw a 404 (`findByHash` matched trashed rows), a mail whose
+  attachment already existed was filed with no attachment, the Telegram assistant went
+  silent forever after its chat session was deleted (72f6f3b), and a failed Telegram send
+  re-ran the whole turn including a second paid model call (86e1939).
+- Diagnosed the reversed-typing report from the message still in the database:
+  `ebAH i Od scOd ecnIl WhatW` reverses to exactly `WtahW lInce dOcs dO i HAbe`, so every
+  character landed at position 0. The composer is uncontrolled now (098af1a), which removes
+  the mechanism rather than guarding it.
+- Assistant plans 2, 3 and 4 built and live-validated: the capability registry and triage
+  (239359e, 6b7e6e5, df1173b), the instructions document with its 8000 character cap and
+  version history (891d506, 3fa434f), and confirmation (51a5618, 6a59041, e19a1c0, e3fefcb).
+  Writes now propose and wait; `/note` still writes immediately because typing it is the
+  confirmation.
+- Ten bug fixes recorded in `docs/bugs_fix_tracking.md` (b5fb886), plus a cross-cutting
+  entry naming the pattern behind four of them.
+- Gmail over OAuth, working on the user's real mailbox: spec (ed14a7d), the shared signed
+  state and auth (d241a22), XOAUTH2 in the loop (f2064cc), the Email tab (57502f8), and a
+  fix for the connected state still showing the app password guide (64043c7). Three real
+  documents arrived, including a forwarded gas bill and its PDF attachment as a linked
+  document.
+- Voice notes to the Telegram bot (28817cc), transcribed and treated as typed text.
+  Confirmed working by the user on real speech.
+- `DO NOT OVERENGINEER` added to `CLAUDE.md` as a mandatory section (160db13), and em
+  dashes made impossible in code rather than asked for in a prompt (b7532b6).
+
+### Decisions
+- Three defects this session were found by asking the live model and none by a test, so
+  a model-facing path now gets one real call before it is trusted. Tool calling had
+  shipped untested; the triage prompt told the model it had no context on a call that by
+  design never has any; and the answering handlers hardcoded the app's search-box prompt
+  for every surface, so the bot refused exactly as it used to.
+- The write gate was deleted rather than flipped, in the same commit that built the
+  confirmation machine, so no version of the code can write without asking.
+- The document types migration kept its original timestamp rather than taking a new one.
+  Drizzle compares timestamps against the newest applied, so the office machine skips the
+  one it already has and picks up the two it lacks, needing no manual step. The home
+  database got that schema applied by hand instead.
+- Gmail reuses the redirect URI already registered for Drive, carrying its destination in
+  the signed state, so there is no second client, no second redirect URI and no second
+  consent screen. The Drive driver was not refactored: a new feature having its own small
+  copy costs less than regressing a shipped OAuth path.
+- The app password path stays for mailboxes with no Google OAuth, and Google expiring a
+  Testing-mode token weekly was put to the user as a real cost before building.
+- Voice reuses the vision model slot rather than adding a fifth one, and a spike proved
+  OpenRouter accepts ogg, so there is no transcoding and no ffmpeg dependency.
+
+### Comments
+- "keep working as much autonomous as you can. most of your questions are quite obvious and in most cases i select what you have recomend me. so just check with plan reviewer and agree on the best choice next time you have a questuion, and you may tell me when I back what were questions and what were your choise"
+- "i do not understand instructions, and wondering that the same way as we done gdrive connection , can we do for email as well using Auth same one preferably"
+- "is there a way like in other services where you asked to connect with googole provider and you select account and authorize connection, that will be the easiest way to coinnect to email gmail if that is possible"
+- "i sclientid and secret we have done for gdrive cannot authorize the gmail of the same account as well?????????"
+- "go ahead and build it, small , simple and suoper clear to user, that if he setup credential for gdrive suggest him to use same for email and calendar in futurere"
+- "place it in the CLAUDE.md to be super clear: DO NOT OVERENGINEER!!!!!!!!!!"
+- "For telegram cimjunjcatuon can it work with voice messages?"
+- "Working"
+
+### Open / Next
+- Assistant plan 5 is the only one left: move the app's own chat page onto `runTurn` and
+  render a proposal there. Three things it must settle, named at review: `CHAT_SYSTEM_PROMPT`
+  refusing without context, SSE token streaming (a tool's reply does not exist until the
+  tool has run), and document-scoped sessions, which spec section 6 says must never save
+  notes or search the web and which nothing enforces. That page also still streams raw
+  tokens, so an em dash can flash live there before the saved message is cleaned.
+- Gmail's failure half is unproven: a revoked grant raising the reconnect banner has only
+  been tested, never seen. Google expires a Testing-mode token in about seven days, so it
+  will prove itself around 2026-09-26 whether or not anyone tests it.
+- Calendar is the next Google feature the user named. It should borrow the same app
+  through the same `getSharedGoogleApp` closure, which is the shape this session left it in.
+- Every openai-compatible provider now claims audio transcription, but only OpenRouter
+  with gemini-2.5-flash is spike-verified. Same looseness as `vision` already had.
+- `origin/feat/document-types-office` is fully contained in `main` and can be deleted.
 
 ## 2026-09-19: storage merged, telegram and email intake, mobile pass
 
