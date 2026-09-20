@@ -108,6 +108,66 @@ export function createAnthropicAdapter(config: AdapterConfig): AiAdapter {
       }
     },
 
+    async generateStructuredFromImages({ model, system, images, schema }): Promise<StructuredResult> {
+      try {
+        const jsonSchema = toJsonSchema(schema);
+        const { $schema: _, ...cleanSchema } = jsonSchema as Record<string, unknown>;
+
+        const imageBlocks = images.map((image) => ({
+          type: "image" as const,
+          source: {
+            type: "base64" as const,
+            media_type: image.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+            data: image.data.toString("base64"),
+          },
+        }));
+
+        const response = await client.messages.create({
+          model,
+          max_tokens: 4096,
+          system,
+          messages: [{ role: "user", content: imageBlocks }],
+          output_config: {
+            format: jsonSchemaOutputFormat({
+              ...cleanSchema,
+              type: "object" as const,
+            } as Parameters<typeof jsonSchemaOutputFormat>[0]),
+          },
+        });
+
+        const textBlock = response.content.find((b) => b.type === "text");
+        if (!textBlock || textBlock.type !== "text") {
+          throw createError({
+            code: "ai.provider_error",
+            message: "No text content in Anthropic response",
+            status: 502,
+          });
+        }
+
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(textBlock.text);
+        } catch {
+          throw createError({
+            code: "ai.provider_error",
+            message: "Response content is not valid JSON",
+            status: 502,
+          });
+        }
+
+        return {
+          data: parsed,
+          usage: {
+            promptTokens: response.usage.input_tokens,
+            completionTokens: response.usage.output_tokens,
+          },
+        };
+      } catch (err) {
+        if (err instanceof Error && "code" in err && typeof (err as { code: unknown }).code === "string" && (err as { code: string }).code.startsWith("ai.")) throw err;
+        wrapError(err, config.apiKey);
+      }
+    },
+
     async streamText({ model, system, input }): Promise<AsyncIterable<string>> {
       try {
         const stream = client.messages.stream({

@@ -53,6 +53,11 @@ export type EmbedResult = {
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
+// One image for a multi-image request: the raw bytes plus the mime type the provider
+// needs to build its own content block from them (a data URL for the OpenAI-compatible
+// wire format, a base64 source block for Anthropic's).
+export type ImageInput = { data: Buffer; mimeType: string };
+
 // A tool the model may call. The schema doubles as the wire-level parameter shape,
 // converted to JSON schema by the adapter, and the boundary the caller validates a
 // tool call's arguments against once the adapter has assembled them.
@@ -93,6 +98,16 @@ export type AiAdapter = {
     tools?: ToolDefinition[];
   }): Promise<AsyncIterable<ChatStreamPart>>;
   embed(args: { model: string; texts: string[] }): Promise<EmbedResult>;
+  // The multi-image counterpart to generateStructured: several images in, one schema
+  // validated JSON reply out. Built for a receipt that spans more than one photo, so the
+  // model sees every page in a single call rather than reconciling separate replies.
+  generateStructuredFromImages(args: {
+    model: string;
+    system: string;
+    images: ImageInput[];
+    schema: GenericSchema;
+    schemaName: string;
+  }): Promise<StructuredResult>;
   recognizeImage(args: {
     model: string;
     image: Buffer;

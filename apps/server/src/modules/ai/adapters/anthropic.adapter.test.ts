@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createAnthropicAdapter } from "./anthropic.adapter.js";
 import modelsFixture from "../__fixtures__/anthropic-models.json" with { type: "json" };
 import structuredFixture from "../__fixtures__/anthropic-structured.json" with { type: "json" };
+import visionStructuredFixture from "../__fixtures__/anthropic-vision-structured.json" with { type: "json" };
 import visionFixture from "../__fixtures__/anthropic-vision.json" with { type: "json" };
 import errorFixture from "../__fixtures__/anthropic-error-401.json" with { type: "json" };
 import * as v from "valibot";
@@ -152,6 +153,57 @@ describe("anthropic adapter", () => {
         type: "object" as const,
       } as Parameters<typeof jsonSchemaOutputFormat>[0]);
       expect(callBody.output_config.format.schema).toEqual(expectedFormat.schema);
+    });
+  });
+
+  describe("generateStructuredFromImages", () => {
+    it("sends every image as a content block alongside the schema and returns parsed data with usage", async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify(visionStructuredFixture), { status: 200, headers: { "content-type": "application/json" } }),
+      );
+      const adapter = createAnthropicAdapter(config);
+      const schema = v.object({
+        items: v.array(v.object({ description: v.string(), amount: v.number() })),
+        total: v.number(),
+      });
+      const imageA = Buffer.from("receipt page one");
+      const imageB = Buffer.from("receipt page two");
+      const result = await adapter.generateStructuredFromImages({
+        model: "claude-sonnet-4-20250514",
+        system: "You read grocery receipts and return line items.",
+        images: [
+          { data: imageA, mimeType: "image/jpeg" },
+          { data: imageB, mimeType: "image/png" },
+        ],
+        schema,
+        schemaName: "receipt_items",
+      });
+      expect(result.data).toMatchObject({
+        items: [
+          { description: "Milk", amount: 3.49 },
+          { description: "Bread", amount: 2.99 },
+        ],
+        total: 6.48,
+      });
+      expect(result.usage.promptTokens).toBe(584);
+      expect(result.usage.completionTokens).toBe(40);
+
+      const [callUrl, callInit] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(callUrl).toBe("https://api.anthropic.com/v1/messages");
+      const callBody = JSON.parse(callInit.body as string) as {
+        model: string;
+        max_tokens: number;
+        system: string;
+        messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+      };
+      expect(callBody.model).toBe("claude-sonnet-4-20250514");
+      expect(callBody.system).toBe("You read grocery receipts and return line items.");
+      const [message] = callBody.messages;
+      expect(message?.role).toBe("user");
+      expect(message?.content).toEqual([
+        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageA.toString("base64") } },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: imageB.toString("base64") } },
+      ]);
     });
   });
 

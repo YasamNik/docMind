@@ -419,4 +419,102 @@ describe("ai service", () => {
       "ai.invalid_response",
     );
   });
+
+  describe("generateStructuredFromImages", () => {
+    const receiptSchema = v.object({
+      items: v.array(v.object({ description: v.string(), amount: v.number() })),
+    });
+
+    it("resolves the vision slot and delegates to the adapter", async () => {
+      const { settingsService, aiService, adapter } = await setup();
+      await settingsService.set(userId, {
+        "ai.openrouter.apiKey": "sk-or-v1-test",
+        "ai.model.vision": "openrouter://google/gemini-2.5-flash",
+      });
+      const images = [
+        { data: Buffer.from("page one"), mimeType: "image/jpeg" },
+        { data: Buffer.from("page two"), mimeType: "image/jpeg" },
+      ];
+      const result = await aiService.generateStructuredFromImages({
+        userId,
+        images,
+        schema: receiptSchema,
+        schemaName: "receipt_items",
+        system: "Read this receipt.",
+      });
+      expect(result.data).toMatchObject({ items: [{ description: "test item", amount: 1 }] });
+      expect(adapter.generateStructuredFromImages).toHaveBeenCalledWith({
+        model: "google/gemini-2.5-flash",
+        system: "Read this receipt.",
+        images,
+        schema: receiptSchema,
+        schemaName: "receipt_items",
+      });
+    });
+
+    it("throws ai.too_many_images when given more than ten images, before any provider is resolved", async () => {
+      const { aiService, adapter } = await setup();
+      const images = Array.from({ length: 11 }, (_, i) => ({ data: Buffer.from(`page ${i}`), mimeType: "image/jpeg" }));
+      await expectAppError(
+        () =>
+          aiService.generateStructuredFromImages({
+            userId,
+            images,
+            schema: receiptSchema,
+            schemaName: "receipt_items",
+            system: "Read this receipt.",
+          }),
+        "ai.too_many_images",
+      );
+      expect(adapter.generateStructuredFromImages).not.toHaveBeenCalled();
+    });
+
+    it("throws ai.capability_missing when the vision slot's provider does not support vision", async () => {
+      const registry = {
+        ...aiProviderRegistry,
+        openrouter: { ...aiProviderRegistry.openrouter!, capabilities: { ...aiProviderRegistry.openrouter!.capabilities, vision: false } },
+      };
+      const { settingsService, aiService, adapter } = await setup({}, { registry });
+      await settingsService.set(userId, {
+        "ai.openrouter.apiKey": "sk-or-v1-test",
+        "ai.model.vision": "openrouter://google/gemini-2.5-flash",
+      });
+      await expectAppError(
+        () =>
+          aiService.generateStructuredFromImages({
+            userId,
+            images: [{ data: Buffer.from("page one"), mimeType: "image/jpeg" }],
+            schema: receiptSchema,
+            schemaName: "receipt_items",
+            system: "Read this receipt.",
+          }),
+        "ai.capability_missing",
+      );
+      expect(adapter.generateStructuredFromImages).not.toHaveBeenCalled();
+    });
+
+    it("throws ai.capability_missing when the vision slot's provider does not support structured output", async () => {
+      const registry = {
+        ...aiProviderRegistry,
+        openrouter: { ...aiProviderRegistry.openrouter!, capabilities: { ...aiProviderRegistry.openrouter!.capabilities, structured: false } },
+      };
+      const { settingsService, aiService, adapter } = await setup({}, { registry });
+      await settingsService.set(userId, {
+        "ai.openrouter.apiKey": "sk-or-v1-test",
+        "ai.model.vision": "openrouter://google/gemini-2.5-flash",
+      });
+      await expectAppError(
+        () =>
+          aiService.generateStructuredFromImages({
+            userId,
+            images: [{ data: Buffer.from("page one"), mimeType: "image/jpeg" }],
+            schema: receiptSchema,
+            schemaName: "receipt_items",
+            system: "Read this receipt.",
+          }),
+        "ai.capability_missing",
+      );
+      expect(adapter.generateStructuredFromImages).not.toHaveBeenCalled();
+    });
+  });
 });

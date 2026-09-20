@@ -33,6 +33,10 @@ export function fakeAdapter(overrides: Partial<AiAdapter> = {}): AiAdapter {
       data: { items: [{ type: "tag", id: "t1", matched: true, confidence: 0.9, reasoning: "test" }] },
       usage: { promptTokens: 100, completionTokens: 20 },
     })),
+    generateStructuredFromImages: vi.fn(async () => ({
+      data: { items: [{ description: "test item", amount: 1 }] },
+      usage: { promptTokens: 100, completionTokens: 20 },
+    })),
     streamText: vi.fn(async () => ({
       async *[Symbol.asyncIterator]() {
         yield "hello";

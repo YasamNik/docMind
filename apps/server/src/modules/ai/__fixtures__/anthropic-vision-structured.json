@@ -1,0 +1,17 @@
+{
+  "id": "msg_vision_structured_1",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"items\":[{\"description\":\"Milk\",\"amount\":3.49},{\"description\":\"Bread\",\"amount\":2.99}],\"total\":6.48}"
+    }
+  ],
+  "model": "claude-sonnet-4-20250514",
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 584,
+    "output_tokens": 40
+  }
+}

@@ -5,7 +5,7 @@ import { createError } from "../../../shared/errors/errors.js";
 import { sanitizeProviderError } from "../ai.models.js";
 import type { AiAdapter, ChatMessage, ChatStreamPart, ModelInfo, StructuredResult, EmbedResult, TestResult, ToolDefinition } from "../ai.types.js";
 import type { AdapterConfig } from "./adapter.types.js";
-import type { ChatCompletionCreateParamsNonStreaming, ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions.js";
+import type { ChatCompletionContentPart, ChatCompletionCreateParamsNonStreaming, ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions.js";
 
 // ChatMessage carries a single role union across system, user, and assistant, while the
 // SDK's ChatCompletionMessageParam is a discriminated union with a distinct interface per
@@ -95,6 +95,68 @@ export function createOpenAiCompatibleAdapter(config: AdapterConfig): AiAdapter 
           messages: [
             { role: "system", content: system },
             { role: "user", content: input },
+          ],
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: schemaName,
+              strict: true,
+              schema: cleanSchema as Record<string, unknown>,
+            },
+          },
+          ...(config.isOpenRouter ? { require_parameters: true } : {}),
+        };
+
+        const response = await client.chat.completions.create(body);
+
+        const content = response.choices[0]?.message?.content;
+        if (!content) {
+          throw createError({
+            code: "ai.provider_error",
+            message: "No content in completion response",
+            status: 502,
+          });
+        }
+
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(content);
+        } catch {
+          throw createError({
+            code: "ai.provider_error",
+            message: "Response content is not valid JSON",
+            status: 502,
+          });
+        }
+
+        return {
+          data: parsed,
+          usage: {
+            promptTokens: response.usage?.prompt_tokens ?? 0,
+            completionTokens: response.usage?.completion_tokens ?? 0,
+          },
+        };
+      } catch (err) {
+        if (err instanceof Error && "code" in err && typeof (err as { code: unknown }).code === "string" && (err as { code: string }).code.startsWith("ai.")) throw err;
+        wrapError(err, config.apiKey);
+      }
+    },
+
+    async generateStructuredFromImages({ model, system, images, schema, schemaName }): Promise<StructuredResult> {
+      try {
+        const jsonSchema = toJsonSchema(schema);
+        const { $schema: _, ...cleanSchema } = jsonSchema as Record<string, unknown>;
+
+        const imageParts: ChatCompletionContentPart[] = images.map((image) => ({
+          type: "image_url",
+          image_url: { url: `data:${image.mimeType};base64,${image.data.toString("base64")}` },
+        }));
+
+        const body: ChatCompletionCreateParamsNonStreaming & { require_parameters?: boolean } = {
+          model,
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: imageParts },
           ],
           response_format: {
             type: "json_schema",

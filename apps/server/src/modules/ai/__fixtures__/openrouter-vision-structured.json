@@ -1,0 +1,21 @@
+{
+  "id": "gen-vision-structured-1",
+  "object": "chat.completion",
+  "created": 1726500000,
+  "model": "google/gemini-2.5-flash",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"items\":[{\"description\":\"Milk\",\"amount\":3.49},{\"description\":\"Bread\",\"amount\":2.99}],\"total\":6.48}"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 584,
+    "completion_tokens": 40,
+    "total_tokens": 624
+  }
+}

@@ -11,6 +11,7 @@ import type {
   ChatMessage,
   ChatStreamPart,
   EmbedResult,
+  ImageInput,
   ModelInfo,
   ModelSlot,
   StructuredResult,
@@ -20,6 +21,7 @@ import type {
 import type { AdapterConfig } from "./adapters/adapter.types.js";
 
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const MAX_STRUCTURED_IMAGES = 10;
 
 type CacheEntry = { models: ModelInfo[]; fetchedAt: number };
 type AdapterFactories = {
@@ -258,6 +260,63 @@ export function createAiService({
       logger.info(
         { task, model: buildModelUri(provider.id, model), latencyMs, usage: result.usage },
         "structured generation complete",
+      );
+
+      const parsed = v.safeParse(schema, result.data);
+      if (!parsed.success) {
+        const firstIssue = parsed.issues[0];
+        const path = firstIssue?.path?.map((p) => String(p.key)).join(".") ?? "";
+        throw createError({
+          code: "ai.invalid_response",
+          message: `Model response does not match schema${path ? ` at ${path}` : ""}: ${firstIssue?.message ?? "invalid"}`,
+          status: 502,
+        });
+      }
+
+      return { data: parsed.output as T, usage: result.usage };
+    },
+
+    // The multi-image counterpart to generateStructured: resolves the vision slot rather
+    // than a task-named slot, since vision is the one slot that is actually multimodal.
+    // Gated on both vision and structured because a model that reads images is not
+    // guaranteed to also support JSON schema mode, and sending the request anyway would
+    // fail with a confusing provider error instead of this module's own clear one.
+    async generateStructuredFromImages<T>({
+      userId,
+      images,
+      schema,
+      schemaName,
+      system,
+    }: {
+      userId: string;
+      images: ImageInput[];
+      schema: GenericSchema;
+      schemaName: string;
+      system: string;
+    }): Promise<StructuredResult<T>> {
+      if (images.length > MAX_STRUCTURED_IMAGES) {
+        throw createError({
+          code: "ai.too_many_images",
+          message: `Too many images: got ${images.length}, maximum is ${MAX_STRUCTURED_IMAGES}.`,
+          status: 400,
+        });
+      }
+
+      const { model, provider, apiKey, baseUrl } = await resolveSlot(userId, "vision");
+      if (!provider.capabilities.vision || !provider.capabilities.structured) {
+        throw createError({
+          code: "ai.capability_missing",
+          message: `Provider "${provider.label}" does not support structured output from images.`,
+          status: 400,
+        });
+      }
+      const adapter = buildAdapter(provider, apiKey, baseUrl);
+      const start = Date.now();
+      const result = await adapter.generateStructuredFromImages({ model, system, images, schema, schemaName });
+      const latencyMs = Date.now() - start;
+      logger.info(
+        { task: "vision", model: buildModelUri(provider.id, model), latencyMs, usage: result.usage, imageCount: images.length },
+        "structured generation from images complete",
       );
 
       const parsed = v.safeParse(schema, result.data);

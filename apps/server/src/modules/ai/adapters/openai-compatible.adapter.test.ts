@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createOpenAiCompatibleAdapter } from "./openai-compatible.adapter.js";
 import modelsFixture from "../__fixtures__/openrouter-models.json" with { type: "json" };
 import completionFixture from "../__fixtures__/openrouter-completion.json" with { type: "json" };
+import visionStructuredFixture from "../__fixtures__/openrouter-vision-structured.json" with { type: "json" };
 import visionFixture from "../__fixtures__/openrouter-vision.json" with { type: "json" };
 import transcriptionFixture from "../__fixtures__/openrouter-transcription.json" with { type: "json" };
 import errorFixture from "../__fixtures__/openrouter-error-401.json" with { type: "json" };
@@ -131,6 +132,55 @@ describe("openai-compatible adapter", () => {
         type: "json_schema",
         json_schema: { name: "sort_result", strict: true },
       });
+    });
+  });
+
+  describe("generateStructuredFromImages", () => {
+    it("sends every image alongside the schema and returns parsed data with usage", async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify(visionStructuredFixture), { status: 200, headers: { "content-type": "application/json" } }),
+      );
+      const adapter = createOpenAiCompatibleAdapter(config);
+      const schema = v.object({
+        items: v.array(v.object({ description: v.string(), amount: v.number() })),
+        total: v.number(),
+      });
+      const imageA = Buffer.from("receipt page one");
+      const imageB = Buffer.from("receipt page two");
+      const result = await adapter.generateStructuredFromImages({
+        model: "google/gemini-2.5-flash",
+        system: "You read grocery receipts and return line items.",
+        images: [
+          { data: imageA, mimeType: "image/jpeg" },
+          { data: imageB, mimeType: "image/png" },
+        ],
+        schema,
+        schemaName: "receipt_items",
+      });
+      expect(result.data).toMatchObject({
+        items: [
+          { description: "Milk", amount: 3.49 },
+          { description: "Bread", amount: 2.99 },
+        ],
+        total: 6.48,
+      });
+      expect(result.usage.promptTokens).toBe(584);
+      expect(result.usage.completionTokens).toBe(40);
+
+      const [callUrl, callInit] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(callUrl).toBe("https://openrouter.ai/api/v1/chat/completions");
+      const callBody = JSON.parse(callInit.body as string) as {
+        model: string;
+        messages: Array<{ role: string; content: unknown }>;
+        response_format: { type: string; json_schema: { name: string; strict: boolean } };
+      };
+      expect(callBody.model).toBe("google/gemini-2.5-flash");
+      expect(callBody.messages[0]).toEqual({ role: "system", content: "You read grocery receipts and return line items." });
+      expect(callBody.messages[1]?.content).toEqual([
+        { type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageA.toString("base64")}` } },
+        { type: "image_url", image_url: { url: `data:image/png;base64,${imageB.toString("base64")}` } },
+      ]);
+      expect(callBody.response_format).toMatchObject({ type: "json_schema", json_schema: { name: "receipt_items", strict: true } });
     });
   });
 
