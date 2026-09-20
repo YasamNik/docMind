@@ -25,6 +25,10 @@ export type ImapConnection = {
   messageMove(range: number, destination: string, options?: { uid?: boolean }): Promise<unknown>;
   logout(): Promise<void>;
   close(): void;
+  // Optional so a test double does not have to implement it. imapflow's own instance
+  // is an EventEmitter, and an unhandled "error" event on an EventEmitter takes the
+  // whole process down, which is exactly what a Gmail timeout did.
+  on?(event: "error", listener: (error: unknown) => void): unknown;
 };
 
 type ImapConnectOptions = {
@@ -145,6 +149,12 @@ export async function createImapClient({
       socketTimeout: commandTimeoutMs,
       logger: false,
     });
+    // An imapflow instance is an EventEmitter, and node terminates the process on an
+    // "error" event with no listener. A connection that times out and then fails its
+    // pending AUTHENTICATE emits exactly that, so without this one line a transient
+    // mailbox blip kills the whole server. Every command already reports its own
+    // failure through withTimeout, so there is nothing to do here but swallow it.
+    connection.on?.("error", () => {});
   } catch (error) {
     // The factory call itself can throw synchronously, before withTimeout or the
     // try/catch around connect() below ever get a chance at it, and the underlying

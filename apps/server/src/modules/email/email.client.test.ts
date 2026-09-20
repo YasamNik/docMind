@@ -67,6 +67,23 @@ describe("createImapClient", () => {
     expect(connectionFactory).not.toHaveBeenCalled();
   });
 
+  it("listens for the connection's own error event, so a late failure cannot kill the process", async () => {
+    // A Gmail timeout followed by a failed AUTHENTICATE made imapflow emit "error"
+    // with nothing listening, and node terminates the process on that. It took the
+    // whole server down in production, not just the mailbox poll.
+    const listeners: string[] = [];
+    const connection = createFakeConnection({
+      on: ((event: string) => {
+        listeners.push(event);
+      }) as ImapConnection["on"],
+    });
+    const connectionFactory: ImapConnectionFactory = vi.fn().mockReturnValue(connection);
+
+    await createImapClient({ host: HOST, port: 993, user: "me@example.com", password: "app-pw", connectionFactory });
+
+    expect(listeners).toContain("error");
+  });
+
   it("keeps the access token out of a connection failure's error, exactly as it does the password", async () => {
     const accessToken = "gmail-access-token-do-not-leak";
     const connection = createFakeConnection({
