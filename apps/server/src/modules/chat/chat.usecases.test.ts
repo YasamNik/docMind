@@ -184,6 +184,26 @@ describe("chat service, sendMessage", () => {
     const { t, userId } = await setup();
     await expectAppError(() => t.services.chatService.sendMessage({ userId, sessionId: "sess_0000000000000000", content: "Hi" }), "chat.session_not_found");
   });
+
+  // withoutEmDashes runs once the full reply is assembled, not on each streamed token
+  // (assistant.models.ts): the tokens carry the raw dash while they stream, and only the
+  // saved message is guaranteed clean. Plan 5 moves this page onto runTurn, where every
+  // reply already goes through this on the way out.
+  it("saves the assistant reply with em and en dashes turned into readable punctuation", async () => {
+    const streamChat = vi.fn(async () => asyncIterableOf(["The lease runs 2020", "–2024", " — renewal terms apply."]));
+    const { t, userId } = await setup(streamChat as unknown as AiAdapter["streamChat"]);
+    const session = await t.services.chatService.createSession({ userId });
+
+    const generator = await t.services.chatService.sendMessage({ userId, sessionId: session.id, content: "lease term" });
+    const events = await collectEvents(generator);
+
+    const tokenText = events.filter((e) => e.event === "token").map((e) => e.data).join("");
+    expect(tokenText).toContain("—");
+
+    const messages = await t.services.chatService.listMessages({ userId, sessionId: session.id });
+    expect(messages[1]?.content).not.toMatch(/[–—]/);
+    expect(messages[1]?.content).toBe("The lease runs 2020-2024, renewal terms apply.");
+  });
 });
 
 describe("chat service, answerFromDocuments", () => {

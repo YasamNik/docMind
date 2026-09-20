@@ -27,6 +27,7 @@ import {
   toolsUnsupportedNotice,
   unavailableProposalReply,
   WARN_INSTRUCTIONS_CHARS,
+  withoutEmDashes,
 } from "./assistant.models.js";
 import { assistantCapabilities } from "./assistant.registry.js";
 import { pendingToolCallSchema } from "./assistant.schemas.js";
@@ -222,16 +223,22 @@ export function createAssistantService({
   // Telegram already retries once on a fresh session (handleAssistantTurn,
   // telegram.usecases.ts). Catching it lower, in a specific surface only, would leave
   // every other caller of a capability free to swallow it again by accident.
+  // The reply on every path out of here goes through withoutEmDashes before anything
+  // else touches it: this is the one point every capability's own text, and every
+  // capability's own failure message, both pass through on the way to a user, so it is
+  // the one place that guarantee has to hold rather than something copied onto every
+  // capability separately.
   async function runHandler({ name, args, ctx }: { name: string; args: unknown; ctx: ToolContext }): Promise<ToolResult> {
     try {
       const capability = capabilities[name];
       if (!capability) {
         throw createError({ code: "assistant.unknown_tool", message: `Unknown tool "${name}"`, status: 500 });
       }
-      return await capability.handler(args, ctx);
+      const result = await capability.handler(args, ctx);
+      return { ...result, reply: withoutEmDashes(result.reply) };
     } catch (error) {
       if (isAppError(error) && error.code === "chat.session_not_found") throw error;
-      if (isAppError(error)) return { reply: error.message, citations: [], failed: true };
+      if (isAppError(error)) return { reply: withoutEmDashes(error.message), citations: [], failed: true };
       logger.error({ tool: name, err: error instanceof Error ? error.message : String(error) }, "Assistant tool handler failed");
       return { reply: assistantTroubleReply(), citations: [], failed: true };
     }
@@ -438,7 +445,7 @@ export function createAssistantService({
       }
 
       if (!chosenCall) {
-        const reply = accumulatedText.trim().length > 0 ? accumulatedText : assistantTroubleReply();
+        const reply = accumulatedText.trim().length > 0 ? withoutEmDashes(accumulatedText) : assistantTroubleReply();
         await chatService.appendAssistantMessage({ userId, sessionId, content: reply });
         return { reply, citations: [], toolUsed: null, proposal: null };
       }
@@ -458,7 +465,7 @@ export function createAssistantService({
             status: 500,
           });
         }
-        const sentence = chosenCapability.confirm(chosenCall.arguments);
+        const sentence = withoutEmDashes(chosenCapability.confirm(chosenCall.arguments));
         // The message is written before the column on purpose: if the column write
         // fails, the user has been asked a question nothing is waiting on, and their
         // yes becomes an ordinary turn the model will most likely answer by proposing
@@ -487,7 +494,7 @@ export function createAssistantService({
       // Anything that escapes the paths above, such as the model call itself failing
       // outright, still gets a saved assistant turn: a user turn left unanswered would
       // also break role alternation on the next turn (Decision 6).
-      const reply = isAppError(error) ? error.message : assistantTroubleReply();
+      const reply = isAppError(error) ? withoutEmDashes(error.message) : assistantTroubleReply();
       if (!isAppError(error)) {
         logger.error({ sessionId, err: error instanceof Error ? error.message : String(error) }, "Assistant turn failed unexpectedly");
       }
@@ -531,7 +538,7 @@ export function createAssistantService({
           status: 500,
         });
       }
-      const sentence = capability.confirm(parsedArgs);
+      const sentence = withoutEmDashes(capability.confirm(parsedArgs));
       await chatService.appendUserMessage({ userId, sessionId: confirmedSessionId, content: commandTurnText({ tool, args: parsedArgs }) });
       const assistantMessageId = await chatService.appendAssistantMessage({ userId, sessionId: confirmedSessionId, content: sentence });
       const envelope: PendingToolCall = {

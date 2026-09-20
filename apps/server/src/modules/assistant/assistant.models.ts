@@ -112,6 +112,23 @@ export function ensureQuestionMark(question: string): string {
   return trimmed.endsWith("?") ? trimmed : `${trimmed}?`;
 }
 
+// DEFAULT_INSTRUCTIONS asks the model for "no em dashes", but that line is a prompt, and
+// a prompt can be argued with. This is the part that actually holds, run on every reply
+// before it reaches anyone (assistant.usecases.ts, chat.usecases.ts). Replaces rather
+// than deletes, with the same punctuation the instruction itself offers: a plain hyphen
+// for a dash sitting between two numbers, since that is a range, not a pause, and a
+// comma everywhere else a dash was standing in for a break between clauses, whether the
+// model put spaces around it or ran the words straight into it. Never touches a plain
+// hyphen (U+002D): a filename like "invoice-2024.pdf" has none of the characters this
+// looks for, so it never enters any of these three replacements.
+export function withoutEmDashes(text: string): string {
+  if (!text) return text;
+  return text
+    .replace(/(\d)\s*[–—]\s*(\d)/g, "$1-$2")
+    .replace(/\s+[–—]\s+/g, ", ")
+    .replace(/\s*[–—]\s*/g, ", ");
+}
+
 // A note saved from Telegram keeps the source the bot has always used, so the
 // finished-document notifier still reports it. A note saved from the app files the
 // same way a manual upload does, since the app has no "assistant" source of its own.

@@ -1,6 +1,7 @@
 import { createError } from "../../shared/errors/errors.js";
 import { createLogger, type Logger } from "../../shared/logger/logger.js";
 import type { AiService } from "../ai/ai.usecases.js";
+import { withoutEmDashes } from "../assistant/assistant.models.js";
 import type { Database } from "../database/database.js";
 import type { SearchService } from "../search/search.usecases.js";
 import {
@@ -303,8 +304,13 @@ export function createChatService({
             fullText += piece;
             yield { event: "token", data: piece };
           }
-          const matched = parseCitations(fullText, chunks);
-          await appendAssistantMessage({ userId, sessionId, content: fullText, citations: matched });
+          // The tokens above already streamed with whatever dash the model wrote: fixing
+          // that would mean holding tokens back to rewrite one that reads across a piece
+          // boundary, which is a streaming redesign this task does not make. What is
+          // saved here, the only copy anyone reads back later, is guaranteed clean.
+          const cleanText = withoutEmDashes(fullText);
+          const matched = parseCitations(cleanText, chunks);
+          await appendAssistantMessage({ userId, sessionId, content: cleanText, citations: matched });
           yield { event: "done", data: { citations: matched } };
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);

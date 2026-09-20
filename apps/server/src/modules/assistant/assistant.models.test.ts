@@ -37,6 +37,7 @@ import {
   unavailableProposalReply,
   WARN_INSTRUCTIONS_CHARS,
   withInstructions,
+  withoutEmDashes,
 } from "./assistant.models.js";
 
 describe("assistant models", () => {
@@ -344,6 +345,45 @@ describe("assistant models, proposal ids and replies", () => {
     expect(proposalDeclinedReply().length).toBeGreaterThan(0);
     expect(staleProposalReply().length).toBeGreaterThan(0);
     expect(unavailableProposalReply().length).toBeGreaterThan(0);
+  });
+});
+
+describe("assistant models, withoutEmDashes", () => {
+  // Verbatim from a live database read: six em dashes across five of the last twelve
+  // assistant replies, the count that made this a code guarantee instead of a prompt.
+  it("turns a spaced dash between two clauses into a comma", () => {
+    const result = withoutEmDashes("I can't list or count your documents — I only have access to search results");
+    expect(result).not.toMatch(/[–—]/);
+    expect(result).toBe("I can't list or count your documents, I only have access to search results");
+  });
+
+  it("turns an unspaced dash jammed between two words into a comma", () => {
+    const result = withoutEmDashes("I can check for anything more recent—or point me");
+    expect(result).not.toMatch(/[–—]/);
+    expect(result).toBe("I can check for anything more recent, or point me");
+  });
+
+  it("turns a dash before a quoted filename into a comma, leaving the filename's own hyphen alone", () => {
+    const result = withoutEmDashes("one — **Flight_approve-ballooned-itinerary.pdf**");
+    expect(result).not.toMatch(/[–—]/);
+    expect(result).toBe("one, **Flight_approve-ballooned-itinerary.pdf**");
+  });
+
+  it("turns an en dash between two numbers into a plain hyphen, since that is a range", () => {
+    expect(withoutEmDashes("2020–2024")).toBe("2020-2024");
+  });
+
+  it("leaves a plain hyphen alone, including inside a filename", () => {
+    expect(withoutEmDashes("Flight_approve-ballooned-itinerary.pdf")).toBe("Flight_approve-ballooned-itinerary.pdf");
+    expect(withoutEmDashes("well-known fact")).toBe("well-known fact");
+  });
+
+  it("leaves text with no dash of any kind unchanged", () => {
+    expect(withoutEmDashes("Nothing to change here.")).toBe("Nothing to change here.");
+  });
+
+  it("leaves an empty string as is", () => {
+    expect(withoutEmDashes("")).toBe("");
   });
 });
 

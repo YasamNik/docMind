@@ -1482,6 +1482,99 @@ describe("assistant service, runCommand", () => {
   });
 });
 
+describe("assistant service, em dashes never reach the user", () => {
+  it("strips an em dash from the model's own plain-text reply, and saves the clean version", async () => {
+    const streamChat = vi.fn(async () => chatStreamPartsOf(["I can check for anything more recent—or point me to it."]));
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+
+    const result = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "anything new",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.reply).not.toMatch(/[–—]/);
+    expect(result.reply).toBe("I can check for anything more recent, or point me to it.");
+    const messages = await t.services.chatService.listMessages({ userId, sessionId: session.id });
+    expect(messages[1]?.content).toBe(result.reply);
+  });
+
+  it("strips an em dash from a proposal's confirm sentence, built from what the model sent to save", async () => {
+    const streamChat = vi.fn(async () => toolCallStream("saveNote", { text: "Buy milk — get the oat one" }));
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+
+    const result = await t.services.assistantService.runTurn({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      text: "note buy milk, oat one",
+      basePrompt: BASE_PROMPT,
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.reply).not.toMatch(/[–—]/);
+    expect(result.reply).toContain("Buy milk, get the oat one");
+  });
+
+  it("strips an em dash from a runCommand reply on the normal path", async () => {
+    const streamChat = vi.fn(async () => chatStreamPartsOf(["Sunny today — about 20C."]));
+    const { t, userId } = await setup({ streamChat });
+    const session = await t.services.chatService.createSession({ userId });
+
+    const result = await t.services.assistantService.runCommand({
+      userId,
+      sessionId: session.id,
+      surface: "telegram",
+      tool: "searchWeb",
+      args: { question: "weather today" },
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.reply).not.toMatch(/[–—]/);
+    expect(result.reply).toBe("Sunny today, about 20C.");
+  });
+
+  it("strips an em dash from a handler's own failure message before it reaches the user", async () => {
+    const { t, userId } = await setup();
+    const handler = vi.fn(async () => {
+      throw createError({ code: "test.failed", message: "That did not work — try again in a moment.", status: 400 });
+    });
+    const failingCapability: Capability = {
+      name: "alwaysFails",
+      description: "Always throws a plain-English AppError, for testing that its message is sanitized before it reaches the user.",
+      schema: v.object({}),
+      writes: false,
+      destructive: false,
+      recordsTurn: false,
+      handler,
+    };
+    const assistantService = createAssistantService({
+      chatService: t.services.chatService,
+      documentsService: t.services.documentsService,
+      aiService: t.services.aiService,
+      settingsService: t.services.settingsService,
+      capabilities: { alwaysFails: failingCapability },
+    });
+
+    const result = await assistantService.runCommand({
+      userId,
+      sessionId: null,
+      surface: "telegram",
+      tool: "alwaysFails",
+      args: {},
+      startNewThread: vi.fn(async () => {}),
+    });
+
+    expect(result.reply).not.toMatch(/[–—]/);
+    expect(result.reply).toBe("That did not work, try again in a moment.");
+  });
+});
+
 // No AI model is exercised by any of these: the instructions document is read and
 // written through settingsService alone, so setup skips the ai.model.chat and
 // ai.openrouter.apiKey wiring that runTurn and runCommand need.
