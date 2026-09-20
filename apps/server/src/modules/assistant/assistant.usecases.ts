@@ -228,6 +228,17 @@ export function createAssistantService({
   // capability's own failure message, both pass through on the way to a user, so it is
   // the one place that guarantee has to hold rather than something copied onto every
   // capability separately.
+  //
+  // Document-scoped session tool guard, not built yet (assistant plan 5, ruling 3): no
+  // client passes documentScope today, so nothing breaks by leaving this out, but when a
+  // scoped session needs to limit which capabilities may run inside it, the check
+  // belongs right here, since this is the single point both runTurn and runCommand
+  // funnel through for every capability. It should key off a new per-capability flag
+  // next to writes and destructive, naming which capabilities make sense once a session
+  // is scoped to specific documents, not trim the tool list offered to the model:
+  // runCommand dispatches a typed command straight to this function without ever
+  // consulting that list, so a guard built as a list trim would leave a typed command a
+  // silent way around it.
   async function runHandler({ name, args, ctx }: { name: string; args: unknown; ctx: ToolContext }): Promise<ToolResult> {
     try {
       const capability = capabilities[name];

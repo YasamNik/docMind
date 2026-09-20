@@ -23,3 +23,5 @@
 - [Settings cache reloads every row](settings-cache-full-row-reload.md) -- the cache is per user, not per key; any write for that user drops and reloads all of their keys
 - [Telegram retry idempotency ruling](telegram-retry-idempotency.md) -- fix the unguarded send loop, not cursor timing; a retry belongs at the boundary that is idempotent
 - [Document types spec review](review-spec-document-types.md) -- "seed at server start" has no valid trigger for a fresh single-user install; settingsRepository has no tx support
+- [Assistant plan 5 ruling](review-ruling-assistant-plan5.md) -- no streaming, delete answeringPromptFor, defer document-scope tool guard as unreachable today
+- [runTurn fully buffered lesson](lesson-runturn-fully-buffered.md) -- drain() already strips streaming from every assistant path; a "stream when no tool" plan is a real refactor, not a tweak

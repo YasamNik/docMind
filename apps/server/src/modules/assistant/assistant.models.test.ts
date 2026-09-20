@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
 import type { ToolDefinition } from "../ai/ai.types.js";
-import { CHAT_SYSTEM_PROMPT, TELEGRAM_ASSISTANT_SYSTEM_PROMPT } from "../chat/chat.models.js";
+import { TELEGRAM_ASSISTANT_SYSTEM_PROMPT } from "../chat/chat.models.js";
 import type { InstructionVersion } from "./assistant.types.js";
 import {
-  answeringPromptFor,
   appendInstructionLine,
   assertInstructionsWithinCap,
+  ASSISTANT_ANSWERING_SYSTEM_PROMPT,
   ASSISTANT_TRIAGE_SYSTEM_PROMPT,
   assistantTroubleReply,
   buildAssistantPrompt,
@@ -254,13 +254,16 @@ describe("assistant models, the instructions prompt section", () => {
   });
 });
 
-describe("assistant models, answeringPromptFor", () => {
-  it("picks the telegram assistant prompt for the telegram surface", () => {
-    expect(answeringPromptFor("telegram")).toBe(TELEGRAM_ASSISTANT_SYSTEM_PROMPT);
+// Rewritten for assistant plan 5, ruling 2: answeringPromptFor is gone, replaced by one
+// merged prompt both surfaces share. These tests replace the old ones asserting the
+// app surface got CHAT_SYSTEM_PROMPT while telegram got TELEGRAM_ASSISTANT_SYSTEM_PROMPT.
+describe("assistant models, ASSISTANT_ANSWERING_SYSTEM_PROMPT", () => {
+  it("carries the telegram assistant's conversational framing, unchanged, for both surfaces", () => {
+    expect(ASSISTANT_ANSWERING_SYSTEM_PROMPT).toContain(TELEGRAM_ASSISTANT_SYSTEM_PROMPT);
   });
 
-  it("picks the app's own chat prompt for the app surface", () => {
-    expect(answeringPromptFor("app")).toBe(CHAT_SYSTEM_PROMPT);
+  it("does not carry the app's old page-specific wording", () => {
+    expect(ASSISTANT_ANSWERING_SYSTEM_PROMPT).not.toContain("this page");
   });
 });
 

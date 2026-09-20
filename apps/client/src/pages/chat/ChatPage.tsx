@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { assistantApi, type PendingProposal } from "@/lib/assistant-api";
 import { chatApi, type ChatMessage, type ChatSession, type Citation } from "@/lib/chat-api";
 import { formatDate } from "@/lib/format";
 import { storageApi } from "@/lib/storage-api";
@@ -280,6 +281,30 @@ function Composer({
   );
 }
 
+// The buttons for a proposal waiting on the session (assistant plan 5, ruling 1): the
+// exact sentence the model proposed already shows as the last assistant message, so
+// this renders only the yes and no answer, not the sentence again. Typing "yes" or "no"
+// in the composer still answers the same proposal (assistant.models.ts,
+// readConfirmationAnswer), so these buttons are a shortcut for it, not the only way in.
+function ProposalButtons({
+  answering,
+  onAnswer,
+}: {
+  answering: boolean;
+  onAnswer: (decision: "yes" | "no") => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 border-t border-border p-4">
+      <Button type="button" size="sm" disabled={answering} onClick={() => onAnswer("yes")}>
+        Yes
+      </Button>
+      <Button type="button" size="sm" variant="outline" disabled={answering} onClick={() => onAnswer("no")}>
+        No
+      </Button>
+    </div>
+  );
+}
+
 function DeleteSessionDialog({
   deleting,
   onCancel,
@@ -319,6 +344,7 @@ export function ChatPage() {
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [sending, setSending] = useState(false);
   const [deleting, setDeleting] = useState<ChatSession | null>(null);
+  const [pendingProposal, setPendingProposal] = useState<PendingProposal | null>(null);
 
   const { data: sessions = [] } = useQuery({ queryKey: ["chat", "sessions"], queryFn: chatApi.listSessions });
   const { data: storageDrivers = [] } = useQuery({ queryKey: ["storage-drivers"], queryFn: () => storageApi.list() });
@@ -335,6 +361,25 @@ export function ChatPage() {
     queryFn: () => chatApi.getSession(selectedId as string),
     enabled: selectedId !== null,
   });
+
+  // Read alongside getSession whenever a session is selected, so a proposal already
+  // waiting on the session still shows its buttons after a page reload mid confirmation
+  // (assistant plan 5, ruling 1). A fresh send that makes a new proposal sets this
+  // directly from the proposal SSE event below instead, since this query only refetches
+  // on a session switch.
+  const { data: proposalData } = useQuery({
+    queryKey: ["assistant", "proposal", selectedId],
+    queryFn: () => assistantApi.getPendingProposal(selectedId as string),
+    enabled: selectedId !== null,
+  });
+
+  useEffect(() => {
+    if (selectedId === null) {
+      setPendingProposal(null);
+      return;
+    }
+    if (proposalData !== undefined) setPendingProposal(proposalData);
+  }, [selectedId, proposalData]);
 
   // Tracks whether a message has already been sent in the currently selected session,
   // so a `getSession` fetch that resolves after that send (a slow historical load
@@ -416,7 +461,7 @@ export function ChatPage() {
     };
 
     try {
-      const res = await fetch(`/api/chat/sessions/${selectedId}/messages`, {
+      const res = await fetch(`/api/assistant/sessions/${selectedId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content }),
@@ -446,6 +491,11 @@ export function ChatPage() {
               const payload = JSON.parse(parsed.data) as { citations: Citation[] };
               finalize({ citations: payload.citations.length > 0 ? payload.citations : null });
               settled = true;
+            } else if (parsed.event === "proposal") {
+              const payload = JSON.parse(parsed.data) as PendingProposal;
+              finalize({});
+              setPendingProposal(payload);
+              settled = true;
             } else if (parsed.event === "error") {
               const payload = JSON.parse(parsed.data) as { message: string };
               finalize({ error: payload.message });
@@ -464,6 +514,29 @@ export function ChatPage() {
       queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
     }
   }
+
+  const answerProposal = useMutation({
+    mutationFn: ({ proposalId, decision }: { proposalId: string; decision: "yes" | "no" }) =>
+      assistantApi.answerProposal(selectedId as string, proposalId, decision),
+    onSuccess: (result) => {
+      const sessionId = selectedId as string;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `local-assistant-${Date.now()}`,
+          sessionId,
+          role: "assistant",
+          content: result.reply,
+          citations: result.citations.length > 0 ? result.citations : null,
+          error: null,
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      setPendingProposal(null);
+      queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   const sortedSessions = sortByRecent(sessions);
   const isMobile = useIsMobile();
@@ -532,6 +605,12 @@ export function ChatPage() {
               otherStorageLabel={otherStorageLabel}
               className={`flex-1 space-y-4 overflow-y-auto ${isMobile ? "p-4" : "p-6"}`}
             />
+            {pendingProposal && (
+              <ProposalButtons
+                answering={answerProposal.isPending}
+                onAnswer={(decision) => answerProposal.mutate({ proposalId: pendingProposal.id, decision })}
+              />
+            )}
             <Composer
               sending={sending}
               onSubmit={(content, clearInput) => void sendMessage(content, clearInput)}

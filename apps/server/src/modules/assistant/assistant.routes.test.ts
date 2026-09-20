@@ -323,3 +323,125 @@ describe("assistant proposal routes", () => {
     expect(res.status).toBe(400);
   });
 });
+
+// Splits an SSE response body into its blocks and finds the one with the given event
+// name, the same shape chat.routes.test.ts already asserts on for the sibling route.
+function findEventBlock(body: string, event: string): string | undefined {
+  return body
+    .trim()
+    .split("\n\n")
+    .find((block) => block.startsWith(`event: ${event}`));
+}
+
+function dataOf(block: string): string {
+  return block
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).replace(/^ /, ""))
+    .join("\n");
+}
+
+describe("assistant app chat route", () => {
+  it("rejects an unauthenticated request", async () => {
+    const { app } = await createTestApp();
+    const res = await app.request("/api/assistant/sessions/sess_0000000000000000/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "Hello" }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  // The app's own chat page now runs a turn through the same assistant path Telegram
+  // does (plan 5, ruling 1): one token event carrying the whole reply, since runTurn
+  // returns a single Promise<TurnResult> with nothing left to stream piece by piece,
+  // then a done event with the citations, exactly like chat.routes.ts's own sendMessage
+  // route already sends for the lower-level RAG path.
+  it("streams the full reply as one token event, then done, for an ordinary turn", async () => {
+    const adapter = fakeAdapter({ streamChat: vi.fn(async () => chatStreamPartsOf(["Rent is due on the first."])) });
+    const t = await createTestApp({ adapterFactories: { "openai-compatible": () => adapter, "anthropic": () => adapter } });
+    const { cookie, userId } = await t.signIn();
+    await t.services.settingsService.set(userId, { "ai.openrouter.apiKey": "sk-or-v1-test", "ai.model.chat": "openrouter://test-chat-model" });
+    const session = await t.services.chatService.createSession({ userId });
+
+    const res = await t.app.request(`/api/assistant/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers: jsonHeaders(cookie),
+      body: JSON.stringify({ content: "When is rent due?" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    const body = await res.text();
+
+    const tokenBlock = findEventBlock(body, "token");
+    expect(tokenBlock).toBeDefined();
+    expect(dataOf(tokenBlock!)).toBe("Rent is due on the first.");
+
+    const doneBlock = findEventBlock(body, "done");
+    expect(doneBlock).toBeDefined();
+    expect(findEventBlock(body, "proposal")).toBeUndefined();
+
+    const messagesRes = await t.app.request(`/api/chat/sessions/${session.id}`, { headers: { cookie } });
+    const { messages } = (await messagesRes.json()) as { messages: { role: string; content: string }[] };
+    expect(messages).toHaveLength(2);
+    expect(messages[1]).toMatchObject({ role: "assistant", content: "Rent is due on the first." });
+  });
+
+  // A write capability's own confirmation sentence (assistant confirmation plan) comes
+  // back as a proposal event instead of done, and the pending proposal it names is the
+  // exact same one GET .../proposal already exposes, so a client reading either one
+  // sees the same offer.
+  it("emits a proposal event instead of done when the turn makes one", async () => {
+    const adapter = fakeAdapter({ streamChat: vi.fn(async () => toolCallStream("saveNote", { text: "buy milk before the shop closes" })) });
+    const t = await createTestApp({ adapterFactories: { "openai-compatible": () => adapter, "anthropic": () => adapter } });
+    const { cookie, userId } = await t.signIn();
+    await t.services.settingsService.set(userId, { "ai.openrouter.apiKey": "sk-or-v1-test", "ai.model.chat": "openrouter://test-chat-model" });
+    const session = await t.services.chatService.createSession({ userId });
+
+    const res = await t.app.request(`/api/assistant/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers: jsonHeaders(cookie),
+      body: JSON.stringify({ content: "note buy milk before the shop closes" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(findEventBlock(body, "done")).toBeUndefined();
+    const proposalBlock = findEventBlock(body, "proposal");
+    expect(proposalBlock).toBeDefined();
+    const payload = JSON.parse(dataOf(proposalBlock!)) as { id: string; tool: string };
+    expect(payload.tool).toBe("saveNote");
+
+    const proposalRes = await t.app.request(`/api/assistant/sessions/${session.id}/proposal`, { headers: { cookie } });
+    const proposalBody = (await proposalRes.json()) as { proposal: { id: string } | null };
+    expect(proposalBody.proposal?.id).toBe(payload.id);
+  });
+
+  it("returns 404 for a session that is not the user's", async () => {
+    const t = await createTestApp();
+    const { cookie } = await t.signIn();
+    const otherSession = await t.services.chatService.createSession({ userId: "user_other" });
+
+    const res = await t.app.request(`/api/assistant/sessions/${otherSession.id}/messages`, {
+      method: "POST",
+      headers: jsonHeaders(cookie),
+      body: JSON.stringify({ content: "hi" }),
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("rejects a message body that is too long", async () => {
+    const { t, cookie, userId } = await setup();
+    const session = await t.services.chatService.createSession({ userId });
+
+    const res = await t.app.request(`/api/assistant/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers: jsonHeaders(cookie),
+      body: JSON.stringify({ content: "x".repeat(10001) }),
+    });
+
+    expect(res.status).toBe(400);
+  });
+});

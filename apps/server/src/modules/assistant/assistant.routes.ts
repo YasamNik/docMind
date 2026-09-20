@@ -1,7 +1,9 @@
 import type { Context, Hono } from "hono";
+import { streamSSE } from "hono/streaming";
 import { createError } from "../../shared/errors/errors.js";
 import { parseJsonBody, parseOrValidationError } from "../../shared/http/validate.js";
-import { sessionIdSchema } from "../chat/chat.schemas.js";
+import { sendMessageBodySchema, sessionIdSchema } from "../chat/chat.schemas.js";
+import { ASSISTANT_TRIAGE_SYSTEM_PROMPT } from "./assistant.models.js";
 import { answerProposalBodySchema, restoreInstructionsBodySchema, saveInstructionsBodySchema } from "./assistant.schemas.js";
 import type { AssistantService } from "./assistant.usecases.js";
 
@@ -73,5 +75,47 @@ export function registerAssistantRoutes({
       },
     });
     return c.json(result);
+  });
+
+  // The app's own chat page onto the same path Telegram's turns already run through
+  // (assistant plan 5, ruling 1): runTurn returns one Promise<TurnResult>, with both
+  // answering handlers (assistant.registry.ts) already draining their own RAG stream
+  // into a single string before it gets here, so there is no partial text to stream out
+  // token by token. The reply is sent as one token event carrying the full text, so the
+  // client's existing SSE parse loop needs no new event name, only a new one to handle:
+  // a session with a proposal waiting gets a proposal event instead of done, carrying
+  // the same PendingProposal shape GET .../proposal already returns.
+  app.post("/api/assistant/sessions/:sessionId/messages", async (c) => {
+    const sessionId = parseOrValidationError(sessionIdSchema, c.req.param("sessionId"));
+    const userId = getUserId(c);
+    const { content } = await parseJsonBody(c, sendMessageBodySchema);
+
+    // Awaited before the SSE response opens, exactly like chat.routes.ts awaits
+    // chatService.sendMessage: a bad or foreign sessionId throws chat.session_not_found
+    // here and is turned into a plain 404 by the shared error handler, rather than
+    // surfacing as an error event inside a 200 stream.
+    const result = await assistantService.runTurn({
+      userId,
+      sessionId,
+      surface: "app",
+      text: content,
+      basePrompt: ASSISTANT_TRIAGE_SYSTEM_PROMPT,
+      startNewThread: async () => {
+        throw createError({
+          code: "assistant.thread_reset_unavailable",
+          message: "Starting a new thread from the app is not available yet.",
+          status: 501,
+        });
+      },
+    });
+
+    return streamSSE(c, async (stream) => {
+      await stream.writeSSE({ event: "token", data: result.reply });
+      if (result.proposal) {
+        await stream.writeSSE({ event: "proposal", data: JSON.stringify(result.proposal) });
+      } else {
+        await stream.writeSSE({ event: "done", data: JSON.stringify({ citations: result.citations }) });
+      }
+    });
   });
 }

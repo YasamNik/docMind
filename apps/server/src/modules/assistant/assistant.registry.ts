@@ -4,8 +4,8 @@ import type { GenericSchema } from "valibot";
 import { isAppError } from "../../shared/errors/errors.js";
 import { parseCitations } from "../chat/chat.models.js";
 import {
-  answeringPromptFor,
   appendInstructionLine,
+  ASSISTANT_ANSWERING_SYSTEM_PROMPT,
   duplicateReply,
   ensureQuestionMark,
   instructionAddedReply,
@@ -62,7 +62,7 @@ const answerFromDocuments = defineCapability({
       userId: ctx.userId,
       sessionId,
       question: resolvedQuestion,
-      systemPrompt: withInstructions(answeringPromptFor(ctx.surface), ctx.instructions),
+      systemPrompt: withInstructions(ASSISTANT_ANSWERING_SYSTEM_PROMPT, ctx.instructions),
     });
     const text = await drain(stream);
     return { reply: text, citations: parseCitations(text, chunks) };
@@ -109,7 +109,7 @@ const searchWeb = defineCapability({
         sessionId,
         question: resolvedQuestion,
         web: true,
-        systemPrompt: withInstructions(answeringPromptFor(ctx.surface), ctx.instructions),
+        systemPrompt: withInstructions(ASSISTANT_ANSWERING_SYSTEM_PROMPT, ctx.instructions),
       });
       const text = await drain(stream);
       return { reply: text, citations: parseCitations(text, chunks) };

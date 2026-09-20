@@ -34,6 +34,27 @@ vi.mock("@/lib/chat-api", () => ({
   },
 }));
 
+const getPendingProposalMock = vi.fn(async (_sessionId: string) => null as { id: string; tool: string; text: string; messageId: string; proposedAt: string } | null);
+const answerProposalMock = vi.fn(
+  async (
+    _sessionId: string,
+    _proposalId: string,
+    _decision: "yes" | "no",
+  ): Promise<{ status: "ran" | "declined" | "stale"; reply: string; citations: unknown[]; toolUsed: string | null }> => ({
+    status: "ran",
+    reply: "Done.",
+    citations: [],
+    toolUsed: null,
+  }),
+);
+
+vi.mock("@/lib/assistant-api", () => ({
+  assistantApi: {
+    getPendingProposal: (sessionId: string) => getPendingProposalMock(sessionId),
+    answerProposal: (sessionId: string, proposalId: string, decision: "yes" | "no") => answerProposalMock(sessionId, proposalId, decision),
+  },
+}));
+
 const storageDriversMock = vi.fn(async () => [
   { id: "local", label: "Local filesystem", guide: { title: "", intro: "", steps: [], notes: [] }, configured: true, documentCount: 1, active: true },
   { id: "s3", label: "Amazon S3", guide: { title: "", intro: "", steps: [], notes: [] }, configured: true, documentCount: 1, active: false },
@@ -218,8 +239,72 @@ describe("ChatPage", () => {
 
     expect(await screen.findByText("When is rent due?")).toBeInTheDocument();
     expect(await screen.findByText("Rent is due on the first [1].")).toBeInTheDocument();
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/api/chat/sessions/sess_1/messages");
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/api/assistant/sessions/sess_1/messages");
     expect(screen.getByRole("button", { name: "1" })).toBeInTheDocument();
+  });
+
+  it("shows yes and no buttons for a proposal already waiting on the session after a reload", async () => {
+    listSessionsMock.mockResolvedValueOnce([
+      { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+    ]);
+    getSessionMock.mockResolvedValueOnce({
+      session: { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+      messages: [],
+    });
+    getPendingProposalMock.mockResolvedValueOnce({
+      id: "prop_1",
+      tool: "saveNote",
+      text: '"buy milk"\n\nSave that as a note?',
+      messageId: "msg_1",
+      proposedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByText("Lease question"));
+
+    expect(await screen.findByRole("button", { name: "Yes" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "No" })).toBeInTheDocument();
+  });
+
+  it("shows proposal buttons after a turn makes one, and clears them once answered", async () => {
+    listSessionsMock.mockResolvedValueOnce([
+      { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+    ]);
+    getSessionMock.mockResolvedValueOnce({
+      session: { id: "sess_1", title: "Lease question", documentScope: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
+      messages: [],
+    });
+
+    const sseBody =
+      'event: token\ndata: "buy milk"\n\nSave that as a note?\n\n' +
+      'event: proposal\ndata: {"id":"prop_1","tool":"saveNote","text":"\\"buy milk\\"\\n\\nSave that as a note?","messageId":"msg_1","proposedAt":"2026-01-01T00:00:00.000Z"}\n\n';
+    const encoder = new TextEncoder();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(sseBody));
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    renderPage();
+    fireEvent.click(await screen.findByText("Lease question"));
+    const input = await screen.findByPlaceholderText("Ask about your documents...");
+    fireEvent.change(input, { target: { value: "note buy milk" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    const yesButton = await screen.findByRole("button", { name: "Yes" });
+    expect(screen.getByRole("button", { name: "No" })).toBeInTheDocument();
+
+    fireEvent.click(yesButton);
+
+    await waitFor(() => expect(answerProposalMock).toHaveBeenCalledWith("sess_1", "prop_1", "yes"));
+    expect(await screen.findByText("Done.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Yes" })).not.toBeInTheDocument());
   });
 
   it("keeps the composer's input element across keystrokes and types characters in order", async () => {
@@ -344,7 +429,7 @@ describe("ChatPage on a phone", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByText("When is rent due?")).toBeInTheDocument();
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/api/chat/sessions/sess_1/messages");
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/api/assistant/sessions/sess_1/messages");
   });
 
   it("deletes a session from the compact list after confirming", async () => {

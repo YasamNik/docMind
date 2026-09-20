@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { createError } from "../../shared/errors/errors.js";
 import type { ToolDefinition } from "../ai/ai.types.js";
-import { CHAT_SYSTEM_PROMPT, TELEGRAM_ASSISTANT_SYSTEM_PROMPT } from "../chat/chat.models.js";
+import { TELEGRAM_ASSISTANT_SYSTEM_PROMPT } from "../chat/chat.models.js";
 import type { AssistantSurface, Capability, InstructionVersion, ToolContext } from "./assistant.types.js";
 
 // textDocumentName, missingNoteTextReply and newThreadReply moved here from
@@ -254,16 +254,21 @@ ${trimmed}
 }
 
 // The base prompt for the call that actually writes an answer, answerFromDocuments and
-// searchWeb alike (assistant.registry.ts), picked by surface rather than hard-coded at
-// each call site. Telegram gets TELEGRAM_ASSISTANT_SYSTEM_PROMPT (chat.models.ts): a
-// live probe found that both handlers were sending CHAT_SYSTEM_PROMPT unconditionally,
-// so a Telegram question with no matching document got the app's own refusal sentence
-// back, the exact behavior TELEGRAM_ASSISTANT_SYSTEM_PROMPT exists to prevent. The app
-// surface keeps CHAT_SYSTEM_PROMPT, written for a search box that should refuse without
-// context. withInstructions still wraps whichever this returns.
-export function answeringPromptFor(surface: AssistantSurface): string {
-  return surface === "telegram" ? TELEGRAM_ASSISTANT_SYSTEM_PROMPT : CHAT_SYSTEM_PROMPT;
-}
+// searchWeb alike (assistant.registry.ts). One prompt for both surfaces now (assistant
+// plan 5, ruling 2): the app's own chat page runs through the same runTurn triage
+// Telegram already does, so a call that reaches answerFromDocuments already passed a
+// triage step that decided the question was worth looking up, and refusing outright
+// just because nothing matched is wrong on both surfaces, not only on Telegram's.
+// answeringPromptFor used to pick between this and chat.models.ts's CHAT_SYSTEM_PROMPT,
+// written for a search box that should refuse without context; CHAT_SYSTEM_PROMPT stays
+// in chat.models.ts as the default for that lower-level RAG path, but no longer reaches
+// here. The one line worth keeping from it, about a citation stored on another storage,
+// is reworded surface neutral below: the original said the file could not be "opened
+// from this page", which means nothing in a Telegram chat. withInstructions still wraps
+// whatever this returns.
+export const ASSISTANT_ANSWERING_SYSTEM_PROMPT = `${TELEGRAM_ASSISTANT_SYSTEM_PROMPT}
+- When a document you cite is stored somewhere other than the active storage, say which
+  storage holds it and that it has to be opened there.`;
 
 // Used by the two answering handlers (assistant.registry.ts) to carry the same
 // document onto the call that actually writes the reply, not only onto the call that

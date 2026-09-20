@@ -6,8 +6,14 @@ import { createTestApp } from "../../shared/test/app.test-utils.js";
 import { expectAppError } from "../../shared/test/errors.test-utils.js";
 import type { AiAdapter, ChatStreamPart, ModelInfo, StructuredResult, TestResult } from "../ai/ai.types.js";
 import { createSearchRepository } from "../search/search.repository.js";
-import { CHAT_SYSTEM_PROMPT, TELEGRAM_ASSISTANT_SYSTEM_PROMPT } from "../chat/chat.models.js";
-import { DEFAULT_INSTRUCTIONS, MAX_INSTRUCTIONS_CHARS, missingNoteTextReply, newThreadReply } from "./assistant.models.js";
+import { TELEGRAM_ASSISTANT_SYSTEM_PROMPT } from "../chat/chat.models.js";
+import {
+  ASSISTANT_ANSWERING_SYSTEM_PROMPT,
+  DEFAULT_INSTRUCTIONS,
+  MAX_INSTRUCTIONS_CHARS,
+  missingNoteTextReply,
+  newThreadReply,
+} from "./assistant.models.js";
 import { assistantCapabilities } from "./assistant.registry.js";
 import type { ToolContext } from "./assistant.types.js";
 
@@ -260,7 +266,9 @@ describe("assistant registry, handlers", () => {
     expect(call?.[0]?.systemPrompt).not.toContain("I don't have enough information to answer that");
   });
 
-  it("answers an app turn with the app's own chat prompt, not the telegram assistant prompt", async () => {
+  // Rewritten for assistant plan 5, ruling 2: the app surface now gets the same merged
+  // answering prompt telegram does, not CHAT_SYSTEM_PROMPT's own refusal wording.
+  it("answers an app turn with the same merged assistant prompt telegram gets", async () => {
     const { t, userId } = await setup(vi.fn(async () => asyncIterableOf(["An answer."])));
     const session = await t.services.chatService.createSession({ userId });
     await t.services.chatService.appendUserMessage({ userId, sessionId: session.id, content: "anything" });
@@ -269,7 +277,7 @@ describe("assistant registry, handlers", () => {
 
     await assistantCapabilities.answerFromDocuments.handler({ question: "anything" }, ctx);
 
-    expect(answerSpy).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: expect.stringContaining(CHAT_SYSTEM_PROMPT) }));
+    expect(answerSpy).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: expect.stringContaining(ASSISTANT_ANSWERING_SYSTEM_PROMPT) }));
   });
 
   it("searches the web through the same answering path, with web set", async () => {
@@ -309,7 +317,9 @@ describe("assistant registry, handlers", () => {
     expect(answerSpy).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: expect.stringContaining(TELEGRAM_ASSISTANT_SYSTEM_PROMPT) }));
   });
 
-  it("searches the web on the app surface with the app's own chat prompt", async () => {
+  // Rewritten for assistant plan 5, ruling 2: same merged prompt as the app's own
+  // answerFromDocuments call above, not CHAT_SYSTEM_PROMPT.
+  it("searches the web on the app surface with the same merged assistant prompt too", async () => {
     const { t, userId } = await setup(vi.fn(async () => asyncIterableOf(["Sunny and 20C."])));
     const session = await t.services.chatService.createSession({ userId });
     await t.services.chatService.appendUserMessage({ userId, sessionId: session.id, content: "weather today" });
@@ -318,7 +328,7 @@ describe("assistant registry, handlers", () => {
 
     await assistantCapabilities.searchWeb.handler({ question: "weather today" }, ctx);
 
-    expect(answerSpy).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: expect.stringContaining(CHAT_SYSTEM_PROMPT) }));
+    expect(answerSpy).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: expect.stringContaining(ASSISTANT_ANSWERING_SYSTEM_PROMPT) }));
   });
 
   it("says plainly that the web needs an OpenRouter chat model, instead of throwing", async () => {
