@@ -11,6 +11,8 @@ import { requireUser, sessionMiddleware } from "./modules/auth/auth.middleware.j
 import { registerAuthRoutes } from "./modules/auth/auth.routes.js";
 import { createAuth } from "./modules/auth/auth.services.js";
 import { user as authUserTable } from "./modules/auth/auth.tables.js";
+import { registerBudgetRoutes } from "./modules/budget/budget.routes.js";
+import { createBudgetService } from "./modules/budget/budget.usecases.js";
 import { registerAiRoutes } from "./modules/ai/ai.routes.js";
 import { createAiService } from "./modules/ai/ai.usecases.js";
 import { aiProviderRegistry } from "./modules/ai/providers/index.js";
@@ -178,9 +180,16 @@ export function createServer({
   const fieldsRepository = createFieldsRepository({ db });
   const chatService = createChatService({ db, aiService, searchService });
   const assistantService = createAssistantService({ chatService, documentsService, aiService, settingsService });
+  const budgetService = createBudgetService({ db, settingsService, aiService, documentsService, storageService });
   const jobRunner = createJobRunner({
     db,
-    handlers: { extraction: extractionService.handler, rules: rulesService.handler, embedding: searchService.handler, summarize: summaryService.handler },
+    handlers: {
+      extraction: extractionService.handler,
+      rules: rulesService.handler,
+      embedding: searchService.handler,
+      summarize: summaryService.handler,
+      receipt: budgetService.handler,
+    },
   });
   // Own long polling loop, not a job: getUpdates holds a connection open for up to
   // pollTimeoutSeconds, which does not fit the job runner's discrete-task model. There
@@ -257,6 +266,7 @@ export function createServer({
 
   const exportService = createExportService({ db, storageService });
   registerExportRoutes({ app, exportService, getUserId });
+  registerBudgetRoutes({ app, budgetService, getUserId });
 
   const here = dirname(fileURLToPath(import.meta.url));
   const clientDist = resolve(here, "../../client/dist");
@@ -289,6 +299,7 @@ export function createServer({
     fieldsRepository,
     chatService,
     assistantService,
+    budgetService,
     getUserId,
   };
 }

@@ -1,4 +1,5 @@
 import { assistantSettingDefinitions } from "../assistant/assistant.settings.js";
+import { budgetSettingDefinitions } from "../budget/budget.settings.js";
 import { extractionSettingDefinitions } from "../extraction/extraction.settings.js";
 import { storageSettingDefinitions } from "../storage/storage.settings.js";
 import { aiSettingDefinitions } from "../ai/ai.settings.js";
@@ -17,4 +18,5 @@ export const allSettingDefinitions: SettingDefinition[] = [
   ...telegramSettingDefinitions,
   ...emailSettingDefinitions,
   ...assistantSettingDefinitions,
+  ...budgetSettingDefinitions,
 ];
