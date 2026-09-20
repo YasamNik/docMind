@@ -57,11 +57,31 @@ export const updateBudgetCategoryBodySchema = v.object({
   autoApply: v.optional(v.boolean()),
 });
 
+// Each row stays loose on purpose, the same discipline as the header fields below: a
+// missing or oddly typed field on one line must not throw and take the whole reply down
+// with it. normalizeReceiptItemRows drops only the offending row after parsing.
+const budgetReceiptItemReplySchema = v.object({
+  description: v.optional(v.nullable(v.string())),
+  amount: v.optional(v.nullable(v.union([v.number(), v.string()]))),
+  quantity: v.optional(v.unknown()),
+  unitPrice: v.optional(v.unknown()),
+  category: v.optional(v.nullable(v.string())),
+  categoryConfidence: v.optional(v.unknown()),
+});
+
 // The reply schema stays loose on purpose: generateStructuredFromImages parses the whole
 // reply in one pass and throws on any nested failure, so asserting the shape of a header
-// value or of the items array would let one bad line take down a correct merchant and
-// total. Every check happens after parsing, in budget.models.ts, dropping only the
-// offending row. Same discipline as rules.schemas.ts and summary.schemas.ts.
+// value would let one bad field take down a correct merchant and total. Every check
+// happens after parsing, in budget.models.ts, dropping only the offending row. Same
+// discipline as rules.schemas.ts and summary.schemas.ts.
+//
+// items describes an array rather than staying v.unknown(): an untyped field renders as
+// an empty JSON schema node, and under strict JSON schema mode a provider has been seen
+// to answer that with a JSON-stringified array instead of an actual array, which then
+// reads as zero items. The array of loosely typed rows tells the provider the shape we
+// want. The string branch stays for the same reason total and taxAmount stay unknown: a
+// provider that still hands back a JSON-stringified array must not fail this schema and
+// take the header down with it. normalizeReceiptItemRows parses that string itself.
 export const budgetReceiptReplySchema = v.object({
   merchant: v.optional(v.nullable(v.string())),
   purchasedAt: v.optional(v.nullable(v.string())),
@@ -71,7 +91,7 @@ export const budgetReceiptReplySchema = v.object({
   category: v.optional(v.nullable(v.string())),
   categoryConfidence: v.optional(v.unknown()),
   warning: v.optional(v.nullable(v.string())),
-  items: v.optional(v.unknown()),
+  items: v.optional(v.nullable(v.union([v.array(budgetReceiptItemReplySchema), v.string()]))),
 });
 
 export type RawBudgetReceiptReply = v.InferOutput<typeof budgetReceiptReplySchema>;

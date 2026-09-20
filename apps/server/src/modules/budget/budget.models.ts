@@ -147,14 +147,28 @@ function normalizeReceiptItemRow(raw: unknown, categories: { id: string; name: s
   };
 }
 
+// A provider under strict JSON schema mode sometimes hands back the items array as a
+// JSON string instead of JSON, even when the schema types it as an array. Parse that
+// string and carry on; a reply that fails to parse is treated as having no items rather
+// than losing the header it came with.
+function parseItemsValue(rows: unknown): unknown {
+  if (typeof rows !== "string") return rows;
+  try {
+    return JSON.parse(rows);
+  } catch {
+    return null;
+  }
+}
+
 // Drops only the offending row, the same discipline as fields.models.ts's
 // normalizeFieldRows: a bare string, a null, or a row missing its amount is skipped
 // rather than failing the whole receipt.
 export function normalizeReceiptItemRows(rows: unknown, categories: { id: string; name: string }[]): { items: NormalizedReceiptItem[]; droppedCount: number } {
-  if (!Array.isArray(rows)) return { items: [], droppedCount: 0 };
+  const parsedRows = parseItemsValue(rows);
+  if (!Array.isArray(parsedRows)) return { items: [], droppedCount: 0 };
   const items: NormalizedReceiptItem[] = [];
   let droppedCount = 0;
-  for (const raw of rows) {
+  for (const raw of parsedRows) {
     const normalized = normalizeReceiptItemRow(raw, categories);
     if (normalized) items.push(normalized);
     else droppedCount += 1;
@@ -191,6 +205,9 @@ export type NormalizedReceiptReply =
 // - a non-empty warning forces needs_review and lands in the note.
 // - items that do not reconcile with the printed total (outside RECONCILE_TOLERANCE)
 //   force needs_review too; neither number is ever adjusted to fit the other.
+// - a printed total with no items read at all forces needs_review too, since the line
+//   items are the point of the feature; a genuinely zero total with no items is left
+//   alone, since there is nothing to review.
 export function normalizeReceiptReply({
   reply,
   categories,
@@ -214,10 +231,16 @@ export function normalizeReceiptReply({
 
   const reasons: string[] = [];
   if (warning) reasons.push(warning);
-  if (total !== null && items.length > 0) {
-    const itemsTotal = sumItemAmounts(items);
-    if (!itemsReconcileWithTotal(itemsTotal, total)) {
-      reasons.push(`Items total ${itemsTotal.toFixed(2)} does not match the printed total ${total.toFixed(2)}.`);
+  if (total !== null) {
+    if (items.length === 0) {
+      if (total !== 0) {
+        reasons.push(`The receipt printed a total of ${total.toFixed(2)} but no line items were read.`);
+      }
+    } else {
+      const itemsTotal = sumItemAmounts(items);
+      if (!itemsReconcileWithTotal(itemsTotal, total)) {
+        reasons.push(`Items total ${itemsTotal.toFixed(2)} does not match the printed total ${total.toFixed(2)}.`);
+      }
     }
   }
 

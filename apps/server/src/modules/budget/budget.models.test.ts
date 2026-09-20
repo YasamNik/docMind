@@ -74,6 +74,19 @@ describe("budget models", () => {
       expect(normalizeReceiptItemRows("none", categories)).toEqual({ items: [], droppedCount: 0 });
     });
 
+    it("parses items when the provider stringifies the array instead of returning it as JSON", () => {
+      const { items, droppedCount } = normalizeReceiptItemRows(
+        JSON.stringify([{ description: "Bread", amount: 2.5 }, { description: "Milk", amount: 1.2 }]),
+        categories,
+      );
+      expect(items.map((i) => i.description)).toEqual(["Bread", "Milk"]);
+      expect(droppedCount).toBe(0);
+    });
+
+    it("returns no items, without throwing, when a stringified items value is not valid JSON", () => {
+      expect(normalizeReceiptItemRows("[{\"description\": \"Bread\"", categories)).toEqual({ items: [], droppedCount: 0 });
+    });
+
     it("matches a category name case-insensitively when confidence clears the floor", () => {
       const { items } = normalizeReceiptItemRows([{ description: "Kettle", amount: 20, category: "appliances", categoryConfidence: 0.8 }], categories);
       expect(items[0]).toMatchObject({ categoryId: appliances.id, categorySource: "auto", confidence: 0.8 });
@@ -207,6 +220,82 @@ describe("budget models", () => {
       if (!result.failed) {
         expect(result.merchant).toBe("Corner Shop");
         expect(result.items).toEqual([]);
+      }
+    });
+
+    it("keeps a readable header when a stringified items value is not parseable JSON", () => {
+      const result = normalizeReceiptReply({
+        reply: { merchant: "Corner Shop", purchasedAt: "2026-09-10", currency: "USD", total: 5, items: "[{\"description\": \"Bread\"" },
+        categories,
+      });
+      expect(result.failed).toBe(false);
+      if (!result.failed) {
+        expect(result.merchant).toBe("Corner Shop");
+        expect(result.total).toBe(5);
+        expect(result.items).toEqual([]);
+      }
+    });
+
+    // Real reply from a live structured call against a Walmart receipt photo: the
+    // provider stringified the items array even though the schema declares it as an
+    // array, so this is the exact shape normalizeReceiptItemRows must recover.
+    it("reads all four line items, each with its category, from a real stringified-items reply", () => {
+      const receiptCategories = [
+        { id: "bcat_household00000", name: "Household" },
+        { id: "bcat_drinks00000000", name: "Drinks" },
+        { id: "bcat_clothing000000", name: "Clothing" },
+        { id: "bcat_other0000000000", name: "Other" },
+      ];
+      const result = normalizeReceiptReply({
+        reply: {
+          merchant: "WALL-MART-SUPERSTORE",
+          purchasedAt: "2020-10-17",
+          currency: null,
+          total: "27.27",
+          taxAmount: "4.18",
+          category: "Other",
+          categoryConfidence: "0.5",
+          warning: null,
+          items:
+            '[{"description": "HAND TOWEL", "amount": "2.97", "category": "Household", "categoryConfidence": "0.9"}, {"description": "GATORADE", "amount": "2.00", "category": "Drinks", "categoryConfidence": "0.9"}, {"description": "T-SHIRT", "amount": "16.88", "category": "Clothing", "categoryConfidence": "0.9"}, {"description": "PUSH PINS", "amount": "1.24", "category": "Household", "categoryConfidence": "0.7"}]',
+        },
+        categories: receiptCategories,
+      });
+      expect(result.failed).toBe(false);
+      if (!result.failed) {
+        expect(result.merchant).toBe("WALL-MART-SUPERSTORE");
+        expect(result.total).toBe(27.27);
+        expect(result.items).toHaveLength(4);
+        expect(result.items.map((i) => i.description)).toEqual(["HAND TOWEL", "GATORADE", "T-SHIRT", "PUSH PINS"]);
+        expect(result.items.map((i) => i.amount)).toEqual([2.97, 2.0, 16.88, 1.24]);
+        expect(result.items[0]!.categoryId).toBe("bcat_household00000");
+        expect(result.items[1]!.categoryId).toBe("bcat_drinks00000000");
+        expect(result.items[2]!.categoryId).toBe("bcat_clothing000000");
+        expect(result.items[3]!.categoryId).toBe("bcat_household00000");
+      }
+    });
+
+    it("flags needs_review when the receipt has a printed total but no items were read", () => {
+      const result = normalizeReceiptReply({
+        reply: { merchant: "Corner Shop", purchasedAt: "2026-09-10", currency: "USD", total: 12.5, items: [] },
+        categories,
+      });
+      expect(result.failed).toBe(false);
+      if (!result.failed) {
+        expect(result.status).toBe("needs_review");
+        expect(result.note).toContain("no line items were read");
+      }
+    });
+
+    it("stays ready for a genuinely zero total with no items, rather than flagging it for no reason", () => {
+      const result = normalizeReceiptReply({
+        reply: { merchant: "Corner Shop", purchasedAt: "2026-09-10", currency: "USD", total: 0, items: [] },
+        categories,
+      });
+      expect(result.failed).toBe(false);
+      if (!result.failed) {
+        expect(result.status).toBe("ready");
+        expect(result.note).toBeNull();
       }
     });
   });
