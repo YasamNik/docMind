@@ -25,3 +25,7 @@
 - [Document types spec review](review-spec-document-types.md) -- "seed at server start" has no valid trigger for a fresh single-user install; settingsRepository has no tx support
 - [Assistant plan 5 ruling](review-ruling-assistant-plan5.md) -- no streaming, delete answeringPromptFor, defer document-scope tool guard as unreachable today
 - [runTurn fully buffered lesson](lesson-runturn-fully-buffered.md) -- drain() already strips streaming from every assistant path; a "stream when no tool" plan is a real refactor, not a tweak
+- [Family budget spec review](review-spec-family-budget.md) -- needs redesign narrowly: cut merchant_category, fix the child-page cost gate, size the new multimodal AI capability
+- [Upload-then-associate job race lesson](lesson-upload-then-associate-job-race.md) -- gating a job on "does this doc belong to X" races the job runner when X is created by a later API call
+- [AI multimodal-structured capability gap lesson](lesson-ai-capability-gap-multimodal-structured.md) -- no adapter method combines multi-image input with schema-validated structured output; check both adapters before assuming it
+- [Mid-review redirects and live evidence](feedback-mid-review-redirects-and-live-evidence.md) -- coordinator may interrupt with a design change then live spike data; fold both into one final ruling, don't restart

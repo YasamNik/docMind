@@ -41,7 +41,7 @@ Almost nothing here is new machinery.
 | `extraction` | OCR of the photos, the vision LLM fallback when OCR confidence is low, and the status-on-the-row pattern this module copies |
 | `fields` | already pulls a counterparty, a total and a tax amount off any document, so a receipt is useful in search before the budget job has run |
 | `tags` seeding | `ensureTypesSeeded` is the template for seeding presets lazily per user behind an internal settings flag |
-| `ai.generateStructured` | the one structured call, with the loose reply schema discipline from `summary.schemas.ts` |
+| `ai` module's loose reply schema discipline | the reply-schema style from `summary.schemas.ts`; the receipt read itself needs a new `AiAdapter` method, see section 4 |
 | `use-media-query.ts` | `useIsMobile()` already decides table versus card list; the capture sheet is the phone branch |
 
 ### 2. Three new tables
@@ -56,7 +56,6 @@ Every column the user is being asked to approve is here, in one place.
 | `user_id` | text not null | |
 | `document_id` | text not null | references `documents(id)` on delete cascade. Page 1 |
 | `merchant` | text | as printed, editable |
-| `merchant_category` | text | one of a fixed list in code: grocery, restaurant, pharmacy, fuel, transport, clothing, electronics, home, entertainment, services, other. Null when nothing matched |
 | `purchased_at` | text | YYYY-MM-DD from the receipt, not the upload time |
 | `currency` | text | ISO 4217, per receipt, never converted |
 | `total` | real | the printed total, what was actually paid |
@@ -82,7 +81,7 @@ Indexes: `(user_id, purchased_at)` for the month list, unique `(user_id, documen
 | `amount` | real not null | the line total |
 | `item_category_id` | text | references `budget_item_categories(id)` on delete set null |
 | `category_source` | text | `auto` or `manual`, the two values `documents.category_source` already uses |
-| `confidence` | real | the model's confidence in the category |
+| `confidence` | real | the model's confidence in the category. Nothing reads this yet; it is there for a later low-confidence indicator on the line, not built now |
 | `created_at`, `updated_at` | text not null | |
 
 Index: `(receipt_id, line_number)`.
@@ -108,11 +107,9 @@ already links them and their capture order is their `created_at` order, derived 
 No items total column: it is the sum of the item rows, computed when read. No month column:
 `purchased_at` is indexed and a month is a string prefix.
 
-**Two additive, non-schema changes.** `POST /api/documents` gains an optional
+**One additive, non-schema change.** `POST /api/documents` gains an optional
 `parentDocumentId` query parameter, so the capture sheet can file page 2 under page 1
 through the upload path that already exists instead of getting its own upload endpoint.
-`jobs.enqueue` gains an optional `availableAt`, a parameter for a column that already
-exists, for the reason in section 5.
 
 ### 3. The capture flow
 
@@ -123,7 +120,8 @@ This is the interaction that matters. Someone is standing at a till.
    camera directly on iOS and Android and stays an ordinary file picker on a desktop.
 2. Each shot lands in a staging list in the sheet with a thumbnail and a page number.
    **Add another page** takes the next shot. Everything in the staging list is one receipt:
-   that is the explicit grouping. A shot can be removed before saving.
+   that is the explicit grouping. A shot can be removed before saving. The button disables
+   at ten photos, see section 4 for why ten.
 3. **Save** uploads page 1, then each remaining page with `?parentDocumentId=<page 1>`, then
    posts `{ documentIds }` to `/api/budget/receipts`. The receipt row is created `pending`
    and a `receipt` job is enqueued.
@@ -133,27 +131,56 @@ This is the interaction that matters. Someone is standing at a till.
 5. It lands as `ready` or `needs_review`, with a badge saying which.
 
 **When extraction gets it wrong**, which it will: every value is editable. Merchant, date,
-total, tax, currency and merchant category on the receipt, description, quantity, amount
-and category on each line, plus add a line and delete a line. One **Re-read** button
-re-runs the job over the same photos for when the first pass was garbage and fixing it by
-hand is more work than trying again. It discards the extracted lines, so it asks first.
+total, tax and currency on the receipt, description, quantity, amount and category on each
+line, plus add a line and delete a line. One **Re-read** button re-runs the job over the
+same photos for when the first pass was garbage and fixing it by hand is more work than
+trying again. It discards the extracted lines, so it asks first.
 
 ### 4. Reading the line items
 
-**One structured LLM call per receipt, on the rules slot, over OCR text.** Not a vision
-call of its own: the vision fallback already fires inside extraction when OCR confidence is
-below the threshold, so a bad photo is handled by the path that exists and a second image
-call here would pay twice for the same picture.
+**One vision call per receipt, over every photo together.** Decided after this spec was
+first written: send every shot from one receipt to the model in a single request, not OCR
+text read page by page. The receipt job passes page 1's image and every child page's image
+to one call, in capture order, and gets back the header values, the items, and a category
+per item in the same reply, see section 7.
 
-The job concatenates page 1's `extracted_text` and each child's in capture order with a
-page marker between them. The call returns the header values and the items, and assigns
-each item a category in the same reply, see section 7.
+**A new `AiAdapter` method, not a bigger `generateStructured`.** No existing method takes
+several images and returns validated JSON: `generateStructured` takes a string and no
+images, `recognizeImage` takes one image and returns freeform text. The new method is
+implemented in both `openai-compatible.adapter.ts` and `anthropic.adapter.ts`, largely by
+combining the image content block assembly each already has inside `recognizeImage` with the
+JSON schema assembly each already has inside `generateStructured`. A new method rather than
+a wider `generateStructured` keeps the summary and rules call sites untouched. It resolves
+through the **vision** slot, gated on `capabilities.vision` **and** `capabilities.structured`
+together, since a model that reads images is not guaranteed to also support JSON schema
+mode. Which vision-slot models are known to support both is worth a settings page note
+later, not something to build now. Also worth fixing while this ships: `DOCMIND-DESIGN.md`'s
+"Model slots" paragraph still says "Rules, chat, embedding," but `ModelSlot` in
+`ai.types.ts` has had a fourth, `vision`, for a while; naming all four there is overdue.
 
-**Too long.** The concatenated text is capped at 24000 characters. A supermarket receipt
-with sixty lines is under 4000, so this is a guard, not a normal path. Over the cap, the
-text is truncated there, the receipt is saved `needs_review` with a note saying so, and the
-user sees what was read. No chunking, no second call. If a real receipt ever hits this,
-that is the moment to design for it.
+**The evidence behind this.** A live spike sent two real receipt photos as two `image_url`
+parts in one call to `google/gemini-2.5-flash` through OpenRouter: HTTP 200, 584 prompt
+tokens, $0.0003 total. Asked to read them as pages of one receipt, the model did not merge
+two unrelated receipts into a wrong total; it answered `{"merchant": null, ..., "items": [],
+"warning": "Clearly two different receipts"}`.
+
+**A flat limit of ten photos per receipt.** It guards a degenerate upload, someone stapling
+in fifty shots or a bug in the capture sheet, not cost: at the spike's price a normal one to
+four photo receipt costs a fraction of a cent regardless of the limit. The capture sheet
+disables **Add another page** at ten; the server re-validates the same limit on
+`POST /api/budget/receipts` and answers 400 over it, for any client that skips the sheet.
+
+**One prompt line about overlap.** Shots of a long receipt often overlap by a line or two,
+so the prompt tells the model not to count a line twice when it appears on two photos. The
+existing reconciliation tolerance below catches a double count anyway, because it pushes the
+item sum past the printed total.
+
+**What the server does with the answer.** A `warning` field alone is not enough. A
+non-empty `warning` forces `status = 'needs_review'` and copies its text into the receipt's
+`note`, rather than trusting a ready status. An answer whose header fields (`merchant`,
+`purchased_at`, `total`, `currency`) are all null is a failed read, `status = 'failed'` with
+a note, not a receipt with a blank total: a null `total` would otherwise drop silently out of
+the month total instead of failing visibly.
 
 **Items that do not sum to the total** is the normal case, not the error case: discounts,
 loyalty points, bottle deposits and rounding all break the sum. Neither number is ever
@@ -164,21 +191,22 @@ with the gap named. The month total counts `total`, because that is the money th
 account. The category breakdown counts items and shows the remainder as its own row called
 Unmatched rather than hiding it.
 
-**Valibot at the boundary, loose.** The reply schema follows `summary.schemas.ts`: `items`
-is `v.unknown()` and every header value is an optional loose string. `generateStructured`
-parses a whole reply in one pass and throws on any nested failure, so asserting the shape
-of the items array would throw away a correct merchant and total because one line came back
-malformed. Every check happens after parsing, in `budget.models.ts`, dropping only the
-offending row. HTTP input schemas stay strict.
+**Valibot at the boundary, loose.** `items` is `v.unknown()`, every header value is an
+optional loose string, and `warning` is an optional string too. The new method parses a
+whole reply in one pass and throws on any nested failure the same way `generateStructured`
+does, so asserting the shape of the items array would throw away a correct merchant and
+total because one line came back malformed. Every check happens after parsing, in
+`budget.models.ts`, dropping only the offending row. HTTP input schemas stay strict.
 
 ### 5. When the job runs
 
-The receipt job needs every page's text and extraction is itself a job, so it checks the
-pages first: if any is still `pending` or `processing` it re-enqueues itself with
-`availableAt` ten seconds out and finishes cleanly. A tries counter in the payload caps the
-wait at ten minutes, after which the receipt is `failed` with a note rather than looping
-forever. A page whose extraction failed is skipped and named in the note: three good pages
-out of four still make a useful receipt.
+The receipt job needs only the uploaded bytes, and those exist the moment every page
+finishes uploading, before extraction has done anything with them. So the job reads each
+page straight from storage the way `extraction.usecases.ts` already does, and runs at once:
+no polling, no waiting. This is what the user's one-call decision buys for free. It removes
+the self-requeuing job that would otherwise poll whether every page's OCR had finished, its
+tries counter, its ten minute cap, and the `availableAt` argument `jobs.enqueue` would have
+needed for it: none of that exists now because there is nothing left to wait for.
 
 ### 6. Duplicates
 
@@ -187,6 +215,11 @@ case-insensitively and trimmed, `purchased_at`, `total`, and `currency`. Nothing
 tolerance on the total, no time window. A confident rule that occasionally misses beats a
 loose one that keeps accusing real purchases, because two coffees at the same shop on the
 same day for the same price are genuinely two coffees.
+
+The exact match on merchant also means a rescan of the same receipt can slip past this if
+the model reads the merchant string slightly differently between the two reads. That is the
+accepted side of the same tradeoff: missing an occasional real duplicate beats flagging real
+purchases as duplicates.
 
 The check runs at the end of the job against the user's own receipts. A match sets
 `duplicate_of_receipt_id` and `status = 'needs_review'`. Nothing is deleted, ever.
@@ -228,6 +261,11 @@ Clothing, Electronics, Home and garden, Fuel, Transport, Restaurant and takeaway
 and refund, Other. Deposit and refund earns its place: bottle deposits are the commonest
 reason items do not sum to the total.
 
+The seed check runs on the same precedent as `ensureTypesSeeded`, called lazily inside
+`rules.usecases.ts` right before the sort prompt is built, never at server start since a
+fresh install has no user at boot. Here the equivalent call site is inside the receipt job
+handler, immediately before the categorisation prompt is built.
+
 ### 8. What the Budget section shows
 
 One page, `/budget`, answering one question: **where did the money go this month.**
@@ -260,14 +298,15 @@ row, the duplicate rule, the reconciliation check, all pure), `budget.repository
 
 - Unit, on models: a reply with a bad row keeps the good rows, an unknown category name is
   dropped and the line kept, items that do not sum flag review, a 0.01 rounding difference
-  does not, the duplicate rule with four matching values and with each one differing, text
-  over the cap is truncated.
-- Integration, in-memory SQLite, fake AI adapter: three photos become one receipt with
-  items, the job waits while a page is still extracting, a failed page is skipped and named,
-  a duplicate is flagged and not deleted, a manual category survives a re-read, a second
-  receipt on the same document is refused with 409.
-- Client: the capture sheet groups several shots into one save, and the month list renders
-  as cards below the md breakpoint.
+  does not, the duplicate rule with four matching values and with each one differing, a
+  non-empty warning forces `needs_review` and lands in the note, a reply whose header fields
+  are all null is a failed read.
+- Integration, in-memory SQLite, fake AI adapter: two photos become one receipt with items
+  from a single call, a duplicate is flagged and not deleted, a manual category survives a
+  re-read, a second receipt on the same document is refused with 409, an eleventh photo is
+  refused with 400, receipt creation cancels a still-pending rules job on a child page.
+- Client: the capture sheet groups several shots into one save and disables **Add another
+  page** at ten, and the month list renders as cards below the md breakpoint.
 
 ## Out of scope
 
@@ -281,18 +320,26 @@ row, the duplicate rule, the reconciliation check, all pure), `budget.repository
 
 ## Risks
 
-- **Cost per receipt is the real one.** Every photo is an ordinary document, so a four page
-  receipt runs four extractions, four summaries, four embeddings and four sorting passes,
-  plus the one receipt call. That is a lot of paid calls for a feature about spending less.
-  This ships as it is and the first real multi page receipt gets watched on the jobs page.
-  If the cost is what it looks like, the lever is one condition in extraction: a document
-  with a parent that belongs to a receipt skips summarize and rules. Measured first, not
-  guessed at up front.
-- **OCR on a crumpled thermal receipt is the weak link.** Faded ink and a curled edge beat
-  Tesseract, and the vision fallback only triggers below the confidence threshold. Editing
-  by hand is the answer, which is why every field is editable and Re-read exists. If OCR
-  loses most of the time in real use, the honest change is to send receipt photos straight
-  to vision and skip OCR, with evidence behind it.
+- **Cost per receipt, and why child pages do not each pay full price.** Every photo is an
+  ordinary document, so left alone a four page receipt would run four extractions, four
+  summaries, four embeddings and four sorting passes, plus the one receipt call. Local OCR
+  still runs on every page, since it costs nothing, but only page 1 needs the paid
+  follow-on pipeline: summarize, rules and embedding exist to make a document findable in
+  search and chat, and the receipt record is what represents the purchase from here on, not
+  the child pages. Pages upload, and their extraction jobs can already run, before the
+  receipt row exists for a lookup to find, so extraction cannot gate itself on "does this
+  belong to a receipt." Instead the budget module's own receipt creation step cancels any
+  still-pending rules, summarize and embedding jobs for the child pages and marks those
+  statuses done. This is best effort, contained in the new module rather than a change to
+  the shared upload or extraction path: it can occasionally miss a job the runner already
+  claimed in the few seconds between upload and the receipt POST, in which case that page
+  gets the full ordinary pipeline anyway, a miss on cost, not on correctness.
+- **OCR on a crumpled thermal receipt is the weak link, but only for search.** The receipt
+  reading itself already goes straight to vision on the photos, so this is about
+  extraction's separate OCR pass, the one that makes a page findable in search and chat:
+  faded ink and a curled edge beat Tesseract there. It has no bearing on how well the
+  receipt call reads the same photo. A genuinely bad photo still beats any model, which is
+  why every field is editable and Re-read exists.
 - **The vocabulary grows quietly.** Twenty one presets in every receipt prompt is fine.
   Fifty hand-written ones of three sentences each is a different bill, and it arrives
   without anyone noticing. Hence the count on the page.
