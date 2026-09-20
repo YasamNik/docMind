@@ -272,6 +272,73 @@ describe("budget models", () => {
         expect(result.items[1]!.categoryId).toBe("bcat_drinks00000000");
         expect(result.items[2]!.categoryId).toBe("bcat_clothing000000");
         expect(result.items[3]!.categoryId).toBe("bcat_household00000");
+        // Items sum to 23.09, printed total is 27.27, tax is 4.18: 23.09 + 4.18 = 27.27,
+        // so this must be ready, not flagged for a gap that is exactly the tax.
+        expect(result.status).toBe("ready");
+        expect(result.note).toBeNull();
+      }
+    });
+
+    it("is ready when items reconcile against the total minus tax, the normal case for a taxed receipt", () => {
+      const result = normalizeReceiptReply({
+        reply: {
+          merchant: "Corner Shop",
+          purchasedAt: "2026-09-10",
+          currency: "USD",
+          total: 27.27,
+          taxAmount: 4.18,
+          items: [
+            { description: "Hand towel", amount: 2.97 },
+            { description: "Gatorade", amount: 2.0 },
+            { description: "T-shirt", amount: 16.88 },
+            { description: "Push pins", amount: 1.24 },
+          ],
+        },
+        categories,
+      });
+      expect(result.failed).toBe(false);
+      if (!result.failed) {
+        expect(result.status).toBe("ready");
+        expect(result.note).toBeNull();
+      }
+    });
+
+    it("stays ready when tax is stated but prices are tax inclusive and items already match the printed total", () => {
+      const result = normalizeReceiptReply({
+        reply: {
+          merchant: "Corner Shop",
+          purchasedAt: "2026-09-10",
+          currency: "GBP",
+          total: 10,
+          taxAmount: 1.67,
+          items: [{ description: "Widget", amount: 10 }],
+        },
+        categories,
+      });
+      expect(result.failed).toBe(false);
+      if (!result.failed) {
+        expect(result.status).toBe("ready");
+        expect(result.note).toBeNull();
+      }
+    });
+
+    it("flags needs_review when tax is stated and the items reconcile against neither the total nor the total minus tax", () => {
+      const result = normalizeReceiptReply({
+        reply: {
+          merchant: "Corner Shop",
+          purchasedAt: "2026-09-10",
+          currency: "USD",
+          total: 27.27,
+          taxAmount: 4.18,
+          items: [{ description: "Mystery item", amount: 10 }],
+        },
+        categories,
+      });
+      expect(result.failed).toBe(false);
+      if (!result.failed) {
+        expect(result.status).toBe("needs_review");
+        expect(result.note).toContain("does not match the printed total 27.27");
+        expect(result.note).toContain("tax 4.18");
       }
     });
 

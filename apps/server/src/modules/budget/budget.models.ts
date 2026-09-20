@@ -203,8 +203,11 @@ export type NormalizedReceiptReply =
 // spec section 4 lives here, pure and unit-testable without a network call:
 // - all four header fields null is a failed read, never a receipt with a blank total.
 // - a non-empty warning forces needs_review and lands in the note.
-// - items that do not reconcile with the printed total (outside RECONCILE_TOLERANCE)
-//   force needs_review too; neither number is ever adjusted to fit the other.
+// - items are reconciled against the total net of tax when a tax amount is stated (most
+//   receipts print items before tax), or against the total itself when it is not; a
+//   tax-inclusive receipt where items already match the printed total also passes.
+//   Outside RECONCILE_TOLERANCE on every accepted comparison forces needs_review;
+//   neither number is ever adjusted to fit the other.
 // - a printed total with no items read at all forces needs_review too, since the line
 //   items are the point of the feature; a genuinely zero total with no items is left
 //   alone, since there is nothing to review.
@@ -238,7 +241,20 @@ export function normalizeReceiptReply({
       }
     } else {
       const itemsTotal = sumItemAmounts(items);
-      if (!itemsReconcileWithTotal(itemsTotal, total)) {
+      if (taxAmount !== null) {
+        // Line items are printed before tax on most receipts, so the honest comparison
+        // is against the total net of the stated tax. Some receipts price items tax
+        // inclusive instead, so a match against the printed total outright also counts:
+        // either reading is accepted, only a receipt that fits neither is flagged.
+        const netTotal = roundMoney(total - taxAmount);
+        const matchesNet = itemsReconcileWithTotal(itemsTotal, netTotal);
+        const matchesGross = itemsReconcileWithTotal(itemsTotal, total);
+        if (!matchesNet && !matchesGross) {
+          reasons.push(
+            `Items total ${itemsTotal.toFixed(2)} does not match the printed total ${total.toFixed(2)} or the total minus tax ${netTotal.toFixed(2)} (tax ${taxAmount.toFixed(2)}).`,
+          );
+        }
+      } else if (!itemsReconcileWithTotal(itemsTotal, total)) {
         reasons.push(`Items total ${itemsTotal.toFixed(2)} does not match the printed total ${total.toFixed(2)}.`);
       }
     }
