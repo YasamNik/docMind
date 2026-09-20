@@ -5,6 +5,9 @@ import { Toaster } from "@/components/ui/sonner";
 import { AppShell } from "@/components/layout/AppShell";
 import { authClient } from "@/lib/auth-client";
 import { SignInPage } from "@/pages/auth/SignInPage";
+import { BudgetCategoriesPage } from "@/pages/budget/CategoriesPage";
+import { BudgetPage } from "@/pages/budget/BudgetPage";
+import { ReceiptDetailPage } from "@/pages/budget/ReceiptDetailPage";
 import { CategoriesPage } from "@/pages/categories/CategoriesPage";
 import { ChatPage } from "@/pages/chat/ChatPage";
 import { DocumentsPage } from "@/pages/documents/DocumentsPage";
@@ -49,6 +52,9 @@ export default function App() {
             <Route path="/documents" element={<DocumentsPage />} />
             <Route path="/documents/:id" element={<DocumentDetailPage />} />
             <Route path="/categories" element={<CategoriesPage />} />
+            <Route path="/budget" element={<BudgetPage />} />
+            <Route path="/budget/categories" element={<BudgetCategoriesPage />} />
+            <Route path="/budget/receipts/:id" element={<ReceiptDetailPage />} />
             <Route path="/tags" element={<TagsPage />} />
             <Route path="/types" element={<TypesPage />} />
             <Route path="/search" element={<SearchPage />} />

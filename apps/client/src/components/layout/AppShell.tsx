@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
-import { Briefcase, Inbox, LogOut, Menu, MessageCircle, Moon, Search, Settings, Sparkles, Sun, Tags as TagsIcon, X } from "lucide-react";
+import { Briefcase, Inbox, LogOut, Menu, MessageCircle, Moon, Receipt, Search, Settings, Sparkles, Sun, Tags as TagsIcon, X } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
@@ -24,12 +24,13 @@ import { useIsMobile } from "@/lib/use-media-query";
 // drawer holding both levels, the same shape shadcn's sidebar block uses to collapse a rail
 // into a sheet on a phone.
 
-type RailTab = "files" | "search" | "tags" | "sorting" | "chat" | "settings" | "jobs";
+type RailTab = "files" | "search" | "tags" | "budget" | "sorting" | "chat" | "settings" | "jobs";
 
 const railItems: { tab: RailTab; label: string; to: string; icon: LucideIcon }[] = [
   { tab: "files", label: "Files", to: "/inbox", icon: Inbox },
   { tab: "search", label: "Search", to: "/search", icon: Search },
   { tab: "tags", label: "Tags", to: "/tags", icon: TagsIcon },
+  { tab: "budget", label: "Budget", to: "/budget", icon: Receipt },
   { tab: "sorting", label: "Sorting", to: "/sorting", icon: Sparkles },
   { tab: "chat", label: "Chat", to: "/chat", icon: MessageCircle },
   { tab: "settings", label: "Settings", to: "/settings", icon: Settings },
@@ -38,6 +39,7 @@ const railItems: { tab: RailTab; label: string; to: string; icon: LucideIcon }[]
 
 function tabForPath(pathname: string): RailTab {
   if (pathname.startsWith("/search")) return "search";
+  if (pathname.startsWith("/budget")) return "budget";
   if (pathname.startsWith("/tags") || pathname.startsWith("/categories") || pathname.startsWith("/types")) return "tags";
   if (pathname.startsWith("/sorting")) return "sorting";
   if (pathname.startsWith("/chat")) return "chat";
@@ -218,6 +220,24 @@ function TagsPanel({ tags, categories, types }: { tags: TagRow[]; categories: Ca
   );
 }
 
+function BudgetPanel() {
+  return (
+    <>
+      <span className="font-heading text-lg">Budget</span>
+      <nav className="flex flex-col gap-1">
+        <NavLink to="/budget" end className={navPillClass}>
+          This month
+        </NavLink>
+      </nav>
+      <div className="mt-auto flex flex-col gap-1 px-3">
+        <NavLink to="/budget/categories" className="text-xs text-muted-foreground underline-offset-2 hover:underline">
+          Manage categories
+        </NavLink>
+      </div>
+    </>
+  );
+}
+
 function ChatPanel() {
   return (
     <>
@@ -302,6 +322,7 @@ function ContextPanelContent({
     );
   if (activeTab === "search") return <SearchPanel />;
   if (activeTab === "tags") return <TagsPanel tags={tags} categories={categories} types={types} />;
+  if (activeTab === "budget") return <BudgetPanel />;
   if (activeTab === "sorting") return <SortingPanel automaticCount={countAutomaticItems(tags, categories, types)} />;
   if (activeTab === "chat") return <ChatPanel />;
   if (activeTab === "settings") return <SettingsPanel />;

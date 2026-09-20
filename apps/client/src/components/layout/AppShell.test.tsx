@@ -74,6 +74,12 @@ describe("AppShell", () => {
     expect(screen.queryByText("Finance")).not.toBeInTheDocument();
     expect(screen.queryByText("Rent")).not.toBeInTheDocument();
   });
+
+  it("shows a Budget item in the rail linking to /budget", async () => {
+    renderShell();
+    await screen.findByText("Inbox");
+    expect(screen.getByTitle("Budget")).toHaveAttribute("href", "/budget");
+  });
 });
 
 describe("AppShell on a phone", () => {
