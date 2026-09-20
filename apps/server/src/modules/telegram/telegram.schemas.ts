@@ -35,6 +35,14 @@ const telegramFileAttachmentSchema = v.object({
   file_size: v.optional(v.number()),
 });
 
+// A held-to-record voice note, unlike every other attachment above, carries no
+// file_name: Telegram never lets the sender name it.
+const telegramVoiceSchema = v.object({
+  file_id: v.string(),
+  duration: v.number(),
+  mime_type: v.optional(v.string()),
+});
+
 const telegramMessageSchema = v.object({
   message_id: v.number(),
   from: v.optional(telegramUserSchema),
@@ -46,6 +54,7 @@ const telegramMessageSchema = v.object({
   photo: v.optional(v.array(telegramPhotoSizeSchema)),
   video: v.optional(telegramFileAttachmentSchema),
   audio: v.optional(telegramFileAttachmentSchema),
+  voice: v.optional(telegramVoiceSchema),
 });
 
 // A callback update carries no message of its own: the sender is callback_query.from,

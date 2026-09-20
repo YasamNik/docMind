@@ -318,6 +318,15 @@ describe("anthropic adapter", () => {
     });
   });
 
+  describe("transcribeAudio", () => {
+    it("throws ai.unsupported", async () => {
+      const adapter = createAnthropicAdapter(config);
+      await expect(
+        adapter.transcribeAudio({ model: "any", audio: Buffer.from("x"), format: "ogg", prompt: "Transcribe this." }),
+      ).rejects.toMatchObject({ code: "ai.unsupported" });
+    });
+  });
+
   describe("testConnection", () => {
     it("returns ok with latency on success", async () => {
       mockFetch.mockResolvedValueOnce(

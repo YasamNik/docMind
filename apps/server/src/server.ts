@@ -193,6 +193,7 @@ export function createServer({
     documentsService,
     chatService,
     assistantService,
+    aiService,
     getUserId: async () => {
       const [row] = await db.select({ id: authUserTable.id }).from(authUserTable).limit(1);
       return row?.id;

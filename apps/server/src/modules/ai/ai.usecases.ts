@@ -466,6 +466,39 @@ export function createAiService({
       return result;
     },
 
+    // Reuses the vision slot rather than a slot of its own: it is already the one
+    // multimodal slot, set to gemini-2.5-flash, and Telegram voice notes are the only
+    // caller today. Worth its own slot the day a user needs a different model for
+    // audio than for images, not before.
+    async transcribeAudio({
+      userId,
+      audio,
+      format,
+      prompt,
+    }: {
+      userId: string;
+      audio: Buffer;
+      format: string;
+      prompt: string;
+    }): Promise<{ text: string }> {
+      const { model, provider, apiKey, baseUrl } = await resolveSlot(userId, "vision");
+      if (!provider.capabilities.transcription) {
+        throw createError({
+          code: "ai.capability_missing",
+          message: `Provider "${provider.label}" does not support audio transcription.`,
+          status: 400,
+        });
+      }
+      const adapter = buildAdapter(provider, apiKey, baseUrl);
+      const start = Date.now();
+      const result = await adapter.transcribeAudio({ model, audio, format, prompt });
+      logger.info(
+        { task: "vision", model: buildModelUri(provider.id, model), latencyMs: Date.now() - start },
+        "audio transcription complete",
+      );
+      return result;
+    },
+
     async listModels(userId: string, providerId: string): Promise<{ models: ModelInfo[]; error?: string }> {
       const { provider, apiKey, baseUrl } = await getCredentials(userId, providerId);
       const cacheKey = `${providerId}:${baseUrl}`;

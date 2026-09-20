@@ -16,6 +16,7 @@ type TelegramPhotoSize = NonNullable<TelegramMessage["photo"]>[number];
 export type TelegramIntent =
   | { kind: "pairing"; code: string }
   | { kind: "file"; fileId: string; fileName: string | undefined; mimeType: string | undefined; compressedPhoto: boolean }
+  | { kind: "voice"; fileId: string }
   | { kind: "note"; text: string }
   | { kind: "chat"; text: string }
   | { kind: "web"; text: string }
@@ -95,6 +96,10 @@ export function intentOf(update: TelegramUpdate, { paired }: { paired: boolean }
   if (message.photo && message.photo.length > 0) return fileIntentFromPhoto(message.photo);
   if (message.video) return fileIntentFromAttachment(message.video);
   if (message.audio) return fileIntentFromAttachment(message.audio);
+  // A voice note is not filed as a document: it is transcribed and then treated as if
+  // the sender had typed it (telegram.usecases.ts, handleUpdate), so its intent carries
+  // only what downloading it needs.
+  if (message.voice) return { kind: "voice", fileId: message.voice.file_id };
 
   const text = message.text;
   if (!text || text.trim().length === 0) return { kind: "ignore" };
@@ -145,6 +150,23 @@ export function fileTooLargeReply(): string {
 export function compressedPhotoNotice(): string {
   return "Heads up, Telegram compresses photos, which can hurt text recognition. Send it as a file instead of a photo to keep the original quality.";
 }
+
+export function voiceTooLargeReply(): string {
+  return "That voice note is bigger than the 20 MB limit Telegram lets a bot download. Try a shorter one, or type it instead.";
+}
+
+// Covers both a transcription call that failed outright and one that came back with
+// nothing to say, since either way there is no text left to answer with, and going
+// quiet about it would just be the same bug this module used to have with voice notes.
+export function voiceTranscriptionFailedReply(): string {
+  return "I couldn't make out that voice note. Try again, or type it instead.";
+}
+
+// Sent alongside the audio itself (ai.usecases.ts transcribeAudio). Told to return the
+// transcript alone, since anything else in the reply would be forwarded to the
+// assistant as if the user had typed it.
+export const VOICE_TRANSCRIBE_PROMPT =
+  "Transcribe this voice note exactly as spoken, in the language it was spoken in. Reply with only the transcript, nothing else.";
 
 // Said once, ever, the first time plain text arrives after notes moved behind /note.
 // Same once-only shape as compressedPhotoNotice: a settings flag remembers it fired.

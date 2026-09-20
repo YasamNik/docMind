@@ -43,6 +43,13 @@ describe("ai provider registry", () => {
     }
   });
 
+  it("declares audio transcription only for the openai-compatible adapter", () => {
+    for (const id of aiProviderIds) {
+      const def = aiProviderRegistry[id]!;
+      expect(def.capabilities.transcription).toBe(def.adapter === "openai-compatible");
+    }
+  });
+
   it("every provider declares tool calling capability, since both adapters build it", () => {
     for (const id of aiProviderIds) {
       const def = aiProviderRegistry[id]!;

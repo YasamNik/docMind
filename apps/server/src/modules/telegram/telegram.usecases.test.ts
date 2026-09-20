@@ -207,12 +207,25 @@ function updateWithPhoto({ updateId, fromId, fileId, caption }: { updateId: numb
   };
 }
 
+function updateWithVoice({ updateId, fromId, fileId }: { updateId: number; fromId: number; fileId: string }) {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      from: { id: fromId, first_name: "Alex" },
+      chat: { id: fromId },
+      voice: { file_id: fileId, duration: 4, mime_type: "audio/ogg" },
+    },
+  };
+}
+
 let root: string;
 let db: Awaited<ReturnType<typeof createTestDatabase>>["db"];
 let settingsService: ReturnType<typeof createSettingsService>;
 let documentsService: ReturnType<typeof createDocumentsService>;
 let chatService: ChatService;
 let assistantService: AssistantService;
+let aiService: ReturnType<typeof createAiService>;
 // Reassigned within a test to script what the model returns for that turn. Reading
 // through this indirection, rather than rebuilding the whole ai/search/chat stack per
 // test, is what lets "keeps the thread" script two different replies for two turns of
@@ -222,6 +235,9 @@ let streamChatImpl: AiAdapter["streamChat"];
 // triage call goes ahead. A test on the no-tools notice overrides this to report the
 // configured model back with supportsTools: false.
 let listModelsImpl: AiAdapter["listModels"];
+// Empty transcript by default: a test exercising a voice note overrides this to script
+// what the model heard.
+let transcribeAudioImpl: AiAdapter["transcribeAudio"];
 
 function fakeChatAdapter(): AiAdapter {
   return {
@@ -230,6 +246,7 @@ function fakeChatAdapter(): AiAdapter {
     streamChat: (...args) => streamChatImpl(...args),
     embed: vi.fn(async () => ({ vectors: [], dimension: 0 })),
     recognizeImage: vi.fn(async () => ({ text: "" })),
+    transcribeAudio: (...args) => transcribeAudioImpl(...args),
     listModels: (...args) => listModelsImpl(...args),
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1, message: "ok" }) as TestResult),
   };
@@ -264,8 +281,9 @@ beforeEach(async () => {
   // assistant gets the same graceful "no model configured" path production would.
   streamChatImpl = vi.fn(async () => asyncChatPartsOf(["Okay."]));
   listModelsImpl = vi.fn(async () => [] as ModelInfo[]);
+  transcribeAudioImpl = vi.fn(async () => ({ text: "" }));
   const adapter = fakeChatAdapter();
-  const aiService = createAiService({
+  aiService = createAiService({
     settingsService,
     registry: aiProviderRegistry,
     adapterFactories: { "openai-compatible": () => adapter, "anthropic": () => adapter },
@@ -294,6 +312,7 @@ function buildService(
     documentsService,
     chatService,
     assistantService,
+    aiService,
     getUserId: async () => userId,
     clientFactory: () => client,
     fetchLinkPage,
@@ -674,6 +693,7 @@ describe("telegram service", () => {
       documentsService,
       chatService,
       assistantService,
+      aiService,
       getUserId: async () => userId,
       clientFactory: () => client,
       fetchLinkPage: fetchLinkPageNotConfigured,
@@ -1121,6 +1141,110 @@ describe("telegram service, the assistant", () => {
     expect(newSessionId).not.toBe("session-that-no-longer-exists");
     const sessions = await chatService.listSessions(userId);
     expect(sessions.map((s) => s.id)).toContain(newSessionId);
+  });
+});
+
+describe("telegram service, voice notes", () => {
+  async function pairAndConfigureChat() {
+    await settingsService.set(userId, {
+      "telegram.botToken": "111:token",
+      "ai.openrouter.apiKey": "sk-or-v1-test",
+      "ai.model.chat": "openrouter://test-chat-model",
+    });
+    await settingsService.setInternal(userId, "telegram.pairedUserId", PAIRED_ID);
+    await settingsService.setInternal(userId, "telegram.noteMigrationNoticeSent", true);
+  }
+
+  it("transcribes a voice note and answers it exactly like a typed message", async () => {
+    await pairAndConfigureChat();
+    transcribeAudioImpl = vi.fn(async () => ({ text: "note for later, bin day is Thursday" }));
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf(["Got it, I'll remember that."]));
+    const { client, sent } = fakeTelegram({
+      batches: [[updateWithVoice({ updateId: 1, fromId: PAIRED_ID, fileId: "voice-1" })]],
+      files: { "voice-1": { content: "ogg bytes" } },
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toBe("Got it, I'll remember that.");
+    expect(transcribeAudioImpl).toHaveBeenCalledWith(
+      expect.objectContaining({ format: "ogg", audio: expect.any(Buffer) }),
+    );
+
+    const sessions = await chatService.listSessions(userId);
+    const messages = await chatService.listMessages({ userId, sessionId: sessions[0]!.id });
+    expect(messages.filter((m) => m.role === "user").map((m) => m.content)).toEqual(["note for later, bin day is Thursday"]);
+  });
+
+  it("tells the sender in its own words when a voice note is too large to download", async () => {
+    await pairAndConfigureChat();
+    const { client, sent } = fakeTelegram({
+      batches: [[updateWithVoice({ updateId: 1, fromId: PAIRED_ID, fileId: "big-voice" })]],
+      files: { "big-voice": { tooLarge: true } },
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toMatch(/voice note/i);
+    expect(sent[0]?.text).toMatch(/20 ?mb/i);
+    expect(transcribeAudioImpl).not.toHaveBeenCalled();
+    expect(await chatService.listSessions(userId)).toHaveLength(0);
+  });
+
+  it("says so plainly when transcription comes back with nothing to say, instead of going silent", async () => {
+    await pairAndConfigureChat();
+    transcribeAudioImpl = vi.fn(async () => ({ text: "   " }));
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf(["should never be reached"]));
+    const { client, sent } = fakeTelegram({
+      batches: [[updateWithVoice({ updateId: 1, fromId: PAIRED_ID, fileId: "voice-1" })]],
+      files: { "voice-1": { content: "ogg bytes" } },
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toMatch(/voice note/i);
+    expect(streamChatImpl).not.toHaveBeenCalled();
+  });
+
+  it("says so plainly when transcription fails outright, instead of going silent", async () => {
+    await pairAndConfigureChat();
+    transcribeAudioImpl = vi.fn(async () => {
+      throw new Error("provider blip, simulated");
+    });
+    streamChatImpl = vi.fn(async () => asyncChatPartsOf(["should never be reached"]));
+    const { client, sent } = fakeTelegram({
+      batches: [[updateWithVoice({ updateId: 1, fromId: PAIRED_ID, fileId: "voice-1" })]],
+      files: { "voice-1": { content: "ogg bytes" } },
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toMatch(/voice note/i);
+    expect(streamChatImpl).not.toHaveBeenCalled();
+  });
+
+  it("never downloads or transcribes a voice note from someone who is not the paired user", async () => {
+    await pairAndConfigureChat();
+    const { client, sent } = fakeTelegram({
+      batches: [[updateWithVoice({ updateId: 1, fromId: OTHER_ID, fileId: "voice-1" })]],
+      // A fixture is provided so a broken guard would actually reach transcription
+      // instead of failing earlier on a missing file and passing this test by accident.
+      files: { "voice-1": { content: "ogg bytes" } },
+    });
+    const telegram = buildService(client);
+
+    await telegram.runOnce();
+
+    expect(sent).toHaveLength(0);
+    expect(transcribeAudioImpl).not.toHaveBeenCalled();
   });
 });
 
@@ -1774,6 +1898,7 @@ describe("telegram service, background loops", () => {
       documentsService,
       chatService,
       assistantService,
+      aiService,
       getUserId: async () => userId,
       clientFactory: () => client,
       fetchLinkPage: fetchLinkPageNotConfigured,

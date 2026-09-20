@@ -3,6 +3,7 @@ import { createOpenAiCompatibleAdapter } from "./openai-compatible.adapter.js";
 import modelsFixture from "../__fixtures__/openrouter-models.json" with { type: "json" };
 import completionFixture from "../__fixtures__/openrouter-completion.json" with { type: "json" };
 import visionFixture from "../__fixtures__/openrouter-vision.json" with { type: "json" };
+import transcriptionFixture from "../__fixtures__/openrouter-transcription.json" with { type: "json" };
 import errorFixture from "../__fixtures__/openrouter-error-401.json" with { type: "json" };
 import * as v from "valibot";
 import type { AdapterConfig } from "./adapter.types.js";
@@ -290,6 +291,37 @@ describe("openai-compatible adapter", () => {
       expect(message?.content).toEqual([
         { type: "text", text: "Extract all text from this document image." },
         { type: "image_url", image_url: { url: `data:image/png;base64,${image.toString("base64")}` } },
+      ]);
+    });
+  });
+
+  describe("transcribeAudio", () => {
+    it("sends the audio as base64 input_audio in the ogg format Telegram sends, and returns the transcript", async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify(transcriptionFixture), { status: 200, headers: { "content-type": "application/json" } }),
+      );
+      const adapter = createOpenAiCompatibleAdapter(config);
+      const audio = Buffer.from("fake ogg bytes");
+      const result = await adapter.transcribeAudio({
+        model: "google/gemini-2.5-flash",
+        audio,
+        format: "ogg",
+        prompt: "Transcribe this voice note exactly as spoken. Reply with only the transcript, nothing else.",
+      });
+      expect(result.text).toBe("Note for later, bin day is Thursday.");
+
+      const [callUrl, callInit] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(callUrl).toBe("https://openrouter.ai/api/v1/chat/completions");
+      const callBody = JSON.parse(callInit.body as string) as {
+        model: string;
+        messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+      };
+      expect(callBody.model).toBe("google/gemini-2.5-flash");
+      const [message] = callBody.messages;
+      expect(message?.role).toBe("user");
+      expect(message?.content).toEqual([
+        { type: "text", text: "Transcribe this voice note exactly as spoken. Reply with only the transcript, nothing else." },
+        { type: "input_audio", input_audio: { data: audio.toString("base64"), format: "ogg" } },
       ]);
     });
   });

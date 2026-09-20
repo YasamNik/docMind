@@ -8,7 +8,7 @@ export const customProvider: AiProviderDefinition = {
   adapter: "openai-compatible",
   defaultBaseUrl: "",
   requiresKey: true,
-  capabilities: { text: true, structured: true, embeddings: true, listModels: true, vision: true, tools: true },
+  capabilities: { text: true, structured: true, embeddings: true, listModels: true, vision: true, transcription: true, tools: true },
   suggestedModels: {},
   guide: {
     title: "Set up a custom provider",

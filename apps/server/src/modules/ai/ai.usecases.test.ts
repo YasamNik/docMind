@@ -136,6 +136,46 @@ describe("ai service", () => {
     );
   });
 
+  it("resolves the vision slot and delegates to transcribeAudio, reusing the vision slot for audio", async () => {
+    const { settingsService, aiService, adapter } = await setup();
+    await settingsService.set(userId, {
+      "ai.openrouter.apiKey": "sk-or-v1-test",
+      "ai.model.vision": "openrouter://google/gemini-2.5-flash",
+    });
+    const audio = Buffer.from("fake ogg bytes");
+    const result = await aiService.transcribeAudio({
+      userId,
+      audio,
+      format: "ogg",
+      prompt: "Transcribe this voice note exactly as spoken. Reply with only the transcript, nothing else.",
+    });
+    expect(result.text).toBe("transcribed text");
+    expect(adapter.transcribeAudio).toHaveBeenCalledWith({
+      model: "google/gemini-2.5-flash",
+      audio,
+      format: "ogg",
+      prompt: "Transcribe this voice note exactly as spoken. Reply with only the transcript, nothing else.",
+    });
+  });
+
+  it("throws ai.capability_missing when the vision slot's provider does not support transcription", async () => {
+    const { settingsService, aiService } = await setup();
+    await settingsService.set(userId, {
+      "ai.anthropic.apiKey": "sk-ant-test",
+      "ai.model.vision": "anthropic://claude-sonnet-4-20250514",
+    });
+    await expectAppError(
+      () =>
+        aiService.transcribeAudio({
+          userId,
+          audio: Buffer.from("x"),
+          format: "ogg",
+          prompt: "Transcribe this voice note exactly as spoken. Reply with only the transcript, nothing else.",
+        }),
+      "ai.capability_missing",
+    );
+  });
+
   it("resolves the chat slot and delegates to streamChat", async () => {
     const { settingsService, aiService, adapter } = await setup();
     await settingsService.set(userId, {

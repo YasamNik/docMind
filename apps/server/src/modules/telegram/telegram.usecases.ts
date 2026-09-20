@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import * as v from "valibot";
 import { isAppError } from "../../shared/errors/errors.js";
 import { createLogger, type Logger } from "../../shared/logger/logger.js";
+import type { AiService } from "../ai/ai.usecases.js";
 import { ASSISTANT_TRIAGE_SYSTEM_PROMPT, staleProposalReply } from "../assistant/assistant.models.js";
 import type { AssistantService } from "../assistant/assistant.usecases.js";
 import type { AnswerResult, TurnResult } from "../assistant/assistant.types.js";
@@ -36,6 +37,9 @@ import {
   stripCitationMarkers,
   type TelegramInlineKeyboard,
   type TelegramIntent,
+  voiceTooLargeReply,
+  voiceTranscriptionFailedReply,
+  VOICE_TRANSCRIBE_PROMPT,
 } from "./telegram.models.js";
 import { telegramUpdateSchema, type TelegramCallbackQuery, type TelegramMessage, type TelegramUpdate } from "./telegram.schemas.js";
 
@@ -45,6 +49,11 @@ import { telegramUpdateSchema, type TelegramCallbackQuery, type TelegramMessage,
 // purpose so a test can hand this a chat service backed by a fake AI adapter without
 // also standing in for every route chat.usecases.ts serves.
 type TelegramChatService = Pick<ChatService, "createSession" | "listMessages">;
+
+// Only the one call a voice note needs. Kept narrow for the same reason as
+// TelegramChatService above: a test can hand this a bare transcribeAudio fake without
+// standing in for the rest of the AI layer.
+type TelegramAiService = Pick<AiService, "transcribeAudio">;
 
 // Own poll loop in the shape of jobs.runner.ts: re-reads its token every cycle instead
 // of reacting to a settings write, because settingsService has no post-write hook.
@@ -92,6 +101,7 @@ export function createTelegramService({
   documentsService,
   chatService,
   assistantService,
+  aiService,
   getUserId,
   clientFactory = createTelegramClient,
   fetchLinkPage = fetchReadablePage,
@@ -119,6 +129,9 @@ export function createTelegramService({
   // own thread pointer and the triage base prompt (ASSISTANT_TRIAGE_SYSTEM_PROMPT,
   // assistant.models.ts).
   assistantService: AssistantService;
+  // Transcribes a voice note before it takes the same path a typed message does. Narrowed
+  // to transcribeAudio only; see TelegramAiService above.
+  aiService: TelegramAiService;
   // There is exactly one Telegram-paired account, and this loop runs with no HTTP
   // session to read it from. Resolved fresh every cycle so a user created after the
   // process started is picked up without a restart, the same way the token is.
@@ -223,6 +236,55 @@ export function createTelegramService({
         await client.sendMessage({ chatId, text: compressedPhotoNotice() });
         await settingsService.setInternal(userId, "telegram.compressedPhotoNoticeSent", true);
       }
+    }
+  }
+
+  // Downloads a voice note through the same getFile path, and the same 20 MB cap,
+  // every other Telegram attachment uses, then hands the bytes to the AI layer for a
+  // transcript. Returns undefined once a reply has already gone out, for a download
+  // too large or a transcription that failed or came back empty, so the caller knows
+  // there is no text left to answer.
+  async function transcribeVoiceNote({
+    userId,
+    client,
+    chatId,
+    intent,
+  }: {
+    userId: string;
+    client: TelegramClient;
+    chatId: number;
+    intent: Extract<TelegramIntent, { kind: "voice" }>;
+  }): Promise<string | undefined> {
+    let downloaded: Awaited<ReturnType<TelegramClient["getFile"]>>;
+    try {
+      downloaded = await client.getFile({ fileId: intent.fileId });
+    } catch (error) {
+      if (isAppError(error) && error.code === "telegram.file_too_large") {
+        await client.sendMessage({ chatId, text: voiceTooLargeReply() });
+        return undefined;
+      }
+      throw error;
+    }
+
+    // Buffered whole rather than streamed: transcription needs the full clip as one
+    // base64 payload, and a voice note is already capped at the same 20 MB getFile
+    // enforces above, nowhere near "a whole document" the streaming rule guards against.
+    const chunks: Buffer[] = [];
+    for await (const chunk of downloaded.stream) chunks.push(Buffer.from(chunk));
+    const audio = Buffer.concat(chunks);
+
+    try {
+      const { text } = await aiService.transcribeAudio({ userId, audio, format: "ogg", prompt: VOICE_TRANSCRIBE_PROMPT });
+      const transcript = text.trim();
+      if (!transcript) {
+        await client.sendMessage({ chatId, text: voiceTranscriptionFailedReply() });
+        return undefined;
+      }
+      return transcript;
+    } catch (error) {
+      logger.error({ userId, err: (error as Error).message }, "Telegram voice transcription failed");
+      await client.sendMessage({ chatId, text: voiceTranscriptionFailedReply() });
+      return undefined;
     }
   }
 
@@ -535,7 +597,10 @@ export function createTelegramService({
 
     const pairedUserId = await settingsService.get<number>(userId, "telegram.pairedUserId");
     const paired = pairedUserId !== undefined;
-    const intent = intentOf(update, { paired });
+    // Reassigned below, once, when a voice note resolves to a transcript: from that
+    // point on it is a "chat" intent like any other, and every branch after it stays
+    // none the wiser.
+    let intent = intentOf(update, { paired });
 
     if (!paired) {
       // Every message except a correct code is ignored with no reply at all here: an
@@ -548,6 +613,16 @@ export function createTelegramService({
     }
 
     if (fromId !== pairedUserId) return;
+
+    // A voice note is a way of talking to the assistant, not a way of filing audio: it
+    // is transcribed here and then handed to the exact same "chat" branch a typed
+    // message reaches below, so triage, the cheap-message guard, stale-session recovery
+    // and confirmations all run completely unchanged.
+    if (intent.kind === "voice") {
+      const transcript = await transcribeVoiceNote({ userId, client, chatId, intent });
+      if (transcript === undefined) return;
+      intent = { kind: "chat", text: transcript };
+    }
 
     if (intent.kind === "file") {
       await handleFile({ userId, client, chatId, message, intent });

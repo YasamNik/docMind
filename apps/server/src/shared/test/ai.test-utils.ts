@@ -48,6 +48,7 @@ export function fakeAdapter(overrides: Partial<AiAdapter> = {}): AiAdapter {
     }),
     embed: vi.fn(async () => ({ vectors: [[0.1, 0.2]], dimension: 2 })),
     recognizeImage: vi.fn(async () => ({ text: "extracted text" })),
+    transcribeAudio: vi.fn(async () => ({ text: "transcribed text" })),
     listModels: vi.fn(async () => [{ id: "test-model", label: "Test Model", contextLength: 8000 }] as ModelInfo[]),
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 42, message: "Connected. 1 models available." }) as TestResult),
     ...overrides,

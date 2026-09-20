@@ -22,6 +22,9 @@ import {
   receivedReply,
   splitForTelegram,
   stripCitationMarkers,
+  voiceTooLargeReply,
+  voiceTranscriptionFailedReply,
+  VOICE_TRANSCRIBE_PROMPT,
 } from "./telegram.models.js";
 
 function baseUpdate(message: NonNullable<TelegramUpdate["message"]>): TelegramUpdate {
@@ -206,6 +209,17 @@ describe("telegram models", () => {
     expect(intentOf(update, { paired: true })).toEqual({ kind: "chat", text: "he said /note it down" });
   });
 
+  it("reads a voice note as its own intent, not a file", () => {
+    const update = baseUpdate({
+      message_id: 26,
+      from: { id: 111, first_name: "Alex" },
+      chat: { id: 111 },
+      voice: { file_id: "voice_123", duration: 4, mime_type: "audio/ogg" },
+    });
+
+    expect(intentOf(update, { paired: true })).toEqual({ kind: "voice", fileId: "voice_123" });
+  });
+
   it("ignores stickers, locations and edits", () => {
     const sticker = baseUpdate({ message_id: 17, from: { id: 111, first_name: "Alex" }, chat: { id: 111 } });
     expect(intentOf(sticker, { paired: true })).toEqual({ kind: "ignore" });
@@ -230,6 +244,13 @@ describe("telegram models", () => {
     expect(duplicateReply("receipt.pdf")).toMatch(/already/i);
     expect(fileTooLargeReply()).toMatch(/20 ?mb/i);
     expect(compressedPhotoNotice()).toMatch(/compress/i);
+    expect(voiceTooLargeReply()).toMatch(/20 ?mb/i);
+    expect(voiceTranscriptionFailedReply()).toMatch(/voice note/i);
+  });
+
+  it("carries a non-empty transcription prompt", () => {
+    expect(typeof VOICE_TRANSCRIBE_PROMPT).toBe("string");
+    expect(VOICE_TRANSCRIBE_PROMPT.length).toBeGreaterThan(0);
   });
 
   it("apologizes in the module's own voice when a turn fails outright", () => {

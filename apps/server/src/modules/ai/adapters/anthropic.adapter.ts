@@ -236,6 +236,14 @@ export function createAnthropicAdapter(config: AdapterConfig): AiAdapter {
       });
     },
 
+    async transcribeAudio(): Promise<{ text: string }> {
+      throw createError({
+        code: "ai.unsupported",
+        message: "Anthropic does not support audio transcription. Use OpenRouter or OpenAI for the vision slot.",
+        status: 400,
+      });
+    },
+
     async listModels(): Promise<ModelInfo[]> {
       try {
         const models: ModelInfo[] = [];

@@ -237,6 +237,46 @@ export function createOpenAiCompatibleAdapter(config: AdapterConfig): AiAdapter 
       }
     },
 
+    async transcribeAudio({ model, audio, format, prompt }): Promise<{ text: string }> {
+      try {
+        const base64Audio = audio.toString("base64");
+        const response = await client.chat.completions.create({
+          model,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: prompt },
+                {
+                  type: "input_audio",
+                  // The SDK's own type only names "wav" and "mp3", the two formats
+                  // OpenAI's own audio models take. OpenRouter's route to Gemini also
+                  // takes "ogg", which is exactly what a Telegram voice note is, so the
+                  // format string is passed through rather than narrowed to the SDK's
+                  // documented pair.
+                  input_audio: { data: base64Audio, format: format as "wav" | "mp3" },
+                },
+              ],
+            },
+          ],
+        });
+
+        const content = response.choices[0]?.message?.content;
+        if (!content) {
+          throw createError({
+            code: "ai.provider_error",
+            message: "No content in transcription completion response",
+            status: 502,
+          });
+        }
+
+        return { text: content };
+      } catch (err) {
+        if (err instanceof Error && "code" in err && typeof (err as { code: unknown }).code === "string" && (err as { code: string }).code.startsWith("ai.")) throw err;
+        wrapError(err, config.apiKey);
+      }
+    },
+
     async embed({ model, texts }): Promise<EmbedResult> {
       try {
         const response = await client.embeddings.create({

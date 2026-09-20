@@ -10,6 +10,11 @@ export type AiProviderCapabilities = {
   embeddings: boolean;
   listModels: boolean;
   vision: boolean;
+  // Whether the adapter can send audio in a chat request and get a transcript back.
+  // Telegram voice notes are the only caller today (telegram.usecases.ts), and they
+  // resolve the vision slot rather than a slot of their own; see ai.usecases.ts
+  // transcribeAudio for why.
+  transcription: boolean;
   // Whether the adapter can build a tool-calling request and parse the provider's
   // wire format for it. A provider can declare this true and still refuse a specific
   // model at request time; ModelInfo.supportsTools is the finer, per-model signal.
@@ -92,6 +97,14 @@ export type AiAdapter = {
     model: string;
     image: Buffer;
     mimeType: string;
+    prompt: string;
+  }): Promise<{ text: string }>;
+  // Same shape as recognizeImage, for audio: a base64 payload, the container format it
+  // was recorded in, and a prompt telling the model what to do with it.
+  transcribeAudio(args: {
+    model: string;
+    audio: Buffer;
+    format: string;
     prompt: string;
   }): Promise<{ text: string }>;
   listModels(): Promise<ModelInfo[]>;
