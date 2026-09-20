@@ -17,6 +17,12 @@ Asked and answered on 2026-09-20:
 - **Item categories are a new vocabulary with their own settings page**, shaped like
   `document_types`: name, description, colour, automatic. Not the existing document
   categories, which answer a different question, namely what kind of paper this is.
+- **One category vocabulary, used in two places.** The user asked for the receipt itself
+  to carry a category too, alongside its line items: "maybe the budget_receipt shoud also
+  have categories like groceries, household, appliences." Since the user's own examples
+  for a receipt overlap with the item examples, this is one list read by both, not a
+  second vocabulary to maintain. See section 2 for the shared table and section 7 for how
+  each of the two places is set.
 - **One budget.** In the user's words: "the user is one person, but budget might be
   different, lets say home budget and business budget. but as a simple way, start with one
   family budget." Section 8 says exactly how a second one lands, and it is one column with
@@ -48,6 +54,23 @@ Almost nothing here is new machinery.
 
 Every column the user is being asked to approve is here, in one place.
 
+**`budget_categories`**, the shared vocabulary, read by a receipt as a whole and by its
+line items alike. Deliberately the four attributes the user named and no more. No
+confidence threshold column: `document_types` has one because the sorter compares per
+target, and here one global floor does the job.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | text pk | |
+| `user_id` | text not null | |
+| `name` | text not null | |
+| `description` | text not null default `''` | this is the prompt text, see section 7 |
+| `color` | text | |
+| `auto_apply` | integer not null default 1 | off means manual only, never suggested |
+| `created_at`, `updated_at` | text not null | |
+
+Indexes: `(user_id)`, unique `(user_id, name COLLATE NOCASE)`.
+
 **`budget_receipts`**, one row per receipt.
 
 | Column | Type | Notes |
@@ -56,6 +79,7 @@ Every column the user is being asked to approve is here, in one place.
 | `user_id` | text not null | |
 | `document_id` | text not null | references `documents(id)` on delete cascade. Page 1 |
 | `merchant` | text | as printed, editable |
+| `category_id` | text | references `budget_categories(id)` on delete set null. The receipt's own category, read from the same vocabulary as its items, see section 7 for why this is never derived from them |
 | `purchased_at` | text | YYYY-MM-DD from the receipt, not the upload time |
 | `currency` | text | ISO 4217, per receipt, never converted |
 | `total` | real | the printed total, what was actually paid |
@@ -79,28 +103,20 @@ Indexes: `(user_id, purchased_at)` for the month list, unique `(user_id, documen
 | `quantity` | real | null when the line does not say. Without it a price rise and a bigger basket look the same |
 | `unit_price` | real | null when the line does not say |
 | `amount` | real not null | the line total |
-| `item_category_id` | text | references `budget_item_categories(id)` on delete set null |
+| `category_id` | text | references `budget_categories(id)` on delete set null, the same table the receipt's own category points at |
 | `category_source` | text | `auto` or `manual`, the two values `documents.category_source` already uses |
 | `confidence` | real | the model's confidence in the category. Nothing reads this yet; it is there for a later low-confidence indicator on the line, not built now |
 | `created_at`, `updated_at` | text not null | |
 
 Index: `(receipt_id, line_number)`.
 
-**`budget_item_categories`**, the new vocabulary. Deliberately the four attributes the user
-named and no more. No confidence threshold column: `document_types` has one because the
-sorter compares per target, and here one global floor does the job.
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | text pk | |
-| `user_id` | text not null | |
-| `name` | text not null | |
-| `description` | text not null default `''` | this is the prompt text, see section 7 |
-| `color` | text | |
-| `auto_apply` | integer not null default 1 | off means manual only, never suggested |
-| `created_at`, `updated_at` | text not null | |
-
-Indexes: `(user_id)`, unique `(user_id, name COLLATE NOCASE)`.
+**Why one table and not two.** A grocery run that also picks up a kettle is a groceries
+receipt with one appliance item on it: the receipt's category and its items' categories
+answer different questions and are free to disagree, but they draw on the same names
+because the user's own examples for each overlap. The receipt's `category_id` is set by
+the model reading the receipt as a whole and is correctable like every other field, never
+computed from the items it contains, the same way `total` is never adjusted to match the
+items' sum, see section 4.
 
 **Nothing else changes in the schema.** No receipt pages table: `parent_document_id`
 already links them and their capture order is their `created_at` order, derived not stored.
@@ -141,8 +157,8 @@ trying again. It discards the extracted lines, so it asks first.
 **One vision call per receipt, over every photo together.** Decided after this spec was
 first written: send every shot from one receipt to the model in a single request, not OCR
 text read page by page. The receipt job passes page 1's image and every child page's image
-to one call, in capture order, and gets back the header values, the items, and a category
-per item in the same reply, see section 7.
+to one call, in capture order, and gets back the header values, a category for the receipt
+as a whole, the items, and a category per item, all in the same reply, see section 7.
 
 **A new `AiAdapter` method, not a bigger `generateStructured`.** No existing method takes
 several images and returns validated JSON: `generateStructured` takes a string and no
@@ -234,32 +250,40 @@ badge. Tapping it shows the two side by side with their items and offers **Keep 
 which clears the flag, or **Delete this one**, which deletes the receipt and trashes its
 documents.
 
-### 7. Categorising items
+### 7. Categorising the receipt and its items
 
-**In the same call.** The prompt lists every automatic item category by name and
-description, the model returns a category name per line, and the model layer resolves each
-name against the vocabulary, dropping the category but keeping the line when the name is
-not one of them. Below 0.5 confidence a line is left uncategorised rather than guessed at.
-No second call and no per-item call: a sixty line receipt would be sixty calls, which is
-absurd for a feature about spending less.
+**In the same call, for both the receipt and every line.** The prompt lists every
+automatic category by name and description, once, and the model returns a category name
+for the receipt as a whole alongside a category name per line. The model layer resolves
+each returned name against the vocabulary independently for the receipt and for every
+item, dropping the category but keeping the receipt or the line when the name is not one
+of them. Below 0.5 confidence a receipt or a line is left uncategorised rather than
+guessed at. No second call and no per-item call: a sixty line receipt would be sixty
+calls, which is absurd for a feature about spending less.
+
+**The receipt's category is never derived from its items.** A grocery run with one
+kettle in the basket is a groceries receipt carrying one appliance item: deriving the
+receipt's category from a vote or a sum over the items would get exactly that case wrong.
+Both categories come out of the same read of the same photos and are independently
+correctable afterwards.
 
 **The cost shape is the same as sorting and is stated the same way.** Every automatic
-category's description goes into the prompt of every receipt, so a verbose vocabulary costs
-more per receipt. The Item categories page shows the count of automatic categories for
+category's description goes into the prompt of every receipt, so a verbose vocabulary
+costs more per receipt. The Categories page shows the count of automatic categories for
 exactly the reason the Sorting page does.
 
-**A correction is a correction, not training.** Changing a line's category sets
-`category_source = 'manual'`, and a re-read never overwrites a manual value. The rules
-module's example and correction machinery is document-scoped and is deliberately not
-reused: wiring it to line items would be a large change to working code for a benefit
-nobody has asked for.
+**A correction is a correction, not training.** Changing the receipt's category or a
+line's category sets `category_source = 'manual'` on that row, and a re-read never
+overwrites a manual value. The rules module's example and correction machinery is
+document-scoped and is deliberately not reused: wiring it to a receipt or its line items
+would be a large change to working code for a benefit nobody has asked for.
 
-**Presets**, seeded lazily per user behind an internal `budget.itemCategoriesSeeded` flag,
-skipping any name the user already owns: Groceries, Meat and fish, Fruit and vegetables,
-Dairy, Bakery, Drinks, Alcohol, Snacks, Household, Personal care, Baby, Pet, Pharmacy,
-Clothing, Electronics, Home and garden, Fuel, Transport, Restaurant and takeaway, Deposit
-and refund, Other. Deposit and refund earns its place: bottle deposits are the commonest
-reason items do not sum to the total.
+**Presets**, seeded lazily per user behind an internal `budget.categoriesSeeded` flag,
+skipping any name the user already owns, covering both a whole receipt and a single line
+since one vocabulary now serves both: Groceries, Household, Meat and fish, Produce,
+Bakery, Drinks, Pharmacy and health, Personal care, Baby, Pet, Appliances, Electronics,
+Clothing, Home and garden, Fuel, Transport, Restaurant and takeaway, Entertainment,
+Services, Other.
 
 The seed check runs on the same precedent as `ensureTypesSeeded`, called lazily inside
 `rules.usecases.ts` right before the sort prompt is built, never at server start since a
@@ -272,7 +296,7 @@ One page, `/budget`, answering one question: **where did the money go this month
 
 - A month switcher, defaulting to this month.
 - The month total, listed per currency because nothing is converted.
-- Spend by item category, as a list with an amount and a proportion bar, biggest first,
+- Spend by category, as a list with an amount and a proportion bar, biggest first,
   Unmatched last. Tapping one filters the receipts below. No chart library.
 - The month's receipts, newest first: merchant, date, total, and a badge when something
   needs review. Cards on a phone, a table on a desktop, via `useIsMobile()`.
@@ -293,7 +317,7 @@ migrates. That is the whole change, which is why it is safe not to build it now.
 (strict HTTP input, loose LLM reply), `budget.models.ts` (the prompt, normalising a reply
 row, the duplicate rule, the reconciliation check, all pure), `budget.repository.ts`,
 `budget.usecases.ts` (the job handler and CRUD orchestration), `budget.routes.ts`. Client:
-`pages/budget/BudgetPage.tsx`, `pages/budget/ItemCategoriesPage.tsx`,
+`pages/budget/BudgetPage.tsx`, `pages/budget/CategoriesPage.tsx`,
 `components/budget/CaptureSheet.tsx`, `lib/budget-api.ts`.
 
 - Unit, on models: a reply with a bad row keeps the good rows, an unknown category name is
@@ -340,7 +364,7 @@ row, the duplicate rule, the reconciliation check, all pure), `budget.repository
   faded ink and a curled edge beat Tesseract there. It has no bearing on how well the
   receipt call reads the same photo. A genuinely bad photo still beats any model, which is
   why every field is editable and Re-read exists.
-- **The vocabulary grows quietly.** Twenty one presets in every receipt prompt is fine.
+- **The vocabulary grows quietly.** Twenty presets in every receipt prompt is fine.
   Fifty hand-written ones of three sentences each is a different bill, and it arrives
   without anyone noticing. Hence the count on the page.
 - **A receipt is a purchase list**, more detailed about a person than anything else in the

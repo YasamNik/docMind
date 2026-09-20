@@ -127,6 +127,13 @@
       "when": 1789853192800,
       "tag": "0017_add_pending_tool_call",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1789928176285,
+      "tag": "0018_add_budget_tables",
+      "breakpoints": true
     }
   ]
 }
