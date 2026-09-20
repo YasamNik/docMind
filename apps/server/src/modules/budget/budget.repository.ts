@@ -91,6 +91,10 @@ export function createBudgetRepository({ db }: { db: Database }) {
           .update(budgetReceiptsTable)
           .set(patch)
           .where(and(eq(budgetReceiptsTable.userId, userId), eq(budgetReceiptsTable.id, receiptId)));
+        // The lines are replaced, never added to. The job runner retries a failed job,
+        // and a re-read is an ordinary thing to ask for, so appending would quietly
+        // double a receipt's contents and its category breakdown with it.
+        await txDb.delete(budgetReceiptItemsTable).where(eq(budgetReceiptItemsTable.receiptId, receiptId));
         if (items.length > 0) await txDb.insert(budgetReceiptItemsTable).values(items);
       });
     },

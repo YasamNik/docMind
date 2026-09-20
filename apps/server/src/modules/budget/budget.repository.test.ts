@@ -118,6 +118,28 @@ describe("budget repository", () => {
     expect(found!.items.map((i) => i.description)).toEqual(["Bread", "Milk"]);
   });
 
+  it("replaces a receipt's lines on a re-read instead of adding a second copy of each", async () => {
+    // The job runner retries a failed job, and re-reading a receipt is an ordinary
+    // thing to ask for. Appending would silently double a receipt and its category
+    // breakdown with it, which a real re-run produced before this was fixed.
+    const receipt = await receiptFixture();
+    await repository.insertReceiptWithItems({
+      receipt,
+      items: [itemFixture(receipt.id as string, { lineNumber: 1, description: "Hand towel" })],
+    });
+
+    await repository.updateReceiptWithItems({
+      userId,
+      receiptId: receipt.id as string,
+      patch: { status: "ready", updatedAt: new Date().toISOString() },
+      items: [itemFixture(receipt.id as string, { lineNumber: 1, description: "Hand towel" })],
+    });
+
+    const found = await repository.findReceiptWithItems({ userId, receiptId: receipt.id as string });
+    expect(found!.items).toHaveLength(1);
+    expect(found!.items[0]!.description).toBe("Hand towel");
+  });
+
   it("returns null reading a receipt that does not exist or belongs to another user", async () => {
     const receipt = await receiptFixture();
     await repository.insertReceiptWithItems({ receipt, items: [] });
