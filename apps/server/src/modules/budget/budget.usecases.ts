@@ -6,6 +6,7 @@ import { parseOrValidationError } from "../../shared/http/validate.js";
 import type { Database } from "../database/database.js";
 import { createDocumentsRepository } from "../documents/documents.repository.js";
 import type { DocumentsService } from "../documents/documents.usecases.js";
+import type { NewDocument } from "../documents/documents.types.js";
 import type { AiService } from "../ai/ai.usecases.js";
 import type { ImageInput } from "../ai/ai.types.js";
 import type { JobHandler } from "../jobs/jobs.runner.js";
@@ -16,6 +17,7 @@ import {
   assembleReceiptPrompt,
   BUDGET_CATEGORY_PRESETS,
   MAX_RECEIPT_PAGES,
+  nearestMonth,
   newBudgetCategoryId,
   newBudgetReceiptId,
   newBudgetReceiptItemId,
@@ -39,8 +41,12 @@ async function readAllToBuffer(stream: Readable): Promise<Buffer> {
 
 // Only the job types the ordinary upload pipeline enqueues once extraction finishes.
 // Extraction itself is never cancelled: local OCR runs on every page regardless, since
-// it costs nothing (spec section 5 / risks).
-const CANCELABLE_JOB_TYPES = new Set(["rules", "summarize", "embedding"]);
+// it costs nothing (spec section 5 / risks). Every page skips the filing pass, rules
+// and summarize, since a receipt's meaning already lives in the budget tables, not in
+// a tag or a category. Only pages after the first also skip embedding: page one is
+// what chat and search need to still answer a question about what was bought.
+const FILING_JOB_TYPES = new Set(["rules", "summarize"]);
+const FILING_AND_EMBEDDING_JOB_TYPES = new Set(["rules", "summarize", "embedding"]);
 
 export function createBudgetService({
   db,
@@ -133,18 +139,21 @@ export function createBudgetService({
     return { document, stream };
   }
 
-  // Best effort, deliberately not airtight: the runner can already have claimed a child
-  // page's rules, summarize, or embedding job in the few seconds between its own upload
-  // and this call, in which case that page keeps the full ordinary pipeline anyway. That
-  // is a miss on cost, not on correctness (spec section 5 and its risks section). Kept
-  // inside the budget module rather than touching the shared upload or extraction path.
-  async function cancelChildPagePipeline({ userId, childDocumentIds }: { userId: string; childDocumentIds: string[] }) {
-    if (childDocumentIds.length === 0) return;
-    const childSet = new Set(childDocumentIds);
+  // Best effort, deliberately not airtight: the runner can already have claimed a
+  // page's rules, summarize, or embedding job in the few seconds between its own
+  // upload and this call, in which case that page keeps the full ordinary pipeline
+  // anyway. That is a miss on cost, not on correctness (spec section 5 and its risks
+  // section). Kept inside the budget module rather than touching the shared extraction
+  // path. includeEmbedding is false for page one, so its embedding job and status are
+  // left alone; every other page has always skipped embedding too.
+  async function cancelPagePipeline({ userId, documentIds, includeEmbedding }: { userId: string; documentIds: string[]; includeEmbedding: boolean }) {
+    if (documentIds.length === 0) return;
+    const jobTypes = includeEmbedding ? FILING_AND_EMBEDDING_JOB_TYPES : FILING_JOB_TYPES;
+    const targetSet = new Set(documentIds);
     const pendingJobs = await jobsService.list({ userId, status: "pending" });
     const now = nowIso();
     for (const job of pendingJobs) {
-      if (!CANCELABLE_JOB_TYPES.has(job.type)) continue;
+      if (!jobTypes.has(job.type)) continue;
       let payload: unknown;
       try {
         payload = JSON.parse(job.payload);
@@ -152,16 +161,14 @@ export function createBudgetService({
         continue;
       }
       const documentId = (payload as { documentId?: unknown }).documentId;
-      if (typeof documentId === "string" && childSet.has(documentId)) {
+      if (typeof documentId === "string" && targetSet.has(documentId)) {
         await jobsService.repository.markDone({ id: job.id, finishedAt: now });
       }
     }
-    for (const documentId of childDocumentIds) {
-      await documentsRepository.update({
-        userId,
-        documentId,
-        patch: { ruleStatus: "done", embeddingStatus: "done", summaryStatus: "done", updatedAt: now },
-      });
+    const patch: Partial<NewDocument> = { ruleStatus: "done", summaryStatus: "done", updatedAt: now };
+    if (includeEmbedding) patch.embeddingStatus = "done";
+    for (const documentId of documentIds) {
+      await documentsRepository.update({ userId, documentId, patch });
     }
   }
 
@@ -188,6 +195,15 @@ export function createBudgetService({
         throw createError({ code: "documents.not_found", message: `Document "${documentId}" not found`, status: 404 });
       }
       documents.push(document);
+    }
+
+    // The budget module takes ownership of every page right here, page one included:
+    // stamped with source "budget" so none of them ever surface in the document
+    // library's own views (documents.repository.ts's buildViewConditions reads this).
+    // A receipt's own detail page still reaches a page directly by id.
+    const ownedAt = nowIso();
+    for (const documentId of documentIds) {
+      await documentsRepository.update({ userId, documentId, patch: { source: "budget", updatedAt: ownedAt } });
     }
 
     const t = nowIso();
@@ -238,8 +254,10 @@ export function createBudgetService({
 
     // Right away, not from inside the job: the job still has to read every photo and
     // wait on the vision call, which only widens the race the cancellation is trying to
-    // win against a child page's own extraction finishing first.
-    await cancelChildPagePipeline({ userId, childDocumentIds: documentIds.slice(1) });
+    // win against a page's own extraction finishing first. Page one keeps its embedding
+    // job; the rest have never had one to keep.
+    await cancelPagePipeline({ userId, documentIds: [pageOneId], includeEmbedding: false });
+    await cancelPagePipeline({ userId, documentIds: documentIds.slice(1), includeEmbedding: true });
 
     await jobsService.enqueue({ userId, type: "receipt", payload: { receiptId: receipt.id, userId, documentIds } });
     return { receipt, alreadyExisted: false };
@@ -274,7 +292,7 @@ export function createBudgetService({
         images.push({ data, mimeType: document.mimeType || "image/jpeg" });
       }
 
-      const { system } = assembleReceiptPrompt({ categories });
+      const { system } = assembleReceiptPrompt({ categories, today: nowIso().slice(0, 10) });
       const { data } = await aiService.generateStructuredFromImages<RawBudgetReceiptReply>({
         userId: payload.userId,
         images,
@@ -283,7 +301,7 @@ export function createBudgetService({
         system,
       });
 
-      const normalized = normalizeReceiptReply({ reply: data, categories });
+      const normalized = normalizeReceiptReply({ reply: data, categories, scannedAt: receipt.createdAt });
       const now = nowIso();
 
       if (normalized.failed) {
@@ -360,8 +378,14 @@ export function createBudgetService({
     return receipt;
   }
 
+  // A month with nothing in it is otherwise indistinguishable from a receipt that never
+  // saved: the nearest month with a receipt is looked up only when this one came back
+  // empty, so the page has something to point the user at instead of a blank list.
   async function listMonth({ userId, month }: { userId: string; month: string }) {
-    return repository.listMonthReceiptsWithItems({ userId, month });
+    const receipts = await repository.listMonthReceiptsWithItems({ userId, month });
+    if (receipts.length > 0) return { receipts, nearestMonthWithReceipts: null };
+    const monthsWithReceipts = await repository.listMonthsWithReceipts({ userId });
+    return { receipts, nearestMonthWithReceipts: nearestMonth(monthsWithReceipts, month) };
   }
 
   async function updateReceiptFields({

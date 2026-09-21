@@ -104,8 +104,11 @@ export const budgetApi = {
     }
     throw await errorFromResponse(res);
   },
+  // nearestMonthWithReceipts is null unless this month came back with no receipts of its
+  // own and the user has at least one receipt in some other month: the Budget page uses
+  // it to explain an empty month rather than showing a blank list with no reason given.
   async listMonth(month: string) {
-    return (await api.get<{ receipts: BudgetReceiptWithItems[] }>(`/api/budget/receipts?month=${month}`)).receipts;
+    return api.get<{ receipts: BudgetReceiptWithItems[]; nearestMonthWithReceipts: string | null }>(`/api/budget/receipts?month=${month}`);
   },
   async getReceipt(id: string) {
     return (await api.get<{ receipt: BudgetReceiptWithItems }>(`/api/budget/receipts/${id}`)).receipt;

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, like, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, like, sql } from "drizzle-orm";
 import { asTxDb, type Database } from "../database/database.js";
 import { budgetCategoriesTable, budgetReceiptItemsTable, budgetReceiptsTable } from "./budget.tables.js";
 import type {
@@ -156,6 +156,17 @@ export function createBudgetRepository({ db }: { db: Database }) {
         .orderBy(asc(budgetReceiptItemsTable.lineNumber));
       const itemsByReceipt = groupItemsByReceipt(items);
       return receipts.map((r) => ({ ...r, items: itemsByReceipt.get(r.id) ?? [] }));
+    },
+
+    // Every distinct "YYYY-MM" a user has a dated receipt in, read straight off the
+    // stored purchased_at prefix rather than a separate column: only called when the
+    // requested month came back empty, to find the nearest month worth pointing at.
+    async listMonthsWithReceipts({ userId }: { userId: string }): Promise<string[]> {
+      const rows = await db
+        .selectDistinct({ month: sql<string>`substr(${budgetReceiptsTable.purchasedAt}, 1, 7)` })
+        .from(budgetReceiptsTable)
+        .where(and(eq(budgetReceiptsTable.userId, userId), isNotNull(budgetReceiptsTable.purchasedAt)));
+      return rows.map((row) => row.month);
     },
 
     // The four value duplicate rule from the design spec: merchant compared trimmed and

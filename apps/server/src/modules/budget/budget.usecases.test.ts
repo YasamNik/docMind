@@ -177,7 +177,7 @@ describe("budget service, createReceipt", () => {
     expect(second.receipt.id).toBe(first.receipt.id);
   });
 
-  it("cancels pending rules, summarize and embedding jobs for child pages and marks their statuses done, leaving page one alone", async () => {
+  it("cancels pending rules and summarize for every page, page one included, but leaves page one's embedding running", async () => {
     const { t, userId } = await setupReceiptTest();
     const page1 = await uploadPage(t, userId, "page1.jpg");
     const page2 = await uploadPage(t, userId, "page2.jpg");
@@ -185,6 +185,8 @@ describe("budget service, createReceipt", () => {
     await t.services.jobsService.enqueue({ userId, type: "summarize", payload: { documentId: page2, userId } });
     await t.services.jobsService.enqueue({ userId, type: "embedding", payload: { documentId: page2, userId } });
     await t.services.jobsService.enqueue({ userId, type: "rules", payload: { documentId: page1, userId, mode: "initial" } });
+    await t.services.jobsService.enqueue({ userId, type: "summarize", payload: { documentId: page1, userId } });
+    await t.services.jobsService.enqueue({ userId, type: "embedding", payload: { documentId: page1, userId } });
 
     await t.services.budgetService.createReceipt({ userId, documentIds: [page1, page2] });
 
@@ -196,8 +198,13 @@ describe("budget service, createReceipt", () => {
     // Extraction itself is never cancelled: local OCR runs on every page regardless.
     expect(forDocument(page2).find((j) => j.type === "extraction")!.status).toBe("pending");
 
-    const page1RulesJob = forDocument(page1).find((j) => j.type === "rules");
-    expect(page1RulesJob!.status).toBe("pending");
+    // Page one is filed by the receipt too, so no sorting or summary job is left
+    // running for it either.
+    expect(forDocument(page1).find((j) => j.type === "rules")!.status).toBe("done");
+    expect(forDocument(page1).find((j) => j.type === "summarize")!.status).toBe("done");
+    // Its embedding is the one job the cancellation leaves alone: chat and search still
+    // need it to answer a question about what was bought.
+    expect(forDocument(page1).find((j) => j.type === "embedding")!.status).toBe("pending");
 
     const page2Doc = await t.services.documentsService.get({ userId, documentId: page2 });
     expect(page2Doc.ruleStatus).toBe("done");
@@ -205,7 +212,20 @@ describe("budget service, createReceipt", () => {
     expect(page2Doc.embeddingStatus).toBe("done");
 
     const page1Doc = await t.services.documentsService.get({ userId, documentId: page1 });
-    expect(page1Doc.ruleStatus).toBe("pending");
+    expect(page1Doc.ruleStatus).toBe("done");
+    expect(page1Doc.summaryStatus).toBe("done");
+    expect(page1Doc.embeddingStatus).toBe("pending");
+  });
+
+  it("marks every page of a receipt, page one included, as owned by the budget module", async () => {
+    const { t, userId } = await setupReceiptTest();
+    const page1 = await uploadPage(t, userId, "page1.jpg");
+    const page2 = await uploadPage(t, userId, "page2.jpg");
+
+    await t.services.budgetService.createReceipt({ userId, documentIds: [page1, page2] });
+
+    expect((await t.services.documentsService.get({ userId, documentId: page1 })).source).toBe("budget");
+    expect((await t.services.documentsService.get({ userId, documentId: page2 })).source).toBe("budget");
   });
 });
 
@@ -240,6 +260,22 @@ describe("budget service, receipt job", () => {
     expect(stored.status).toBe("failed");
     expect(stored.note).toBe("Too blurry to read");
     expect(stored.items).toEqual([]);
+  });
+
+  // The user's own rule: "if date not found on receipt, just use the scan date then."
+  // Without this, a receipt with no printed date belongs to no month and disappears from
+  // the Budget page exactly like the wrong-year bug did, just from a blank field.
+  it("falls back to the receipt's own creation date when the model reads no purchase date at all, and stays ready", async () => {
+    const { t, userId, replyRef, runner } = await setupReceiptTest();
+    replyRef.current = { merchant: "Corner Shop", purchasedAt: null, currency: "USD", total: 5, items: [{ description: "Bread", amount: 5 }] };
+    const page1 = await uploadPage(t, userId);
+    const { receipt } = await t.services.budgetService.createReceipt({ userId, documentIds: [page1] });
+
+    expect(await runner.runOnce()).toBe(1);
+    const stored = await t.services.budgetService.getReceipt({ userId, receiptId: receipt.id });
+    expect(stored.status).toBe("ready");
+    expect(stored.purchasedAt).toBe(receipt.createdAt.slice(0, 10));
+    expect(stored.note).toBe("The receipt did not show a purchase date, so the date it was scanned was used instead.");
   });
 
   it("flags a new receipt as a duplicate of an earlier one with the same merchant, date, total and currency, and deletes neither", async () => {
@@ -307,6 +343,58 @@ describe("budget service, editing and resolving a receipt", () => {
     await expectAppError(() => t.services.budgetService.getReceipt({ userId, receiptId: dup.id }), "budget.receipt_not_found");
     await expectAppError(() => t.services.documentsService.get({ userId, documentId: secondPage }), "documents.not_found");
     await expectAppError(() => t.services.documentsService.get({ userId, documentId: secondPageTwo }), "documents.not_found");
+  });
+});
+
+describe("budget service, listMonth", () => {
+  it("returns the month's receipts with no nearest-month hint when this month has some", async () => {
+    const { t, userId, runner } = await setupReceiptTest();
+    const page1 = await uploadPage(t, userId);
+    await t.services.budgetService.createReceipt({ userId, documentIds: [page1] });
+    await runner.runOnce();
+
+    const result = await t.services.budgetService.listMonth({ userId, month: "2026-09" });
+    expect(result.receipts).toHaveLength(1);
+    expect(result.nearestMonthWithReceipts).toBeNull();
+  });
+
+  // The real bug: a receipt reads fine but lands in a month the user never checks, and an
+  // empty month gives no hint it exists anywhere. listMonth on the empty month must point
+  // at the nearest month that actually has one.
+  it("explains an empty month by pointing at the nearest month that has a receipt", async () => {
+    const { t, userId, runner } = await setupReceiptTest();
+    const page1 = await uploadPage(t, userId);
+    await t.services.budgetService.createReceipt({ userId, documentIds: [page1] });
+    await runner.runOnce(); // fixture reply's purchasedAt is 2026-09-10
+
+    const result = await t.services.budgetService.listMonth({ userId, month: "2026-11" });
+    expect(result.receipts).toEqual([]);
+    expect(result.nearestMonthWithReceipts).toBe("2026-09");
+  });
+
+  it("gives no nearest-month hint when the user has no receipts anywhere", async () => {
+    const { t, userId } = await setupReceiptTest();
+    const result = await t.services.budgetService.listMonth({ userId, month: "2026-09" });
+    expect(result.receipts).toEqual([]);
+    expect(result.nearestMonthWithReceipts).toBeNull();
+  });
+
+  it("moves a receipt into a new month once its date is corrected, and out of the old one", async () => {
+    const { t, userId, runner } = await setupReceiptTest();
+    const page1 = await uploadPage(t, userId);
+    const { receipt } = await t.services.budgetService.createReceipt({ userId, documentIds: [page1] });
+    await runner.runOnce(); // fixture reply's purchasedAt is 2026-09-10
+
+    const septemberBefore = await t.services.budgetService.listMonth({ userId, month: "2026-09" });
+    expect(septemberBefore.receipts.map((r) => r.id)).toContain(receipt.id);
+
+    await t.services.budgetService.updateReceiptFields({ userId, receiptId: receipt.id, patch: { purchasedAt: "2026-10-01" } });
+
+    const septemberAfter = await t.services.budgetService.listMonth({ userId, month: "2026-09" });
+    expect(septemberAfter.receipts.map((r) => r.id)).not.toContain(receipt.id);
+
+    const october = await t.services.budgetService.listMonth({ userId, month: "2026-10" });
+    expect(october.receipts.map((r) => r.id)).toContain(receipt.id);
   });
 });
 

@@ -54,8 +54,7 @@ vi.mock("@/lib/budget-api", () => ({
   },
 }));
 
-function renderPage(id = "brcpt_1") {
-  const queryClient = new QueryClient();
+function renderPage(id = "brcpt_1", queryClient = new QueryClient()) {
   render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[`/budget/receipts/${id}`]}>
@@ -65,6 +64,7 @@ function renderPage(id = "brcpt_1") {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return queryClient;
 }
 
 describe("ReceiptDetailPage", () => {
@@ -111,6 +111,25 @@ describe("ReceiptDetailPage", () => {
         expect.objectContaining({ merchant: "Corner shop and deli" }),
       ),
     );
+  });
+
+  // A wrong date is a normal thing a person corrects. The fix has to move the receipt
+  // into its right month, not just update the field: invalidating the receipts list
+  // query is what makes the Budget page's month view pick up the change.
+  it("moves the receipt into its corrected month by invalidating the receipts list, not just the receipt itself", async () => {
+    updateReceiptMock.mockResolvedValueOnce(baseReceipt({ purchasedAt: "2026-10-01" }));
+    const queryClient = renderPage("brcpt_1");
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    fireEvent.click(await screen.findByText("Edit"));
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.change(dialog.getByLabelText("Date"), { target: { value: "2026-10-01" } });
+    fireEvent.click(dialog.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(updateReceiptMock).toHaveBeenCalledWith("brcpt_1", expect.objectContaining({ purchasedAt: "2026-10-01" })),
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["budget", "receipts"] });
   });
 
   it("says a receipt failed to read, and why", async () => {

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import type { Database } from "../database/database.js";
 import { buildCategoryPaths, collectDescendantIds } from "../tags/tags.models.js";
 import { sortEvaluationsTable } from "../rules/rules.tables.js";
@@ -60,13 +60,20 @@ export function createDocumentsRepository({ db }: { db: Database }) {
 
   // Shared by listByUser and countByUser so the inbox and needs_review definitions
   // cannot drift between the row fetch and the count-only path.
-  async function buildViewConditions(userId: string, view: DocumentView) {
+  async function buildViewConditions(userId: string, view: DocumentView, { includeBudgetSource = false }: { includeBudgetSource?: boolean } = {}) {
     const conditions = [eq(documentsTable.userId, userId)];
     if (view === "trash") {
       conditions.push(isNotNull(documentsTable.deletedAt));
       return conditions;
     }
     conditions.push(isNull(documentsTable.deletedAt));
+    // A receipt's pages belong to the budget module, already filed under a receipt, so
+    // they never surface in the library's own views. Left out of the trash branch above:
+    // a trashed receipt page still needs to show there, since that is where the budget
+    // module tells the user a deleted receipt can be restored from. includeBudgetSource
+    // is for the handful of maintenance callers (re-embedding, the storage picker's
+    // per-driver count) that must still see every document regardless of ownership.
+    if (!includeBudgetSource) conditions.push(ne(documentsTable.source, "budget"));
     if (view === "inbox") conditions.push(eq(documentsTable.triageStatus, "pending"));
     if (view === "needs_review") {
       conditions.push(eq(documentsTable.ruleStatus, "done"));
@@ -128,6 +135,7 @@ export function createDocumentsRepository({ db }: { db: Database }) {
       tagId,
       view = "all",
       storageDriver,
+      includeBudgetSource,
     }: {
       userId: string;
       categoryId?: string;
@@ -135,8 +143,11 @@ export function createDocumentsRepository({ db }: { db: Database }) {
       tagId?: string;
       view?: DocumentView;
       storageDriver?: string;
+      // See buildViewConditions: only reembedAll (search.usecases.ts) needs this today,
+      // so an outdated vector for a receipt page keeps getting refreshed.
+      includeBudgetSource?: boolean;
     }): Promise<DocumentListRow[]> {
-      const conditions = await buildViewConditions(userId, view);
+      const conditions = await buildViewConditions(userId, view, { includeBudgetSource });
       // Fetched once and reused for both the categoryId filter (descendant ids) and the
       // path map below, instead of querying all of the user's categories twice.
       const categories = await db.select().from(categoriesTable).where(eq(categoriesTable.userId, userId));
@@ -177,8 +188,20 @@ export function createDocumentsRepository({ db }: { db: Database }) {
       }));
     },
 
-    async countByUser({ userId, view, storageDriver }: { userId: string; view: DocumentView; storageDriver?: string }): Promise<number> {
-      const conditions = await buildViewConditions(userId, view);
+    async countByUser({
+      userId,
+      view,
+      storageDriver,
+      includeBudgetSource,
+    }: {
+      userId: string;
+      view: DocumentView;
+      storageDriver?: string;
+      // See buildViewConditions: the storage picker's per-driver count needs this, so a
+      // receipt's pages still count toward what actually sits on that driver.
+      includeBudgetSource?: boolean;
+    }): Promise<number> {
+      const conditions = await buildViewConditions(userId, view, { includeBudgetSource });
       // See listByUser: the jobs that share buildViewConditions must keep counting or
       // listing every document, whatever storage holds it.
       if (storageDriver) conditions.push(eq(documentsTable.storageDriver, storageDriver));

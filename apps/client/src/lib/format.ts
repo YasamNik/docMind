@@ -27,6 +27,15 @@ export function formatDocumentDate(value: string | null) {
   return `${MONTH_NAMES[Number(month) - 1]} ${Number(day)}, ${year}`;
 }
 
+// The Budget page's month picker value, "YYYY-MM", read from its digits the same way
+// formatDocumentDate reads a calendar date: shown as "Sep 2026".
+export function formatMonthLabel(month: string): string {
+  const match = /^(\d{4})-(\d{2})$/.exec(month);
+  if (!match) return month;
+  const [, year, monthNumber] = match;
+  return `${MONTH_NAMES[Number(monthNumber) - 1]} ${year}`;
+}
+
 // A timestamp from the instructions history, shown as "19 Sep, 14:02" next to
 // "In use until" in the Assistant settings tab.
 export function formatReplacedAt(iso: string) {

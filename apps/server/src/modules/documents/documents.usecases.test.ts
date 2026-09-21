@@ -398,6 +398,45 @@ describe("documents service filters and enrichment", () => {
     expect((await documents.counts({ userId })).inbox).toBe(0);
   });
 
+  it("hides a receipt's pages from the documents list, in every view", async () => {
+    const { document } = await documents.upload({ userId, name: "receipt.jpg", mimeType: "image/jpeg", body: Readable.from(["a"]) });
+    const repository = createDocumentsRepository({ db });
+    await repository.update({ userId, documentId: document.id, patch: { source: "budget" } });
+
+    expect(await documents.list({ userId })).toEqual([]);
+    expect(await documents.list({ userId, view: "inbox" })).toEqual([]);
+  });
+
+  it("still reads a receipt's page directly by id, even though it is hidden from the list", async () => {
+    const { document } = await documents.upload({ userId, name: "receipt.jpg", mimeType: "image/jpeg", body: Readable.from(["a"]) });
+    const repository = createDocumentsRepository({ db });
+    await repository.update({ userId, documentId: document.id, patch: { source: "budget" } });
+
+    const fetched = await documents.get({ userId, documentId: document.id });
+    expect(fetched.id).toBe(document.id);
+  });
+
+  it("does not count a receipt's pages toward the inbox or needs_review badges", async () => {
+    const { document: receiptPage } = await documents.upload({ userId, name: "receipt.jpg", mimeType: "image/jpeg", body: Readable.from(["a"]) });
+    const repository = createDocumentsRepository({ db });
+    // Matches what the budget module's own cancellation leaves behind: filed, with no
+    // category, which would otherwise land it in needs_review.
+    await repository.update({ userId, documentId: receiptPage.id, patch: { source: "budget", ruleStatus: "done" } });
+
+    expect(await documents.counts({ userId })).toEqual({ inbox: 0, needsReview: 0, trash: 0 });
+  });
+
+  it("still shows a trashed receipt page in trash, so it can be restored", async () => {
+    const { document } = await documents.upload({ userId, name: "receipt.jpg", mimeType: "image/jpeg", body: Readable.from(["a"]) });
+    const repository = createDocumentsRepository({ db });
+    await repository.update({ userId, documentId: document.id, patch: { source: "budget" } });
+    await documents.remove({ userId, documentId: document.id });
+
+    const trashed = await documents.list({ userId, view: "trash" });
+    expect(trashed.map((d) => d.id)).toEqual([document.id]);
+    expect((await documents.counts({ userId })).trash).toBe(1);
+  });
+
   it("refuses to open a file held on another storage, and says where it is", async () => {
     const { document } = await documents.upload({ userId, name: "elsewhere.txt", mimeType: "text/plain", body: Readable.from(["a"]) });
     // The s3 driver needs its settings filled to be built at all, even to describe

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -14,7 +14,7 @@ import {
   sumReceiptTotalsByCurrency,
   type CategoryFilter,
 } from "@/lib/budget-summary";
-import { formatDocumentDate } from "@/lib/format";
+import { formatDocumentDate, formatMonthLabel } from "@/lib/format";
 import { useIsMobile } from "@/lib/use-media-query";
 
 function currentMonth(): string {
@@ -134,15 +134,18 @@ function CategoryBreakdownList({
 
 export function BudgetPage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [month, setMonth] = useState(currentMonth());
   const [filter, setFilter] = useState<CategoryFilter | null>(null);
 
-  const { data: receipts = [], isLoading } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ["budget", "receipts", month],
     queryFn: () => budgetApi.listMonth(month),
-    refetchInterval: (query) => (query.state.data?.some((r) => r.status === "pending") ? 4000 : false),
+    refetchInterval: (query) => (query.state.data?.receipts.some((r) => r.status === "pending") ? 4000 : false),
   });
+  const receipts = data?.receipts ?? [];
+  const nearestMonthWithReceipts = data?.nearestMonthWithReceipts ?? null;
   const { data: categories = [] } = useQuery({ queryKey: ["budget", "categories"], queryFn: budgetApi.listCategories });
 
   const currencyTotals = sumReceiptTotalsByCurrency(receipts);
@@ -152,8 +155,18 @@ export function BudgetPage() {
     setFilter((prev) => (prev && prev.currency === next.currency && prev.categoryId === next.categoryId ? null : next));
   }
 
-  function handleCreated() {
+  // Takes the user straight to the receipt reading itself: the alternative, dropping
+  // them back on a month that may not even hold it once the read comes back, is exactly
+  // how a correctly saved receipt goes missing from view.
+  function handleCreated(receipt: BudgetReceiptWithItems) {
     queryClient.invalidateQueries({ queryKey: ["budget", "receipts"] });
+    navigate(`/budget/receipts/${receipt.id}`);
+  }
+
+  function goToNearestMonth() {
+    if (!nearestMonthWithReceipts) return;
+    setMonth(nearestMonthWithReceipts);
+    setFilter(null);
   }
 
   return (
@@ -210,6 +223,13 @@ export function BudgetPage() {
         <h2 className="font-heading text-lg">Receipts</h2>
         {isLoading ? (
           <p className="text-sm text-muted-foreground">Loading</p>
+        ) : receipts.length === 0 && nearestMonthWithReceipts ? (
+          <div className="space-y-1.5">
+            <p className="text-sm text-muted-foreground">No receipts in {formatMonthLabel(month)}.</p>
+            <button type="button" className="text-sm underline-offset-2 hover:underline" onClick={goToNearestMonth}>
+              Go to {formatMonthLabel(nearestMonthWithReceipts)}, your nearest month with receipts
+            </button>
+          </div>
         ) : filtered.length === 0 ? (
           <p className="text-sm text-muted-foreground">No receipts match this view.</p>
         ) : isMobile ? (

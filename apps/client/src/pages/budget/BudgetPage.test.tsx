@@ -1,11 +1,18 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetReceiptWithItems } from "@/lib/budget-api";
 import { BudgetPage } from "./BudgetPage";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
+
+beforeEach(() => {
+  let counter = 0;
+  window.URL.createObjectURL = vi.fn(() => `blob:mock-${counter++}`);
+  window.URL.revokeObjectURL = vi.fn();
+  sessionStorage.clear();
+});
 
 afterEach(() => {
   cleanup();
@@ -58,26 +65,38 @@ const pendingReceipt: BudgetReceiptWithItems = {
   items: [],
 };
 
-const listMonthMock = vi.fn(async (_month: string) => [readyReceipt]);
+const listMonthMock = vi.fn(async (_month: string) => ({ receipts: [readyReceipt], nearestMonthWithReceipts: null as string | null }));
 const listCategoriesMock = vi.fn(async () => [groceries, household]);
+const createReceiptMock = vi.fn();
+const uploadMock = vi.fn();
 
 vi.mock("@/lib/budget-api", () => ({
   MAX_RECEIPT_PAGES: 10,
   budgetApi: {
     listMonth: (month: string) => listMonthMock(month),
     listCategories: () => listCategoriesMock(),
-    createReceipt: vi.fn(),
+    createReceipt: (documentIds: string[]) => createReceiptMock(documentIds),
   },
 }));
 
-vi.mock("@/lib/documents-api", () => ({ documentsApi: { upload: vi.fn() } }));
+vi.mock("@/lib/documents-api", () => ({
+  documentsApi: { upload: (file: File, onProgress: (p: number) => void) => uploadMock(file, onProgress) },
+}));
+
+function ReceiptDetailStub() {
+  const { id } = useParams();
+  return <p>Receipt detail {id}</p>;
+}
 
 function renderPage() {
   const queryClient = new QueryClient();
   render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <BudgetPage />
+      <MemoryRouter initialEntries={["/budget"]}>
+        <Routes>
+          <Route path="/budget" element={<BudgetPage />} />
+          <Route path="/budget/receipts/:id" element={<ReceiptDetailStub />} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -99,10 +118,10 @@ describe("BudgetPage", () => {
   });
 
   it("filters the receipt list when a category row is tapped", async () => {
-    listMonthMock.mockResolvedValueOnce([
-      readyReceipt,
-      { ...readyReceipt, id: "brcpt_3", merchant: "Hardware store", items: [readyReceipt.items[1]!] },
-    ]);
+    listMonthMock.mockResolvedValueOnce({
+      receipts: [readyReceipt, { ...readyReceipt, id: "brcpt_3", merchant: "Hardware store", items: [readyReceipt.items[1]!] }],
+      nearestMonthWithReceipts: null,
+    });
     renderPage();
     await screen.findByText("Corner shop");
     expect(screen.getByText("Hardware store")).toBeInTheDocument();
@@ -113,7 +132,7 @@ describe("BudgetPage", () => {
   });
 
   it("shows a receipt still being read as pending", async () => {
-    listMonthMock.mockResolvedValueOnce([pendingReceipt]);
+    listMonthMock.mockResolvedValueOnce({ receipts: [pendingReceipt], nearestMonthWithReceipts: null });
     renderPage();
     expect(await screen.findByText("Reading receipt...")).toBeInTheDocument();
   });
@@ -137,5 +156,46 @@ describe("BudgetPage", () => {
     renderPage();
     await screen.findByText("Corner shop");
     expect(screen.getByRole("table")).toBeInTheDocument();
+  });
+
+  // The real bug: a receipt saved fine and read correctly, but the user never saw it
+  // because Save dropped them back on a month that did not hold it. onCreated already
+  // hands back the receipt; the page must use it to take the user straight there.
+  it("takes the user to the new receipt once the capture sheet creates it", async () => {
+    uploadMock.mockResolvedValueOnce({ document: { id: "doc_new" } });
+    createReceiptMock.mockResolvedValueOnce({ receipt: { id: "brcpt_new" }, alreadyExisted: false });
+    renderPage();
+    await screen.findByText("Corner shop");
+
+    const input = screen.getByLabelText("Scan receipt") as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["x"], "receipt.jpg", { type: "image/jpeg" })] } });
+    await screen.findByRole("dialog");
+    await waitFor(() => expect(screen.queryByText("Uploading...")).not.toBeInTheDocument());
+
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Receipt detail brcpt_new")).toBeInTheDocument();
+  });
+
+  it("explains an empty month by pointing at the nearest month that has a receipt, and can go there", async () => {
+    listMonthMock.mockImplementation(async (month: string) => {
+      if (month === "2026-09") return { receipts: [], nearestMonthWithReceipts: "2026-07" };
+      if (month === "2026-07") return { receipts: [readyReceipt], nearestMonthWithReceipts: null };
+      return { receipts: [], nearestMonthWithReceipts: null };
+    });
+    renderPage();
+
+    expect(await screen.findByText("No receipts in Sep 2026.")).toBeInTheDocument();
+    const goButton = screen.getByRole("button", { name: /Go to Jul 2026/ });
+
+    fireEvent.click(goButton);
+    await screen.findByText("Corner shop");
+    expect(screen.queryByText("No receipts in Sep 2026.")).not.toBeInTheDocument();
+  });
+
+  it("does not offer a nearest month when the user has no receipts anywhere", async () => {
+    listMonthMock.mockResolvedValueOnce({ receipts: [], nearestMonthWithReceipts: null });
+    renderPage();
+    expect(await screen.findByText("No receipts match this view.")).toBeInTheDocument();
+    expect(screen.queryByText(/Go to/)).not.toBeInTheDocument();
   });
 });

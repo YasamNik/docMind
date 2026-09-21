@@ -32,8 +32,8 @@ export function registerBudgetRoutes({
 
   app.get("/api/budget/receipts", async (c) => {
     const { month } = parseOrValidationError(monthQuerySchema, c.req.query());
-    const receipts = await budgetService.listMonth({ userId: getUserId(c), month });
-    return c.json({ receipts });
+    const { receipts, nearestMonthWithReceipts } = await budgetService.listMonth({ userId: getUserId(c), month });
+    return c.json({ receipts, nearestMonthWithReceipts });
   });
 
   app.get("/api/budget/receipts/:id", async (c) => {

@@ -184,12 +184,37 @@ export function itemsReconcileWithTotal(itemsTotal: number, total: number): bool
   return Math.abs(itemsTotal - total) <= RECONCILE_TOLERANCE;
 }
 
+// Distance in whole months between two "YYYY-MM" values: month arithmetic, not calendar
+// math, since neither value carries a day.
+function monthDistance(a: string, b: string): number {
+  const [aYear, aMonth] = a.split("-").map(Number);
+  const [bYear, bMonth] = b.split("-").map(Number);
+  return Math.abs((aYear! - bYear!) * 12 + (aMonth! - bMonth!));
+}
+
+// Picks the month, among every month that has at least one receipt, closest to the one
+// requested: an empty month explains itself with a pointer to the nearest receipt rather
+// than looking like nothing was ever saved. A tie goes to the more recent month.
+export function nearestMonth(monthsWithReceipts: string[], target: string): string | null {
+  let best: string | null = null;
+  let bestDistance = Infinity;
+  for (const month of monthsWithReceipts) {
+    if (month === target) continue;
+    const distance = monthDistance(month, target);
+    if (distance < bestDistance || (distance === bestDistance && best !== null && month > best)) {
+      best = month;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
 export type NormalizedReceiptReply =
   | { failed: true; note: string }
   | {
       failed: false;
       merchant: string | null;
-      purchasedAt: string | null;
+      purchasedAt: string;
       currency: string | null;
       total: number | null;
       taxAmount: number | null;
@@ -203,6 +228,10 @@ export type NormalizedReceiptReply =
 // spec section 4 lives here, pure and unit-testable without a network call:
 // - all four header fields null is a failed read, never a receipt with a blank total.
 // - a non-empty warning forces needs_review and lands in the note.
+// - a receipt the model could read but that printed no date at all takes the date it was
+//   scanned instead of staying dateless: a receipt with no date belongs to no month and
+//   disappears from the Budget page with nothing to explain why. This is a normal case,
+//   not a review-worthy one, so it says so in the note but never forces needs_review.
 // - items are reconciled against the total net of tax when a tax amount is stated (most
 //   receipts print items before tax), or against the total itself when it is not; a
 //   tax-inclusive receipt where items already match the printed total also passes.
@@ -214,17 +243,23 @@ export type NormalizedReceiptReply =
 export function normalizeReceiptReply({
   reply,
   categories,
+  scannedAt,
 }: {
   reply: { merchant?: unknown; purchasedAt?: unknown; currency?: unknown; total?: unknown; taxAmount?: unknown; category?: unknown; categoryConfidence?: unknown; warning?: unknown; items?: unknown };
   categories: { id: string; name: string }[];
+  // The receipt row's own creation time (an ISO timestamp), not the moment the job
+  // happens to run: a retry minutes or hours later is not when the receipt was scanned.
+  // Taken as an argument, the same discipline as assembleReceiptPrompt's today, so a
+  // test can pin it.
+  scannedAt: string;
 }): NormalizedReceiptReply {
   const merchant = normalizeText(reply.merchant);
-  const purchasedAt = normalizePurchasedAt(reply.purchasedAt);
+  const purchasedAtRead = normalizePurchasedAt(reply.purchasedAt);
   const currency = normalizeCurrency(reply.currency);
   const total = normalizeAmount(reply.total);
   const warning = normalizeText(reply.warning);
 
-  if (merchant === null && purchasedAt === null && currency === null && total === null) {
+  if (merchant === null && purchasedAtRead === null && currency === null && total === null) {
     return { failed: true, note: warning ?? "The model could not read a receipt from these photos." };
   }
 
@@ -233,7 +268,15 @@ export function normalizeReceiptReply({
   const { items } = normalizeReceiptItemRows(reply.items, categories);
 
   const reasons: string[] = [];
+  const infoNotes: string[] = [];
   if (warning) reasons.push(warning);
+
+  let purchasedAt = purchasedAtRead;
+  if (purchasedAt === null) {
+    purchasedAt = scannedAt.slice(0, 10);
+    infoNotes.push("The receipt did not show a purchase date, so the date it was scanned was used instead.");
+  }
+
   if (total !== null) {
     if (items.length === 0) {
       if (total !== 0) {
@@ -260,6 +303,7 @@ export function normalizeReceiptReply({
     }
   }
 
+  const allNotes = [...reasons, ...infoNotes];
   return {
     failed: false,
     merchant,
@@ -270,7 +314,7 @@ export function normalizeReceiptReply({
     categoryId,
     items,
     status: reasons.length > 0 ? "needs_review" : "ready",
-    note: reasons.length > 0 ? reasons.join(" ") : null,
+    note: allNotes.length > 0 ? allNotes.join(" ") : null,
   };
 }
 
@@ -281,17 +325,37 @@ function formatCategoryLine(category: { name: string; description: string }): st
 // The document's photos are the only input to this call (there is no separate "input"
 // text field the way generateStructured has one), so the whole instruction set,
 // including the category vocabulary, is assembled into the system prompt here.
-export function assembleReceiptPrompt({ categories }: { categories: { name: string; description: string }[] }): { system: string } {
+//
+// today comes in as an argument rather than read from the clock in here, the same
+// discipline as nowIso being called by the caller, not this function: a test can pin it,
+// and the model gets a real reference point instead of guessing a date from a two digit
+// year or an ambiguous day/month order, which has produced a purchase date six years off
+// on a receipt bought today (real report: a 26/09/20 printed date read as 2020-09-26
+// instead of 2026-09-20, the far more plausible reading).
+export function assembleReceiptPrompt({ categories, today }: { categories: { name: string; description: string }[]; today: string }): { system: string } {
   const categoriesBlock = categories.length > 0 ? categories.map(formatCategoryLine).join("\n") : "(none)";
   const system = `You read a receipt for DocMind, a personal budget tracker. You are given every photo of
 one physical receipt, in the order they were taken. A long receipt often spans more than
 one photo, and shots frequently overlap by a line or two: read them as one continuous
 receipt and count every line exactly once, even when it appears on two photos.
 
+Today's date is ${today}.
+
 Read only what the receipt states, never invent a value it does not show:
 - merchant: the shop or business name as printed.
-- purchasedAt: the purchase date, as YYYY-MM-DD.
-- currency: the ISO 4217 code the prices are in, for example USD or EUR.
+- purchasedAt: the purchase date, as YYYY-MM-DD, only when the receipt prints one. A
+  printed date is never in the future. When the digits are genuinely ambiguous, for
+  example a two digit year, or a numeric date whose day and month or day and year could
+  each be read in more than one order, pick whichever plausible reading lands closest to
+  today. For example, if today were 2026-09-20 and a receipt printed 26/09/20, read that
+  as 2026-09-20, not 2020-09-26: the reading six years in the past is not the plausible
+  one. When the receipt's date can only be read one way, for example it prints a full
+  four digit year, use that date even when it is years in the past: a genuinely old
+  receipt, such as one kept for a warranty, still gets its own real date. Leave
+  purchasedAt out entirely when the receipt prints no date at all: never invent one.
+- currency: the ISO 4217 code the prices are in, for example USD or EUR. Give the bare
+  three letter code even when the receipt prints it with a symbol attached, for example
+  CAD$ or C$: answer CAD.
 - total: the printed total, the amount actually paid.
 - taxAmount: VAT, GST, or sales tax, only when the receipt states it separately from the
   total.

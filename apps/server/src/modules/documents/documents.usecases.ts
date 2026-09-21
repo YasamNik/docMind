@@ -143,7 +143,9 @@ export function createDocumentsService({
       mimeType?: string;
       body: Readable;
       maxUploadBytes?: number;
-      source?: "upload" | "telegram" | "email";
+      // "budget" is never passed here: the budget module takes ownership of a page,
+      // and stamps it as such, only after it already exists as an ordinary upload.
+      source?: "upload" | "telegram" | "email" | "budget";
       parentDocumentId?: string;
     }) {
       const documentId = newDocumentId();

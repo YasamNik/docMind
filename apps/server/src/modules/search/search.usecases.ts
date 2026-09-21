@@ -264,7 +264,10 @@ export function createSearchService({
   }
 
   async function reembedAll({ userId }: { userId: string }): Promise<{ count: number; jobIds: string[] }> {
-    const documents = await documentsRepository.listByUser({ userId, view: "all" });
+    // A receipt page is hidden from the library but still has to answer a search or a
+    // chat question, so its embedding stays current across a re-embed the same as any
+    // other document's.
+    const documents = await documentsRepository.listByUser({ userId, view: "all", includeBudgetSource: true });
     const extracted = documents.filter((d) => d.extractionStatus === "done");
     const jobIds: string[] = [];
     for (const document of extracted) {

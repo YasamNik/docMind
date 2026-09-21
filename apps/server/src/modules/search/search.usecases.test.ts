@@ -165,6 +165,18 @@ describe("search service, reembedAll", () => {
 
     expect((await t.services.searchService.reembedAll({ userId })).count).toBe(1);
   });
+
+  it("re-embeds a receipt page too, even though it is hidden from the library", async () => {
+    const { t, userId } = await setupWithEmbedding();
+    const documentId = await uploadWithText(t, userId, "receipt.jpg", "Corner Shop receipt, bread 5 dollars.");
+    await t.db.run(sql`update documents set source = 'budget' where id = ${documentId}`);
+
+    const result = await t.services.searchService.reembedAll({ userId });
+
+    expect(result.count).toBe(1);
+    const jobs = await t.services.jobsService.list({ userId, status: "pending" });
+    expect(jobs.filter((j) => j.type === "embedding").map((j) => JSON.parse(j.payload).documentId)).toEqual([documentId]);
+  });
 });
 
 // Distances chosen to match what a real embedding model produces on a small corpus: the

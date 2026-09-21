@@ -160,7 +160,10 @@ export function createServer({
   const documentsRepository = createDocumentsRepository({ db });
   const storageService = createStorageService({
     settingsService,
-    countDocuments: ({ userId, storageDriver }) => documentsRepository.countByUser({ userId, view: "all", storageDriver }),
+    // includeBudgetSource: a receipt's pages still take up real space on their driver,
+    // so switching drivers has to count and move them even though they never show in
+    // the library.
+    countDocuments: ({ userId, storageDriver }) => documentsRepository.countByUser({ userId, view: "all", storageDriver, includeBudgetSource: true }),
   });
   const registry = createExtractorRegistry([textExtractor, pdfExtractor, docxExtractor, xlsxExtractor, pptxExtractor, createImageExtractor(ocrEngine)]);
   const jobsService = createJobsService({ db });

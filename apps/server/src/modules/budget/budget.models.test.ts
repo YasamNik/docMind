@@ -3,6 +3,7 @@ import {
   assembleReceiptPrompt,
   BUDGET_CATEGORY_PRESETS,
   itemsReconcileWithTotal,
+  nearestMonth,
   newBudgetCategoryId,
   newBudgetReceiptId,
   newBudgetReceiptItemId,
@@ -119,7 +120,7 @@ describe("budget models", () => {
 
   describe("normalizeReceiptReply", () => {
     it("marks the reply failed when every header field is null", () => {
-      const result = normalizeReceiptReply({ reply: { merchant: null, purchasedAt: null, currency: null, total: null }, categories });
+      const result = normalizeReceiptReply({ reply: { merchant: null, purchasedAt: null, currency: null, total: null }, categories, scannedAt: "2026-09-15T08:00:00.000Z" });
       expect(result.failed).toBe(true);
       if (result.failed) expect(result.note).toBe("The model could not read a receipt from these photos.");
     });
@@ -128,6 +129,7 @@ describe("budget models", () => {
       const result = normalizeReceiptReply({
         reply: { merchant: null, purchasedAt: null, currency: null, total: null, warning: "Clearly two different receipts" },
         categories,
+        scannedAt: "2026-09-15T08:00:00.000Z",
       });
       expect(result.failed).toBe(true);
       if (result.failed) expect(result.note).toBe("Clearly two different receipts");
@@ -144,6 +146,7 @@ describe("budget models", () => {
           items: [{ description: "Bread", amount: 5 }],
         },
         categories,
+        scannedAt: "2026-09-15T08:00:00.000Z",
       });
       expect(result.failed).toBe(false);
       if (!result.failed) {
@@ -162,6 +165,7 @@ describe("budget models", () => {
           items: [{ description: "Bread", amount: 2.5 }, { description: "Milk", amount: 2.5 }],
         },
         categories,
+        scannedAt: "2026-09-15T08:00:00.000Z",
       });
       expect(result.failed).toBe(false);
       if (!result.failed) {
@@ -180,6 +184,7 @@ describe("budget models", () => {
           items: [{ description: "Bread", amount: 2.5 }, { description: "Milk", amount: 2.49 }],
         },
         categories,
+        scannedAt: "2026-09-15T08:00:00.000Z",
       });
       expect(result.failed).toBe(false);
       if (!result.failed) {
@@ -200,6 +205,7 @@ describe("budget models", () => {
           items: [{ description: "Bread", amount: 5, category: "Groceries", categoryConfidence: 0.9 }],
         },
         categories,
+        scannedAt: "2026-09-15T08:00:00.000Z",
       });
       expect(result.failed).toBe(false);
       if (!result.failed) {
@@ -215,6 +221,7 @@ describe("budget models", () => {
       const result = normalizeReceiptReply({
         reply: { merchant: "Corner Shop", purchasedAt: "2026-09-10", currency: "USD", total: 5, items: "none" },
         categories,
+        scannedAt: "2026-09-15T08:00:00.000Z",
       });
       expect(result.failed).toBe(false);
       if (!result.failed) {
@@ -227,6 +234,7 @@ describe("budget models", () => {
       const result = normalizeReceiptReply({
         reply: { merchant: "Corner Shop", purchasedAt: "2026-09-10", currency: "USD", total: 5, items: "[{\"description\": \"Bread\"" },
         categories,
+        scannedAt: "2026-09-15T08:00:00.000Z",
       });
       expect(result.failed).toBe(false);
       if (!result.failed) {
@@ -260,6 +268,7 @@ describe("budget models", () => {
             '[{"description": "HAND TOWEL", "amount": "2.97", "category": "Household", "categoryConfidence": "0.9"}, {"description": "GATORADE", "amount": "2.00", "category": "Drinks", "categoryConfidence": "0.9"}, {"description": "T-SHIRT", "amount": "16.88", "category": "Clothing", "categoryConfidence": "0.9"}, {"description": "PUSH PINS", "amount": "1.24", "category": "Household", "categoryConfidence": "0.7"}]',
         },
         categories: receiptCategories,
+        scannedAt: "2026-09-15T08:00:00.000Z",
       });
       expect(result.failed).toBe(false);
       if (!result.failed) {
@@ -295,6 +304,7 @@ describe("budget models", () => {
           ],
         },
         categories,
+        scannedAt: "2026-09-15T08:00:00.000Z",
       });
       expect(result.failed).toBe(false);
       if (!result.failed) {
@@ -314,6 +324,7 @@ describe("budget models", () => {
           items: [{ description: "Widget", amount: 10 }],
         },
         categories,
+        scannedAt: "2026-09-15T08:00:00.000Z",
       });
       expect(result.failed).toBe(false);
       if (!result.failed) {
@@ -333,6 +344,7 @@ describe("budget models", () => {
           items: [{ description: "Mystery item", amount: 10 }],
         },
         categories,
+        scannedAt: "2026-09-15T08:00:00.000Z",
       });
       expect(result.failed).toBe(false);
       if (!result.failed) {
@@ -346,6 +358,7 @@ describe("budget models", () => {
       const result = normalizeReceiptReply({
         reply: { merchant: "Corner Shop", purchasedAt: "2026-09-10", currency: "USD", total: 12.5, items: [] },
         categories,
+        scannedAt: "2026-09-15T08:00:00.000Z",
       });
       expect(result.failed).toBe(false);
       if (!result.failed) {
@@ -358,6 +371,7 @@ describe("budget models", () => {
       const result = normalizeReceiptReply({
         reply: { merchant: "Corner Shop", purchasedAt: "2026-09-10", currency: "USD", total: 0, items: [] },
         categories,
+        scannedAt: "2026-09-15T08:00:00.000Z",
       });
       expect(result.failed).toBe(false);
       if (!result.failed) {
@@ -365,17 +379,123 @@ describe("budget models", () => {
         expect(result.note).toBeNull();
       }
     });
+
+    // The user's own rule: "if date not found on receipt, just use the scan date then."
+    // A receipt with no date belongs to no month and vanishes from the Budget page with
+    // no hint it exists, the same failure mode as the wrong-year bug, just from a blank
+    // field instead of a wrong one.
+    it("falls back to the scan date when the receipt printed no date at all, and stays ready", () => {
+      const result = normalizeReceiptReply({
+        reply: { merchant: "Corner Shop", purchasedAt: null, currency: "USD", total: 5, items: [{ description: "Bread", amount: 5 }] },
+        categories,
+        scannedAt: "2026-09-15T08:30:00.000Z",
+      });
+      expect(result.failed).toBe(false);
+      if (!result.failed) {
+        expect(result.purchasedAt).toBe("2026-09-15");
+        expect(result.status).toBe("ready");
+        expect(result.note).toBe("The receipt did not show a purchase date, so the date it was scanned was used instead.");
+      }
+    });
+
+    it("falls back to the scan date when the model's date does not parse as YYYY-MM-DD", () => {
+      const result = normalizeReceiptReply({
+        reply: { merchant: "Corner Shop", purchasedAt: "not a date", currency: "USD", total: 5, items: [{ description: "Bread", amount: 5 }] },
+        categories,
+        scannedAt: "2026-09-15T08:30:00.000Z",
+      });
+      expect(result.failed).toBe(false);
+      if (!result.failed) expect(result.purchasedAt).toBe("2026-09-15");
+    });
+
+    it("still flags needs_review for another reason even while falling back to the scan date", () => {
+      const result = normalizeReceiptReply({
+        reply: { merchant: "Corner Shop", purchasedAt: null, currency: "USD", total: 10, items: [{ description: "Bread", amount: 2.5 }] },
+        categories,
+        scannedAt: "2026-09-15T08:30:00.000Z",
+      });
+      expect(result.failed).toBe(false);
+      if (!result.failed) {
+        expect(result.status).toBe("needs_review");
+        expect(result.note).toContain("does not match the printed total");
+        expect(result.note).toContain("date it was scanned was used instead");
+      }
+    });
   });
 
   describe("assembleReceiptPrompt", () => {
     it("lists every automatic category by name and description", () => {
-      const { system } = assembleReceiptPrompt({ categories: [{ name: "Groceries", description: "Food for the home." }] });
+      const { system } = assembleReceiptPrompt({ categories: [{ name: "Groceries", description: "Food for the home." }], today: "2026-09-20" });
       expect(system).toContain("Groceries: Food for the home.");
     });
 
     it("tells the model not to double count an overlapping line across two photos", () => {
-      const { system } = assembleReceiptPrompt({ categories: [] });
+      const { system } = assembleReceiptPrompt({ categories: [], today: "2026-09-20" });
       expect(system.toLowerCase()).toContain("exactly once");
+    });
+
+    // A real report: a Metro receipt bought today, 2026-09-20, was read as purchased on
+    // 2020-09-26, six years off, and filed into a month the user never thought to check.
+    // The model had no notion of today, so a smudged or two digit year became a guess.
+    it("names today's date, given as an argument rather than read from the clock", () => {
+      const { system } = assembleReceiptPrompt({ categories: [], today: "2026-09-20" });
+      expect(system).toContain("Today's date is 2026-09-20.");
+    });
+
+    it("tells the model a printed date is never in the future and an ambiguous one resolves to the closest plausible reading", () => {
+      const { system } = assembleReceiptPrompt({ categories: [], today: "2026-09-20" });
+      const normalized = system.replace(/\s+/g, " ");
+      expect(normalized).toContain("A printed date is never in the future.");
+      expect(normalized.toLowerCase()).toContain("pick whichever plausible reading lands closest to today");
+    });
+
+    // The exact real case: a Canadian Metro receipt printed "26/09/20" (year, month, day)
+    // for a purchase made today, 2026-09-20, but was read as day/month/year instead and
+    // landed on 2020-09-26, six years in the past. A worked example anchors the model to
+    // the reading that is actually plausible.
+    it("gives the model the exact ambiguous date that produced the wrong-year bug as a worked example", () => {
+      const { system } = assembleReceiptPrompt({ categories: [], today: "2026-09-20" });
+      const normalized = system.replace(/\s+/g, " ");
+      expect(normalized).toContain("a receipt printed 26/09/20, read that as 2026-09-20, not 2020-09-26");
+    });
+
+    it("still lets a genuinely old receipt, such as a warranty kept for years, keep its own unambiguous date", () => {
+      const { system } = assembleReceiptPrompt({ categories: [], today: "2026-09-20" });
+      const normalized = system.replace(/\s+/g, " ");
+      expect(normalized).toContain("use that date even when it is years in the past");
+      expect(normalized.toLowerCase()).toContain("kept for a warranty");
+    });
+
+    it("still tells the model to leave the date out rather than invent one when the receipt prints none", () => {
+      const { system } = assembleReceiptPrompt({ categories: [], today: "2026-09-20" });
+      const normalized = system.replace(/\s+/g, " ");
+      expect(normalized).toContain("Leave purchasedAt out entirely when the receipt prints no date at all: never invent one.");
+    });
+
+    // The other half of the same real receipt: it printed "CAD$ 45.86" and the stored
+    // currency came back null, since CAD$ is not a bare ISO 4217 code.
+    it("tells the model to answer the bare ISO code even when a currency symbol is attached to it", () => {
+      const { system } = assembleReceiptPrompt({ categories: [], today: "2026-09-20" });
+      const normalized = system.replace(/\s+/g, " ");
+      expect(normalized).toContain("Give the bare three letter code even when the receipt prints it with a symbol attached, for example CAD$ or C$: answer CAD.");
+    });
+  });
+
+  describe("nearestMonth", () => {
+    it("returns null when no month has a receipt", () => {
+      expect(nearestMonth([], "2026-09")).toBeNull();
+    });
+
+    it("picks the month closest to the one requested", () => {
+      expect(nearestMonth(["2026-01", "2026-07", "2020-09"], "2026-09")).toBe("2026-07");
+    });
+
+    it("breaks a tie between two equally close months toward the more recent one", () => {
+      expect(nearestMonth(["2026-07", "2026-11"], "2026-09")).toBe("2026-11");
+    });
+
+    it("ignores the requested month itself if it somehow appears in the list", () => {
+      expect(nearestMonth(["2026-09", "2026-08"], "2026-09")).toBe("2026-08");
     });
   });
 });
