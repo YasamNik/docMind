@@ -5,6 +5,90 @@ four parts: Done, Decisions, Comments (the user's words, not a paraphrase), Open
 
 Active branch: `main`
 
+## 2026-09-20 to 21: the budget section, and DocMind gets its own domain
+
+### Done
+- Assistant plan 5, the last one (245d358): the app's chat page runs on `runTurn` like
+  Telegram does, with Yes and No buttons on a proposal, asked for on session select so a
+  reload keeps them. Token streaming is gone, because every path out of `runTurn` is
+  already buffered and streaming text before a tool call would mean retracting it.
+  `answeringPromptFor` deleted once both surfaces took the same prompt.
+- Family budget, specced (d32c36c, 8f562a5), reviewed, and built: three approved tables
+  (6da7a64), a new AI method taking several images and returning validated JSON
+  (40443d4), the read job (75b5715), and the client with a camera-first capture sheet,
+  month view and categories page (471a633).
+- Gmail over OAuth reached its real mailbox, and DocMind moved to `doctrank.com` and
+  `app.doctrank.com` through a named Cloudflare Tunnel, now installed as a systemd
+  service, active and enabled. The quick tunnel and its rotating URL are gone.
+- Seven bugs fixed, four of them found by putting a real receipt through the real model
+  rather than by any test: line items silently dropped because a loose schema made the
+  provider return them as a JSON string (ce754de), a receipt with a total and no lines
+  marked ready, the review flag about to fire on every taxed receipt because items are
+  printed before tax and the total after it (2af26c6), and a re-read doubling every line
+  (4f8894e).
+- Three more from the user using it: the capture sheet losing the photo because Android
+  reloads the page on the camera round trip, so each shot now uploads immediately and
+  survives a reload (1fe3424); a receipt filed six years back and therefore invisible,
+  plus receipt photos cluttering the library (ee61dfa); and signing in landing back on
+  the sign in page, because better-auth schedules its session refresh rather than
+  awaiting it (cd1cc9a).
+- A Gmail IMAP timeout was killing the whole server: the connection emitted an error
+  event nothing listened for, and node ends the process on that (f88e4aa).
+- The dev watcher was serving code older than the file on disk for the third time, so it
+  watches the source directory now rather than the import graph (da38445).
+- Four more bug records written up (c88132a), taking the log to 21 entries.
+
+### Decisions
+- One vision call carrying every photo, decided by the user, turned out cheaper and safer
+  than reading OCR text per page: about three hundredths of a cent per receipt whatever
+  the page count, and the model refused to merge two photos that were not one receipt
+  rather than inventing a total. It also deleted a whole waiting and requeueing mechanism
+  from the spec, since the job needs only the uploaded bytes.
+- One category vocabulary, not two. The user asked for a category on the receipt as well
+  as on each line, and their own examples overlapped, so one list serves both. A grocery
+  run with a kettle in it is a groceries receipt holding an appliance item, so the
+  receipt's category is read, never derived from its lines.
+- Receipt photos are not library documents. They keep their text and embedding so chat
+  can still answer what was bought, but they never appear in Documents, the inbox or
+  sorting, and they no longer pay for a summary or a sorting pass at all.
+- Items that do not sum to the total adjust neither number. The printed total is what the
+  month counts. A stated tax reconciles with or without it, since some places print tax
+  inclusive prices.
+- `merchant_category` was cut at review because nothing read it, and the user later asked
+  for a receipt category anyway, which arrived as part of the shared vocabulary instead.
+- Neither Vercel nor Cloudflare Workers can host this: DocMind is a stateful always on
+  server with three background loops, a SQLite file with a native extension, and OCR
+  writing to disk. A named tunnel from the user's own machine was the honest answer, and
+  it also ends the URL churn that kept breaking Google OAuth.
+
+### Comments
+- "I'd like to open a new Section for Family budget , allow to take a picture by when on mobile (several images can be needed for one long receiot) all the data will be extracted filter duplication make a record with all the information from the receipts"
+- "the user is one person, but budget might be different, lets say home budget and business budget. but as a simple way , start with one family budget"
+- "I think for multiple shots we should send all of the shots one time to the llm at the end"
+- "maybe the budget_receipt shoud also have categories like groceries , household, appliences"
+- "It let me scan , but then when click ok after imeaged , nothing is happen and back to budget page"
+- "i ve added coupole receipt from the phonme but i do not see them anywhere, though it seems it did ingested it at least it showed the transcript"
+- "I saw it went to docs files, but should be inside the budget section"
+- "If date not found on receipt, just use the scan date then"
+- "often happen that after sign in i end up on the same signin page with no error but still at the same page and only on the second attempt it takes me to the app. fix that"
+- "I just bought a domain name, im wondering to setup a free hosting for the docmind, where would you recommend to do that on vercel aopr cloudflair?"
+- "when I ask for status show me a table view with tasks status done in  progress and next to be done"
+
+### Open / Next
+- **15 commits are unpushed.** Everything above exists only on this machine.
+- DocMind itself still runs as `pnpm dev`, so a reboot brings the tunnel back to nothing
+  on port 5173. Moving it to the existing `docker-compose.yml` with a restart policy is
+  what makes the domain genuinely permanent, and is the obvious next infrastructure step
+  once the code stops changing hourly.
+- Untested on real data: a long receipt across several photos, and a creased or angled
+  shot in bad light. Everything proven so far used one flat, well lit receipt.
+- The budget has no assistant tool, so the chat cannot answer "what did I spend on
+  groceries" from the structured tables. A capability record is the natural shape.
+- `proposeInstruction` and the document scoped tool guard both remain unbuilt, recorded
+  in the assistant specs.
+- The SPF TXT record for `doctrank.com` did not survive the move to Cloudflare. Mail
+  still arrives, but mail sent from the domain is more likely to be marked spam.
+
 ## 2026-09-19 evening: everything merged, the assistant acts, Gmail by OAuth
 
 ### Done
