@@ -9,6 +9,7 @@ import { authClient } from "@/lib/auth-client";
 
 export function SignInPage() {
   const navigate = useNavigate();
+  const { refetch: refetchSession } = authClient.useSession();
   const [hasUsers, setHasUsers] = useState<boolean | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -27,11 +28,16 @@ export function SignInPage() {
     const result = hasUsers
       ? await authClient.signIn.email({ email, password })
       : await authClient.signUp.email({ email, password, name: name || email });
-    setBusy(false);
     if (result.error) {
+      setBusy(false);
       setError(result.error.message ?? "Sign in failed");
       return;
     }
+    // The sign in request resolves before better-auth's session store refreshes.
+    // Wait for the store itself to hold the new session, so the route guard sees
+    // a real session on the very first navigation instead of a stale, empty one.
+    await refetchSession();
+    setBusy(false);
     navigate("/documents");
   }
 
