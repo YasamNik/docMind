@@ -608,6 +608,202 @@ Before debugging anything, search this file for the symptom first.
 
 ---
 
+## Every line item on a receipt was silently discarded, 2026-09-20T19:25:00Z
+
+**Component:** budget/receipt-parsing
+**Severity:** Major
+**Tags:** schema, json-mode, parsing
+
+### Symptoms
+- Walmart receipt read correctly: merchant, date, and total stored
+- budget_receipt_items table stayed empty for all line items
+- Receipt appeared imported and had nothing on it
+
+### Root Cause
+- budgetReceiptReplySchema left items field as v.unknown(), following the rule that LLM reply schemas stay loose
+- Under strict JSON schema mode, provider rendered the untyped field as a string instead of array
+- Live reply contained `"items": "[{\"description\": \"HAND TOWEL\", \"amount\": \"2.97\", ...}]"` (stringified array)
+- normalizeReceiptItemRows expected an array and returned nothing when it saw a string
+
+### Solution / Fix
+- Schema now describes items as an array so provider returns typed array (each row still loose)
+- Normalizer now parses stringified arrays as fallback
+- Changes in `apps/server/src/modules/budget/receipt.models.ts` and `receipt.usecases.ts`
+
+### Regression Test
+- `apps/server/src/modules/budget/budget.usecases.test.ts`, tests in receipt parsing suite verify items are extracted correctly
+
+---
+
+## A receipt with a printed total and no line items was marked ready, 2026-09-20T19:25:00Z
+
+**Component:** budget/receipt-validation
+**Severity:** Major
+**Tags:** validation, reconciliation, empty-state
+
+### Symptoms
+- Receipt with printed total and zero line items marked ready instead of needs_review
+- Month total would be correct while category breakdown empty
+- Nothing indicated why the receipt had no items
+
+### Root Cause
+- normalizeReceiptReply only reconciled when items.length > 0
+- Empty array skipped the reconciliation check entirely
+
+### Solution / Fix
+- Reconciliation now runs for empty items
+- Receipt marked needs_review unless total is genuinely zero
+- Changes in `apps/server/src/modules/budget/receipt.usecases.ts`
+
+### Regression Test
+- `apps/server/src/modules/budget/budget.usecases.test.ts`, test verifies empty-items receipt is marked needs_review
+
+---
+
+## The review flag was about to fire on every taxed receipt, 2026-09-20T19:28:26Z
+
+**Component:** budget/receipt-validation
+**Severity:** Major
+**Tags:** reconciliation, tax, validation
+
+### Symptoms
+- Real Metro receipt: four lines summing to 23.09, tax 4.18, printed total 27.27
+- Every line read correctly
+- Receipt sent for review over a gap that was exactly the tax
+- Flag that fires on everything is one users stop reading
+
+### Root Cause
+- Line items printed before tax, total printed after
+- Comparing item sum against printed total flagged correct reads as gaps when tax was present
+- Reconciliation logic assumed tax was never in the total
+
+### Solution / Fix
+- Stated tax now reconciles against the total with or without it
+- Some places print tax inclusive in line item prices
+- Changes in `apps/server/src/modules/budget/receipt.usecases.ts`
+
+### Regression Test
+- `apps/server/src/modules/budget/budget.usecases.test.ts`, test verifies taxed receipt is marked ready (not needs_review)
+
+---
+
+## Re-reading a receipt doubled every line, 2026-09-20T19:30:14Z
+
+**Component:** budget/receipt-update
+**Severity:** Major
+**Tags:** idempotency, duplication, job-retry
+
+### Symptoms
+- Second read of a receipt left doubled line items (8 where there were 4)
+- Category breakdown would double with them
+- Job runner retries failed jobs, so transient failure after partial write would duplicate silently
+
+### Root Cause
+- updateReceiptWithItems inserted items without clearing previous ones
+- No delete-then-insert pattern
+
+### Solution / Fix
+- Clear previous items before inserting new ones in updateReceiptWithItems
+- Changes in `apps/server/src/modules/budget/receipt.usecases.ts`
+
+### Regression Test
+- `apps/server/src/modules/budget/budget.usecases.test.ts`, test verifies second update of same receipt does not duplicate items
+
+---
+
+## Scanning a receipt on a phone did nothing, 2026-09-20T19:39:08Z
+
+**Component:** client/camera
+**Severity:** Blocker
+**Tags:** camera, upload, android, session-storage
+
+### Symptoms
+- User could scan receipt but clicking OK after image did nothing
+- Page returned to budget with no receipt uploaded
+- User: "It let me scan, but then when click ok after imeaged, nothing is happen and back to budget page"
+
+### Root Cause
+- Capture sheet held each photo in memory as File, only uploaded when Save was pressed
+- Android backgrounds the tab while camera is open
+- Chrome usually reloads page on return, destroying staged photo before Save reachable
+- Server received no bytes at all
+
+### Solution / Fix
+- Each photo now uploads the moment it is taken
+- IDs of pages that made it uploaded are kept in session storage
+- Reload reopens sheet with shots already taken
+- Residual limit: photo whose upload had not finished when reload hit is still lost (cannot be fixed from page alone)
+- Changes in `apps/client/src/pages/budget/CaptureSheet.tsx`
+
+### Regression Test
+- `apps/client/src/pages/budget/CaptureSheet.test.tsx`, test verifies photos survive page reload via session storage
+
+---
+
+## A saved receipt was invisible, and receipt photos cluttered the library, 2026-09-21T00:27:20Z
+
+**Component:** budget/receipt-dates; library/filtering
+**Severity:** Major
+**Tags:** date-parsing, display, organization, prompt
+
+### Symptoms
+- Saved receipt not visible anywhere (user: "i do not see them anywhere")
+- Receipt photos appeared in docs/library instead of budget section (user: "should be inside the budget section")
+- Real Metro receipt printed `DateTime: 26/09/20` read as 2020-09-26 instead of 2026-09-20
+- Filed six years back, out of month being viewed
+
+### Root Cause
+- Model read receipt dates without today's date context
+- Metro printed YY/MM/DD format (26/09/20 = 2026-09-20) but model read DD/MM/YY (2020-09-26)
+- Both readings defensible without today's date, neither guaranteed correct
+- Receipt with no date had no fallback
+- Receipt pages appeared in every library view like ordinary documents
+
+### Solution / Fix
+- Prompt now includes today's date with never-in-the-future, nearest-plausible-reading rule
+- Genuinely old receipt keeps its real date
+- No-date receipt takes scan date and labels it as such
+- Saving receipt lands user on the receipt page
+- Empty month names the nearest month that has one
+- Receipt pages excluded from every library view (text and embedding preserved)
+- Changes in `apps/server/src/modules/budget/receipt.models.ts` (prompt) and `apps/server/src/modules/documents/documents.usecases.ts` (filtering)
+
+### Regression Test
+- `apps/server/src/modules/budget/budget.usecases.test.ts`, test verifies Metro receipt with YY/MM/DD date gets correct date
+- `apps/server/src/modules/budget/budget.usecases.test.ts`, test verifies no-date receipt takes scan date
+- `apps/server/src/modules/documents/documents.usecases.test.ts`, test verifies receipt pages don't appear in library search
+
+---
+
+## A Gmail IMAP timeout killed the entire server, 2026-09-20T19:41:00Z
+
+**Component:** email/imap
+**Severity:** Blocker
+**Tags:** error-handling, eventEmitter, unhandled
+
+### Symptoms
+- API returned 502 Bad Gateway
+- Entire app went down: chat and documents both inaccessible
+- IMAP connect to imap.gmail.com timed out
+- Pending AUTHENTICATE then failed
+- imapflow instance emitted error event with no listener
+- Node terminated process on unhandled error event from EventEmitter
+
+### Root Cause
+- No error listener attached at imapflow connection creation
+- Every command already reported failure through timeout wrapper
+- Transient timeout on one mailbox took down everything
+
+### Solution / Fix
+- Attach error listener at connection creation
+- One line attaches listener; all commands already report through wrapper so nothing else needed
+- Changes in `apps/server/src/modules/email/imap-connect.ts`
+
+### Regression Test
+- `apps/server/src/modules/email/email.usecases.test.ts`, test verifies IMAP error event doesn't crash server
+
+---
+
 ## Cross-cutting: Tests that only meet fakes cannot catch defects in real counterparties, 2026-09-19T17:00:00Z
 
 **Component:** testing
@@ -623,6 +819,11 @@ Before debugging anything, search this file for the symptom first.
 - Voice note field: fake Telegram update fixtures never carried a `voice` field nobody wrote support for; that path ran nowhere else
 - Em dashes: a fake model adapter returns whatever the test author wrote, never an em dash the real model chose
 
+### Recent batch (2026-09-20)
+- Items 1, 2, 3, 4 were found by putting one real receipt photo through the real model while 1130 tests passed
+- Item 5 was found by the user on a real phone: jsdom test never backgrounds itself to open a camera
+- Item 7 was found by the API dying in front of the user: fake adapters never emit unhandled errors
+
 ### Impact
 - A test that stubs the counterparty (HTTP client, LLM, message queue) validates only the stub
 - It cannot catch timing issues, selection bugs, or mismatch between the prompt and real behavior
@@ -636,6 +837,7 @@ Before debugging anything, search this file for the symptom first.
 - Telegram send/retry paths could stress-test a real transport once, with a slow or lossy mode
 - New inputs (voice notes) need at least one real fixture test alongside the fake ones
 - Model behavior (em dashes) needs sample checking against the live model before declaring a prompt rule done
+- Receipt parsing needs at least one real receipt through the real model before shipping a format change
 
 ---
 
